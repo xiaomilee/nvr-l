@@ -1,0 +1,11 @@
+#!/bin/bash
+# 卸载后：清临时文件。处理记录与日志保留（是否删除由应用中心的「保留数据」决定）
+set -u
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
+
+rm -rf "$VAR_DIR/tmp" 2>/dev/null
+rm -f "$VAR_DIR/app.pid" 2>/dev/null
+exit 0

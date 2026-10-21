@@ -1,0 +1,2104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>缩时 · 手机预览</title>
+<style>
+:root{
+  --bg:#f4f5f7; --surface:#fff; --line:#e8eaef; --line2:#f1f3f7;
+  --text:#1b1e24; --muted:#6a7280; --faint:#9aa1ac;
+  --primary:#2f6bff; --primary-soft:#ecf1ff;
+  --keep:#1f9d63; --keep-soft:#e8f7ef;
+  --warn:#c47c00; --warn-soft:#fdf3e0;
+  --danger:#d43b3b;
+  --pw:390px; --ph:844px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{margin:0;background:#e9ebf0;color:var(--text);
+  font:15px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  display:grid;place-items:center;overflow:hidden}
+.mono{font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
+.faint{color:var(--faint)}
+
+/* ---------- 手机外框（桌面演示用） ---------- */
+.phone{
+  position:relative;width:var(--pw);height:var(--ph);background:var(--surface);
+  border-radius:40px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 0 0 10px #12151a, 0 0 0 12px #2a2f38, 0 24px 60px rgba(15,20,35,.35);
+  transition:width .22s ease, height .22s ease;
+}
+body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-radius:0;box-shadow:none}
+
+.statusbar{height:30px;flex:0 0 30px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 22px;font-size:12px;font-weight:500;color:#1b1e24}
+.statusbar .icons{display:flex;gap:5px;align-items:center}
+.statusbar svg{height:11px;width:auto;fill:currentColor}
+
+.screen{flex:1;position:relative;overflow:hidden;background:var(--surface)}
+
+/* ---------- 页面 ---------- */
+.page{position:absolute;inset:0;display:none;flex-direction:column;background:var(--bg)}
+.page.on{display:flex}
+
+.hdr{flex:0 0 auto;background:var(--surface);border-bottom:1px solid var(--line);padding:6px 16px 10px}
+.hdr-row{display:flex;align-items:center;gap:8px}
+.camsel{display:flex;align-items:center;gap:6px;font-size:19px;font-weight:600;letter-spacing:-.2px}
+.camsel svg{width:15px;height:15px;stroke:#9aa1ac;fill:none;stroke-width:2.4;stroke-linecap:round;margin-top:3px}
+.hdr-sub{font-size:12.5px;color:var(--faint);margin-top:1px}
+.iconbtn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:#4d5563;margin-left:auto}
+.iconbtn:active{background:var(--line2)}
+.iconbtn svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+/* 日期横滑 */
+.dates{display:flex;gap:7px;overflow-x:auto;padding:10px 16px 12px;background:var(--surface);
+  scrollbar-width:none;border-bottom:1px solid var(--line)}
+.dates::-webkit-scrollbar{display:none}
+.dchip{flex:0 0 auto;min-width:56px;height:54px;border-radius:13px;background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  border:1px solid transparent;transition:.15s}
+.dchip .w{font-size:11px;color:var(--faint)}
+.dchip .d{font-size:15px;font-weight:600;letter-spacing:-.3px}
+.dchip .k{font-size:10px;color:#b0b6c0}
+.dchip.on{background:var(--primary);border-color:var(--primary)}
+.dchip.on .w,.dchip.on .d,.dchip.on .k{color:#fff}
+.dchip.on .k{opacity:.75}
+
+/* 概览 */
+.overview{display:flex;gap:0;background:var(--surface);padding:0 16px 12px}
+.ov{flex:1;padding:8px 0 0}
+.ov .l{font-size:11.5px;color:var(--faint)}
+.ov .v{font-size:16px;font-weight:600;letter-spacing:-.3px;margin-top:1px}
+.ov .v.g{color:var(--keep)}
+
+/* 热力条 */
+.heatwrap{background:var(--surface);padding:2px 16px 14px;border-bottom:1px solid var(--line)}
+.heat{display:flex;gap:3px;height:30px}
+.hcell{flex:1;border-radius:5px;background:#eef1f5;position:relative;transition:.12s}
+.hcell.on{box-shadow:0 0 0 2px var(--primary);z-index:1}
+.heatlbl{display:flex;justify-content:space-between;font-size:10.5px;color:#b6bcc6;margin-top:5px}
+.heatcap{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-bottom:8px}
+.heatcap b{color:#4d5563;font-weight:600;font-size:12px}
+.heatcap .sp{margin-left:auto}
+
+/* 片段列表 */
+.listhead{display:flex;align-items:center;padding:13px 16px 7px;font-size:12.5px;color:var(--muted)}
+.listhead b{color:var(--text);font-weight:600;font-size:13px}
+.listhead .sp{margin-left:auto;font-size:12px}
+.clips{flex:1;overflow-y:auto;padding:0 16px 16px;-webkit-overflow-scrolling:touch}
+.card{display:flex;gap:11px;align-items:center;background:var(--surface);border-radius:14px;
+  padding:9px;margin-bottom:9px;box-shadow:0 1px 2px rgba(20,26,40,.045)}
+.card:active{background:#fbfcfd}
+.thumb{width:96px;height:54px;border-radius:9px;background:#22262c;flex:0 0 96px;display:block}
+.cbody{min-width:0;flex:1}
+.ct{font-size:14px;font-weight:600;letter-spacing:-.2px}
+.cm{font-size:11.5px;color:var(--faint);margin-top:2px;display:flex;gap:7px;align-items:center}
+.tag{display:inline-flex;align-items:center;height:19px;padding:0 6px;border-radius:5px;
+  font-size:10.5px;background:#f2f4f8;color:#5b6373}
+.tag.g{background:var(--keep-soft);color:var(--keep)}
+.tag.b{background:var(--primary-soft);color:var(--primary)}
+.chev{width:16px;height:16px;stroke:#c5cad3;fill:none;stroke-width:2.2;stroke-linecap:round;flex:0 0 16px}
+
+/* ---------- 播放器 ---------- */
+.player{position:absolute;inset:0;background:#000;z-index:30;display:none;flex-direction:column;color:#fff}
+.player.on{display:flex}
+.p-top{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:14px 14px 8px;
+  background:linear-gradient(rgba(0,0,0,.6),transparent);position:relative;z-index:2}
+.p-top .ttl{font-size:14px;font-weight:500}
+.p-top .sub{font-size:11.5px;color:rgba(255,255,255,.6);margin-top:1px}
+.p-close,.p-more{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:#fff;
+  background:rgba(255,255,255,.12)}
+.p-close svg,.p-more svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+.p-more{margin-left:auto}
+
+.stage{flex:1;position:relative;display:grid;place-items:center;overflow:hidden;min-height:0}
+.stage canvas{width:100%;display:block;background:#111}
+.osd{position:absolute;left:12px;top:10px;font-size:11px;color:#e9ecf1;text-shadow:0 1px 3px #000;opacity:.92}
+.osd .rec{display:inline-flex;align-items:center;gap:4px;margin-left:7px;color:#ff6b6b}
+.osd .rec i{width:5px;height:5px;border-radius:50%;background:#ff4d4d;display:block}
+.qchip{position:absolute;right:10px;top:9px;height:22px;padding:0 8px;border-radius:11px;
+  background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.18);font-size:10.5px;
+  color:#dfe4ec;display:flex;align-items:center;gap:5px}
+.pcenter{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.pcenter .ring{width:62px;height:62px;border-radius:50%;background:rgba(0,0,0,.42);
+  border:1.5px solid rgba(255,255,255,.7);display:grid;place-items:center;transition:.2s;opacity:0}
+.pcenter .ring.show{opacity:1}
+.pcenter svg{width:24px;height:24px;fill:#fff;margin-left:3px}
+
+.p-ctrl{flex:0 0 auto;padding:10px 16px calc(14px + env(safe-area-inset-bottom));background:#000;position:relative;z-index:2}
+.p-times{display:flex;justify-content:space-between;font-size:11.5px;color:rgba(255,255,255,.66);margin-bottom:7px}
+.p-bar{height:26px;display:flex;align-items:center;position:relative;margin:0 -2px}
+.p-track{position:relative;height:4px;width:100%;border-radius:3px;background:rgba(255,255,255,.18)}
+.p-fill{position:absolute;left:0;top:0;height:100%;border-radius:3px;background:#fff}
+.p-knob{position:absolute;top:50%;width:13px;height:13px;border-radius:50%;background:#fff;
+  transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.p-marks{position:absolute;inset:0;pointer-events:none}
+.p-marks i{position:absolute;top:50%;width:2px;height:8px;background:rgba(255,255,255,.45);
+  transform:translate(-50%,-50%);border-radius:1px}
+.p-btns{display:flex;align-items:center;justify-content:center;gap:22px;margin-top:8px}
+.pb{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:#fff}
+.pb:active{background:rgba(255,255,255,.1)}
+.pb svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.pb .txt{font-size:10px;font-weight:600;letter-spacing:-.3px}
+.pb.play{width:56px;height:56px;background:rgba(255,255,255,.16)}
+.pb.play svg{width:26px;height:26px;fill:#fff;stroke:none}
+.p-swipe{text-align:center;font-size:10.5px;color:rgba(255,255,255,.34);margin-top:10px}
+
+/* 横屏 */
+.phone.land{--pw:844px;--ph:390px}
+.phone.land .statusbar,.phone.land .tabbar{display:none}
+.phone.land .p-top{position:absolute;top:0;left:0;right:0;background:linear-gradient(rgba(0,0,0,.55),transparent);padding:10px 14px}
+.phone.land .p-ctrl{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.7) 42%)}
+.phone.land .stage{position:absolute;inset:0}
+.phone.land .p-swipe{display:none}
+
+/* ---------- 底部 tab ---------- */
+.tabbar{flex:0 0 auto;height:58px;background:var(--surface);border-top:1px solid var(--line);
+  display:flex;align-items:center;padding-bottom:env(safe-area-inset-bottom)}
+.tb{flex:1;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  color:#9aa1ac;font-size:10.5px}
+.tb svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb.on{color:var(--primary)}
+
+/* ---------- 摄像头页 ---------- */
+.camwrap{flex:1;overflow-y:auto;padding:0 16px 20px}
+.camtabs{display:flex;gap:7px;overflow-x:auto;padding:12px 0 12px;scrollbar-width:none}
+.camtabs::-webkit-scrollbar{display:none}
+.ctab{flex:0 0 auto;height:32px;padding:0 13px;border-radius:16px;background:var(--surface);
+  border:1px solid var(--line);font-size:13px;color:#4d5563;display:flex;align-items:center;gap:6px}
+.ctab.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.ctab .dot{width:5px;height:5px;border-radius:50%;background:#22b573}
+.ctab.on .dot{background:#bff0d5}
+
+.mcard{background:var(--surface);border-radius:14px;padding:14px;margin-bottom:11px}
+.mcard h3{font-size:13px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;gap:6px}
+.mcard h3 .sub{font-weight:400;color:var(--faint);font-size:11.5px;margin-left:auto}
+
+.srow{padding:10px 0;border-top:1px solid var(--line2)}
+.srow:first-of-type{border-top:none;padding-top:0}
+.srow .top{display:flex;align-items:baseline;gap:8px}
+.srow .n{font-size:13.5px}
+.srow .v{margin-left:auto;font-size:13px;font-weight:600;color:var(--primary)}
+.srow .h{font-size:11px;color:var(--faint);margin-top:1px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent;margin:4px 0 0}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:3px;background:#e3e7ee}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;
+  background:#fff;border:2.5px solid var(--primary);margin-top:-9px;box-shadow:0 1px 4px rgba(20,30,60,.2)}
+
+.seg2{display:flex;background:var(--bg);border-radius:10px;padding:3px;margin-top:8px}
+.seg2 button{flex:1;height:32px;border-radius:8px;font-size:12.5px;color:#5b6373}
+.seg2 button.on{background:var(--surface);color:var(--text);font-weight:500;box-shadow:0 1px 3px rgba(20,30,60,.09)}
+
+.note{font-size:11.5px;line-height:1.55;background:#fdf3e0;color:#8a5a00;border-radius:9px;
+  padding:8px 10px;margin:2px 0 10px}
+.dim{opacity:.4;pointer-events:none}
+.sw{width:40px;height:23px;border-radius:12px;background:#dfe3ea;position:relative;flex:0 0 40px;margin-left:auto;transition:.15s}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:19px;height:19px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:.15s}
+.sw.on{background:var(--primary)}
+.sw.on::after{left:19px}
+.detect{display:flex;align-items:center;gap:7px;background:var(--bg);border-radius:9px;padding:8px 10px;
+  font-size:11.5px;color:#4d5563;margin:2px 0 10px}
+.detect .k{width:6px;height:6px;border-radius:50%;background:#2b3a55;display:block;flex:0 0 6px}
+.detect b{font-weight:600}
+.est{font-size:11.5px;color:var(--faint);margin-top:9px;display:flex;justify-content:space-between}
+.est b{color:#4d5563;font-weight:600}
+
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{height:31px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:var(--surface);
+  font-size:12.5px;color:#545c6b}
+.chip.on{background:var(--primary-soft);border-color:#c8d8ff;color:var(--primary);font-weight:500}
+.swrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line2);font-size:12.5px;color:#39414f}
+.swrow:first-of-type{border-top:none;padding-top:2px}
+.swrow .sw{margin-left:auto;flex:0 0 40px}
+.btnline{width:100%;height:37px;border-radius:10px;background:var(--primary-soft);color:var(--primary);
+  font-size:13px;font-weight:500;margin-top:10px}
+.btnline:active{background:#e0e9ff}
+.hint{font-size:11px;color:var(--faint);line-height:1.55;margin:-2px 0 10px}
+.bars{display:flex;gap:7px;margin-top:9px}
+.bcell{flex:1;background:var(--bg);border-radius:9px;padding:8px 9px}
+.bcell .k{font-size:10.5px;color:var(--faint)}
+.bcell .num{font-size:13.5px;font-weight:600;margin-top:1px;font-variant-numeric:tabular-nums}
+.bcell .track{height:3px;border-radius:2px;background:#e3e7ee;margin-top:6px;overflow:hidden}
+.bcell .track i{display:block;height:100%;border-radius:2px;background:var(--primary)}
+
+.maskstage{position:relative;border-radius:10px;overflow:hidden;background:#0e1013;aspect-ratio:16/9;margin-top:10px}
+.maskstage canvas{width:100%;height:100%;display:block;touch-action:none}
+.mtip{font-size:11px;color:var(--faint);margin-top:8px;line-height:1.55}
+.mlist{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.mitem{display:flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:7px;
+  background:var(--bg);font-size:11.5px;color:#4d5563}
+.mitem i{width:7px;height:7px;border-radius:2px;display:block}
+.mitem .x{color:#b6bcc6;font-size:14px;line-height:1;padding-left:2px}
+
+/* ---------- 直播页 ---------- */
+.livewrap{flex:1;overflow-y:auto;padding:12px 14px 8px;-webkit-overflow-scrolling:touch}
+.livecard{position:relative;border-radius:14px;overflow:hidden;margin-bottom:12px;background:#0e1013;box-shadow:0 1px 3px rgba(15,20,35,.14)}
+.livecard canvas{width:100%;display:block}
+.livecard .lv-osd{position:absolute;left:10px;top:8px;font-size:10.5px;color:#e9ecf1;text-shadow:0 1px 3px #000;line-height:1.5}
+.livecard .lv-osd .mono{opacity:.92}
+.livecard .lv-name{position:absolute;left:10px;bottom:9px;background:rgba(0,0,0,.5);border-radius:6px;
+  padding:2px 8px;font-size:11.5px;color:#fff;display:flex;align-items:center;gap:6px}
+.livecard .lv-badge{position:absolute;right:10px;bottom:9px;display:flex;align-items:center;gap:5px;
+  background:rgba(34,181,115,.92);border-radius:6px;padding:2.5px 8px;font-size:11px;color:#fff;font-weight:500}
+.livecard .lv-badge i{width:5px;height:5px;border-radius:50%;background:#fff;display:block}
+.livecard.off .lv-badge{background:rgba(120,127,138,.85)}
+.livecard .lv-tip{position:absolute;inset:0;display:grid;place-items:center;font-size:12.5px;color:#8b93a1}
+
+/* 快照墙：年龄 + 倒计时 */
+.snap-ago{position:absolute;right:10px;bottom:9px;height:21px;padding:0 8px;border-radius:6px;
+  background:rgba(0,0,0,.52);color:#dfe4ec;font-size:10.5px;display:flex;align-items:center;gap:5px;
+  font-variant-numeric:tabular-nums}
+.snap-ago b{font-weight:600}
+.snap-ago.stale{background:rgba(196,124,0,.9);color:#fff}
+.snap-cd{position:absolute;right:10px;top:8px;height:20px;padding:0 7px;border-radius:10px;
+  background:rgba(0,0,0,.42);color:#cfd6e0;font-size:10px;display:flex;align-items:center;gap:5px;
+  font-variant-numeric:tabular-nums}
+.snap-cd .ring{width:11px;height:11px;border-radius:50%;border:1.5px solid rgba(255,255,255,.25);
+  border-top-color:#5ee1a1;display:block;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.snap-play{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.snap-play .p{width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,.45);
+  border:1.4px solid rgba(255,255,255,.65);display:grid;place-items:center}
+.snap-play svg{width:19px;height:19px;fill:#fff;margin-left:2px}
+.livehint{font-size:11px;color:var(--faint);text-align:center;padding:0 0 10px}
+
+/* 实时播放层 */
+.liveroom{position:absolute;inset:0;background:#000;z-index:26;display:none;flex-direction:column;color:#fff}
+.liveroom.on{display:flex}
+.lr-top{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:10px 12px 8px;background:#0b0d10}
+.lr-top .bk{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.1)}
+.lr-top .bk svg{width:17px;height:17px;stroke:#fff;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.lr-title{min-width:0;flex:1}
+.lr-title .n{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lr-title .s{font-size:10.5px;color:rgba(255,255,255,.5);margin-top:1px;display:flex;align-items:center;gap:5px}
+.lr-title .s i{width:5px;height:5px;border-radius:50%;background:#34d399;display:block}
+.lr-btn{height:30px;padding:0 11px;border-radius:8px;background:rgba(255,255,255,.12);font-size:12px;
+  display:flex;align-items:center;gap:5px;color:#e8ecf3}
+.lr-btn svg{width:13px;height:13px;fill:currentColor}
+.lr-body{flex:1;min-height:0;display:grid;gap:2px;background:#000;align-content:center;padding:2px}
+.lr-tile{position:relative;background:#0e1013;overflow:hidden;border-radius:2px}
+.lr-tile canvas{width:100%;display:block}
+.lr-tile .tn{position:absolute;left:6px;bottom:5px;font-size:10px;color:#fff;text-shadow:0 1px 2px #000;
+  background:rgba(0,0,0,.4);padding:1px 6px;border-radius:4px;max-width:78%;overflow:hidden;
+  white-space:nowrap;text-overflow:ellipsis}
+.lr-tile .tf{position:absolute;right:6px;top:5px;font-size:9.5px;color:#cfd6e0;text-shadow:0 1px 2px #000;
+  font-variant-numeric:tabular-nums}
+.lr-tile.cur{box-shadow:inset 0 0 0 2px #2f6bff}
+.lr-tile .off{position:absolute;inset:0;display:grid;place-items:center;color:#8b93a1;font-size:11px}
+.lr-ctrl{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:9px 14px calc(11px + env(safe-area-inset-bottom));
+  background:#0b0d10;font-size:11px;color:rgba(255,255,255,.55)}
+.lr-ctrl .live{display:flex;align-items:center;gap:5px;background:rgba(34,181,115,.2);color:#5ee1a1;
+  border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:500}
+.lr-ctrl .live i{width:5px;height:5px;border-radius:50%;background:#34d399;display:block}
+.lr-ctrl .sp{margin-left:auto}
+
+.resbar{flex:0 0 auto;background:var(--surface);border-top:1px solid var(--line);padding:9px 16px calc(9px + env(safe-area-inset-bottom))}
+.resbar .r{display:flex;gap:6px;font-size:12px;color:#4d5563;margin-top:2px;align-items:baseline}
+.resbar .r b{font-weight:600;font-variant-numeric:tabular-nums}
+.resbar .k{color:var(--faint);flex:0 0 auto}
+.modebar{background:var(--surface);padding:10px 16px 12px;border-bottom:1px solid var(--line)}
+.modebar .seg2{margin-top:0}
+
+/* ---------- 设置页表单 ---------- */
+.fld{margin:2px 0 10px}
+.fld label{display:block;font-size:11.5px;color:var(--faint);margin-bottom:5px}
+.fld input[type=text],.fld input[type=password],.fld input[type=number]{width:100%;height:38px;border:1px solid var(--line);
+  border-radius:10px;padding:0 11px;font:13.5px/1 -apple-system,"Microsoft YaHei",sans-serif;color:var(--text);
+  background:var(--bg);outline:none}
+.fld input:focus{border-color:var(--primary);background:#fff}
+.fld .half{display:flex;gap:8px}
+.fld .half>div{flex:1}
+.fld select{width:100%;height:38px;border:1px solid var(--line);border-radius:10px;padding:0 8px;
+  font:13px/1 -apple-system,"Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg);outline:none}
+.rtspbox{background:var(--bg);border:1px dashed var(--line);border-radius:10px;padding:9px 11px;margin-top:8px}
+.rtspbox label{font-size:11px;color:var(--faint)}
+.rtspbox code{display:block;font:11.5px/1.5 "Cascadia Mono",Consolas,monospace;color:#39414f;margin-top:2px;
+  word-break:break-all}
+.camrow{display:flex;align-items:center;gap:9px;background:var(--surface);border-radius:12px;
+  padding:11px 12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(20,26,40,.045)}
+.camrow .st{width:7px;height:7px;border-radius:50%;background:#22b573;flex:0 0 7px}
+.camrow .st.gray{background:#c9ced8}
+.camrow .cn{font-size:13.5px;font-weight:600}
+.camrow .ci{font-size:11px;color:var(--faint);margin-top:1px}
+.camrow .tags{margin-left:auto;display:flex;gap:5px}
+.pillbtn{height:31px;padding:0 13px;border-radius:9px;background:var(--primary-soft);color:var(--primary);
+  font-size:12.5px;font-weight:500}
+.pillbtn.red{background:#fdecec;color:#d43b3b}
+.pillbtn.gray{background:var(--bg);color:#545c6b;font-weight:400}
+.dirrow{display:flex;gap:8px;align-items:center}
+.dirrow input{flex:1}
+.dirrow .pillbtn{flex:0 0 auto;height:38px}
+
+/* 保留周期步进器 */
+.retrow{display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line2)}
+.retrow:first-of-type{border-top:none;padding-top:2px}
+.retrow .rn{font-size:12.5px;min-width:0;flex:1}
+.retrow .rn i{display:block;font-style:normal;font-size:10.5px;color:var(--faint);margin-top:1px}
+.stepper{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.stepper button{width:26px;height:28px;display:grid;place-items:center;color:#4d5563;font-size:15px;
+  background:var(--bg)}
+.stepper button:active{background:#e9edf4}
+.stepper .val{min-width:52px;text-align:center;font-size:12.5px;font-variant-numeric:tabular-nums;
+  background:var(--surface);line-height:28px;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.retrow .gb{width:52px;text-align:right;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.cleanline{display:flex;align-items:center;gap:6px;font-size:11.5px;color:#4d5563;background:var(--bg);
+  border-radius:9px;padding:8px 10px;margin-top:9px;line-height:1.5}
+.cleanline b{font-weight:600}
+.cleanline .dot{width:6px;height:6px;border-radius:50%;background:#22b573;flex:0 0 6px}
+
+/* ---------- 任务页 ---------- */
+.taskwrap{flex:1;overflow-y:auto;padding:12px 16px 20px}
+.tk{background:var(--surface);border-radius:12px;padding:12px;margin-bottom:9px}
+.tk .l1{display:flex;align-items:center;gap:8px}
+.tk .name{font-size:12.5px;font-family:"Cascadia Mono",Consolas,monospace}
+.tk .l2{display:flex;align-items:center;font-size:11.5px;color:var(--faint);margin-top:5px;gap:8px}
+.pbar{height:3px;border-radius:2px;background:#eef1f5;margin-top:8px;overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--primary);border-radius:2px}
+
+/* 遮罩提示 */
+.toast{position:absolute;left:50%;bottom:96px;transform:translate(-50%,10px);background:rgba(24,28,36,.92);
+  color:#fff;font-size:12.5px;padding:9px 14px;border-radius:10px;opacity:0;transition:.22s;pointer-events:none;z-index:50}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<div class="phone" id="phone">
+  <div class="statusbar">
+    <span class="mono">9:41</span>
+    <div class="icons">
+      <svg viewBox="0 0 18 12"><path d="M1 9h2.5v3H1zM5.5 6.6H8V12H5.5zM10 4h2.5v8H10zM14.5 1.2H17V12h-2.5z"/></svg>
+      <svg viewBox="0 0 16 12"><path d="M8 10.6a1.2 1.2 0 110-2.4 1.2 1.2 0 010 2.4zM4.6 7.2l1.5 1.5a2.7 2.7 0 013.8 0l1.5-1.5a4.8 4.8 0 00-6.8 0zM2 4.6l1.5 1.5a7.4 7.4 0 0111 0L16 4.6a9.5 9.5 0 00-14 0z"/></svg>
+      <svg viewBox="0 0 26 12"><rect x=".5" y="1" width="22" height="10" rx="3" fill="none" stroke="currentColor"/><rect x="2.2" y="2.7" width="15" height="6.6" rx="1.6"/><path d="M24 4.4v3.2c1-.3 1.6-.9 1.6-1.6S25 4.7 24 4.4z"/></svg>
+    </div>
+  </div>
+
+  <div class="screen" id="screen">
+
+    <!-- ============ 直播 ============ -->
+    <section class="page on" id="page-live">
+      <div class="hdr">
+        <div class="hdr-row">
+          <div>
+            <div class="camsel" style="font-size:17px">实时预览</div>
+            <div class="hdr-sub"><span id="liveOnline" style="color:var(--keep)">● 4 台在线</span> · <span id="liveMode">快照 · 10 秒刷新</span></div>
+          </div>
+          <button class="iconbtn" id="btnGoSet">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2l.4 2.7h4l.4-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="livewrap" id="liveWrap"></div>
+      <div class="resbar">
+        <div class="r"><span class="k">存储</span><span>剩余 <b id="resFree">336.0 GB</b> / 共 <b id="resTotal">473.9 GB</b>（保留 <b id="resKeep">4 天</b>，循环覆盖）</span></div>
+        <div class="r"><span class="k">资源</span><span>CPU <b id="resCpu">6%</b> · 内存 <b id="resMem">96.4 MB</b> · 核显 <b id="resGpu">QSV</b></span></div>
+        <div class="r"><span class="k">目录</span><span class="mono" id="resDir" style="font-size:11.5px">/vol2/1000/NVR</span></div>
+      </div>
+
+      <!-- 实时播放层：单路 / 宫格 -->
+      <div class="liveroom" id="liveRoom">
+        <div class="lr-top">
+          <button class="bk" id="lrBack">
+            <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+          </button>
+          <div class="lr-title">
+            <div class="n" id="lrName">车库入口</div>
+            <div class="s"><i></i><span id="lrSub">子码流 · 0.6 Mbps · 延迟约 1.2 秒</span></div>
+          </div>
+          <button class="lr-btn" id="lrGrid">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
+            <span id="lrGridTxt">宫格</span>
+          </button>
+        </div>
+        <div class="lr-body" id="lrBody"></div>
+        <div class="lr-ctrl">
+          <span class="live"><i></i>实时</span>
+          <span class="mono" id="lrClock">18:01:23</span>
+          <span class="sp" id="lrHint">点画面暂停 / 继续</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 回放 ============ -->
+    <section class="page" id="page-list">
+      <div class="hdr">
+        <div class="hdr-row">
+          <div>
+            <div class="camsel" id="camSel">车库入口
+              <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+            </div>
+            <div class="hdr-sub" id="hdrSub">CH01 · 已处理 3 / 4 路</div>
+          </div>
+          <button class="iconbtn" id="btnScan">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="modebar">
+        <div class="seg2">
+          <button class="on" data-pmode="full">全时录像</button>
+          <button data-pmode="clip">精简片段</button>
+        </div>
+      </div>
+
+      <div class="dates" id="dates"></div>
+
+      <div class="overview">
+        <div class="ov"><div class="l">保留时长</div><div class="v g" id="ovKeep">1:42:38</div></div>
+        <div class="ov"><div class="l">占全天</div><div class="v" id="ovPct">7.1%</div></div>
+        <div class="ov"><div class="l">片段数</div><div class="v" id="ovCnt">14</div></div>
+        <div class="ov"><div class="l">体积</div><div class="v" id="ovSize">287 MB</div></div>
+      </div>
+
+      <div class="heatwrap">
+        <div class="heatcap">
+          <b id="heatTitle">全天活动</b>
+          <span>点击色块只看该时段</span>
+          <span class="sp" id="heatClear" style="color:var(--primary);font-size:11.5px;display:none">显示全部</span>
+        </div>
+        <div class="heat" id="heat"></div>
+        <div class="heatlbl"><span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span></div>
+      </div>
+
+      <div class="listhead">
+        <b id="listTitle">全部片段</b>
+        <span class="sp" id="listCount">14 段</span>
+      </div>
+      <div class="clips" id="clips"></div>
+    </section>
+
+    <!-- ============ 设置 ============ -->
+    <section class="page" id="page-cam">
+      <div class="hdr">
+        <div class="hdr-row">
+          <div>
+            <div class="camsel" style="font-size:17px">设置</div>
+            <div class="hdr-sub">摄像机 · 录像 · 压缩 · 诊断</div>
+          </div>
+        </div>
+      </div>
+      <div class="camwrap">
+        <div class="camtabs" id="camTabs"></div>
+        <div id="camBody"></div>
+      </div>
+    </section>
+
+    <!-- ============ 播放器 ============ -->
+    <section class="player" id="player">
+      <div class="p-top">
+        <button class="p-close" id="pClose">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        <div>
+          <div class="ttl" id="pTitle">车库入口</div>
+          <div class="sub mono" id="pSub">08:12:04 – 08:19:31</div>
+        </div>
+        <button class="p-more" id="pMore">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg>
+        </button>
+      </div>
+
+      <div class="stage" id="stage">
+        <canvas id="scene"></canvas>
+        <div class="osd mono">
+          <span id="osdCam">CH01</span>
+          <span class="rec"><i></i>REC</span>
+          <div id="osdTime" style="margin-top:1px">2026-10-20 08:12:04</div>
+        </div>
+        <div class="qchip" id="qchip"><span class="dot" style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:block"></span>预览 480p</div>
+        <div class="pcenter"><div class="ring" id="ring"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>
+      </div>
+
+      <div class="p-ctrl">
+        <div class="p-times">
+          <span class="mono" id="tNow">08:12:04</span>
+          <span class="mono" id="tEnd">08:19:31</span>
+        </div>
+        <div class="p-bar" id="pBar">
+          <div class="p-track"><i class="p-fill" id="pFill"></i><i class="p-knob" id="pKnob"></i></div>
+        </div>
+        <div class="p-btns">
+          <button class="pb" id="bPrev"><svg viewBox="0 0 24 24"><path d="M17 6v12M14 12L5 6v12z"/></svg></button>
+          <button class="pb" id="bBack"><span class="txt mono">-10s</span></button>
+          <button class="pb play" id="bPlay"><svg viewBox="0 0 24 24" id="playIcon"><path d="M8 5v14l11-7z"/></svg></button>
+          <button class="pb" id="bFwd"><span class="txt mono">+10s</span></button>
+          <button class="pb" id="bLand"><svg viewBox="0 0 24 24"><rect x="3" y="6.5" width="18" height="11" rx="2.5"/><path d="M9 21h6"/></svg></button>
+        </div>
+        <div class="p-swipe">左右滑动切换片段 · 双指可缩放画面</div>
+      </div>
+      <div class="toast" id="toast">已切换为横屏预览</div>
+    </section>
+
+    <div class="toast" id="toast2"></div>
+  </div>
+
+  <nav class="tabbar" id="tabbar">
+    <button class="tb on" data-page="live">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg>
+      <span>直播</span>
+    </button>
+    <button class="tb" data-page="list">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.4 2"/></svg>
+      <span>回放</span>
+    </button>
+    <button class="tb" data-page="cam">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2l.4 2.7h4l.4-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></svg>
+      <span>设置</span>
+    </button>
+  </nav>
+</div>
+
+<script>
+"use strict";
+
+/* ================= 数据（与桌面原型同一套种子，数字一致） ================= */
+const CAMERAS = [
+  { id:"cam-01", name:"车库入口", ch:"CH01", res:"4MP", ip:"192.168.2.108", brand:"TP-LINK", user:"833",
+    main:"rtsp://833:***@192.168.2.108:8554/ch1", sub:"rtsp://833:***@192.168.2.108:8554/ch3",
+    strategy:"连续录像 + 事件", group:"室外", online:true },
+  { id:"cam-02", name:"一楼大堂", ch:"CH02", res:"4MP", ip:"192.168.2.116", brand:"海康", user:"admin",
+    main:"rtsp://admin:***@192.168.2.116:554/Streaming/Channels/101", sub:"rtsp://admin:***@192.168.2.116:554/Streaming/Channels/102",
+    strategy:"连续录像 + 事件", group:"1 号楼", online:true },
+  { id:"cam-03", name:"货梯走廊", ch:"CH03", res:"1080p", ip:"192.168.2.121", brand:"大华", user:"admin",
+    main:"rtsp://admin:***@192.168.2.121:554/cam/realmonitor?channel=1&subtype=0", sub:"rtsp://admin:***@192.168.2.121:554/cam/realmonitor?channel=1&subtype=1",
+    strategy:"仅事件录像", group:"室内", online:true },
+  { id:"cam-04", name:"后门通道", ch:"CH04", res:"1080p", ip:"192.168.2.130", brand:"宇视", user:"default",
+    main:"rtsp://default:***@192.168.2.130:554/video1", sub:"rtsp://default:***@192.168.2.130:554/video2",
+    strategy:"连续录像 + 事件", group:"室外", online:true },
+];
+const BRAND_RTSP = {
+  "海康":"rtsp://{u}:{p}@{ip}:554/Streaming/Channels/101",
+  "大华":"rtsp://{u}:{p}@{ip}:554/cam/realmonitor?channel=1&subtype=0",
+  "宇视":"rtsp://{u}:{p}@{ip}:554/video1",
+  "TP-LINK":"rtsp://{u}:{p}@{ip}:8554/ch1",
+  "自定义 RTSP":"",
+};
+
+/* 录像引擎（全时存储）设置 */
+const REC = {
+  enabled:true,
+  dir:"/vol2/1000/NVR",   // 按摄像头/日期/时段分目录
+  segSec:300,             // 段落时长（秒）
+  cleanupAt:"03:00",      // 每天定点清理过期录像
+  lastClean:{ at:"2026-10-20 03:00", freed:41.2, dirs:6, files:1247 },
+  diskTotalGB:473.9,
+  diskFreeGB:336.0,
+};
+const REASONS = ["人形移动","车辆进出","画面变化","光照突变","物体遗留"];
+const DAYS = ["2026-10-14","2026-10-15","2026-10-16","2026-10-17","2026-10-18","2026-10-19","2026-10-20"];
+const WD = ["周日","周一","周二","周三","周四","周五","周六"];
+
+function hashStr(s){ let h=2166136261; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return h>>>0; }
+function mulberry(seed){
+  return function(){
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed>>>15, 1|seed);
+    t = t + Math.imul(t ^ t>>>7, 61|t) ^ t;
+    return ((t ^ t>>>14)>>>0) / 4294967296;
+  };
+}
+const segCache = new Map();
+function getSegs(camId, day){
+  const key = camId+"|"+day;
+  if(segCache.has(key)) return segCache.get(key);
+  const rnd = mulberry(hashStr(key));
+  const segs = [];
+  const busy = [[7,9.4],[11.5,13.6],[17,20.4]];
+  for(let h=0; h<24; h++){
+    let p = 0.16;
+    for(const [a,b] of busy) if(h>=a && h<b) p = 0.88;
+    if(h<6) p = 0.10;
+    let n = 0;
+    if(rnd() < p) n = 1 + Math.floor(rnd()*2);
+    else if(rnd() < 0.22) n = 1;
+    for(let k=0;k<n;k++){
+      const start = h*3600 + Math.floor(rnd()*3300);
+      const dur = 22 + Math.floor(Math.pow(rnd(),2.1)*820);
+      const end = Math.min(start+dur, 86395);
+      if(end-start < 18) continue;
+      const last = segs[segs.length-1];
+      if(last && start < last.e + 45) continue;
+      segs.push({ s:start, e:end, reason:REASONS[Math.floor(rnd()*REASONS.length)], level:0.32+rnd()*0.62 });
+    }
+  }
+  if(segs.length < 6){
+    segs.length = 0;
+    for(let i=0;i<7;i++){
+      const start = 7*3600 + i*5400 + Math.floor(rnd()*600);
+      segs.push({ s:start, e:start+180+Math.floor(rnd()*600), reason:REASONS[i%REASONS.length], level:0.4+rnd()*0.5 });
+    }
+  }
+  segCache.set(key,segs);
+  return segs;
+}
+
+const camParams = {};
+/* 全时段落（录像引擎按 REC.segSec 切段落盘） */
+function fullDayMbps(cam){ return cam.res === "4MP" ? 3.4 : 2.3; }   // 主码流约值
+function getFullSegs(camId, day){
+  const key = "full|"+camId+"|"+day;
+  if(segCache.has(key)) return segCache.get(key);
+  const cam = CAMERAS.find(c=>c.id===camId);
+  const p = camParams[camId];
+  const segs = [];
+  const step = REC.segSec;
+  const act = getSegs(camId, day);
+  for(let s=0; s<86400; s+=step){
+    const e = Math.min(s+step, 86400);
+    const hit = act.filter(a=>a.s < e && a.e > s);
+    segs.push({ s, e, reason:"全时", level: hit.length ? 0.75 : 0.15, hits:hit.length });
+  }
+  segCache.set(key,segs);
+  return segs;
+}
+
+CAMERAS.forEach((c,i)=>{
+  camParams[c.id] = {
+    enabled: i<3,
+    sensitivity: 35 + i*6,
+    minKeep: 8,
+    mergeGap: 20,
+    mode: i===1 ? "fine" : "fast",
+    autoDN: true,
+    profile: "day",
+    day:   { crf:24, fps:12, scale:100, dn:1 },
+    night: { crf:29, fps:8,  scale:75,  dn:3 },
+    /* 判读指标（移植自 Windows 版 VideoTrim） */
+    judge: {
+      scene:"auto",        // auto | mono | color
+      chromaStd: c.res==="4MP" ? 23.2 : 18.6,
+      noiseMult: i===0 ? 2.6 : 2.0,   // 树影多的机位默认更宽
+      pixelDelta:16, chromaDelta:8,
+      preBuf:3, postBuf:3, mergeGap:5,
+      strongArea:5,
+    },
+    speed:1, speedMode:"pts", prescan:true,
+    /* 保留周期：全时录像按天、缩时片段按天，各自独立 */
+    fullDays: i===2 ? 2 : 4,
+    clipDays: i===2 ? 180 : 90,
+    masks: c.id==="cam-01"
+      ? [{x:.62,y:.55,w:.22,h:.30,type:"ignore",name:"树影晃动"}]
+      : (c.id==="cam-02" ? [{x:.04,y:.62,w:.18,h:.32,type:"redact",name:"前台工位"}] : [])
+  };
+});
+
+/* ================= 状态 ================= */
+const state = {
+  camId:"cam-01",
+  dayIdx:6,
+  hourBlock:-1,     // 0..11 两小时一格
+  segs:[],          // 当前回放模式的段列表
+  activity:[],      // 活动片段（用于热力条与全时模式标注）
+  segIdx:-1,
+  t:0,
+  playing:false,
+  land:false,
+  maskTool:"ignore",
+  pmode:"full",     // full = 全时录像 | clip = 精简片段
+  liveView:"snap",  // snap | single | grid
+  liveCam:0,
+  livePaused:false,
+};
+
+/* 全局执行设置（对所有摄像头生效） */
+const GS = {
+  mode:"h1",            // now | m15 | h1 | d1
+  lastScan:"16:30",
+  done:128,
+  pending:6,
+  resume:2,
+  dedupeOnce:true,
+  reprocessOnParam:true,
+  skipIfExists:true,
+  retentionDays:3,
+  /* 硬件加速与资源 */
+  gpu:true,          // QSV 解码 + 编码
+  conc:2,            // 同时处理路数
+  nightOnly:false,   // 只在夜间重编码
+  lowPrio:true,      // nice / ionice / 磁盘空闲才写
+  sprite:true,       // 缩略图合并为雪碧图
+};
+const SCAN_LABEL = { now:"立即", m15:"每 15 分钟", h1:"每小时", d1:"每天 03:00" };
+function nextScan(){
+  if(GS.mode === "now") return "—";
+  if(GS.mode === "m15") return "16:45";
+  if(GS.mode === "h1")  return "17:00";
+  return "明天 03:00";
+}
+function scanHint(){
+  const d = GS.retentionDays;
+  if(GS.mode === "now") return "点一次扫一次，不驻留定时任务，适合装完机先验证。";
+  if(GS.mode === "m15") return "NVR 只留 " + d + " 天，15 分钟一档偏密，但能最大限度避免被覆盖。";
+  if(GS.mode === "h1")  return "NVR 留 " + d + " 天，每小时扫一次来得及 —— 文件被覆盖前还有 " + (d*24) + " 次机会。";
+  return d <= 1
+    ? "警告：NVR 只留 " + d + " 天，每天一档可能在下次扫描前就被覆盖，建议改每小时。"
+    : "NVR 留 " + d + " 天，每天一次来得及，但断电一天就会丢一批。";
+}
+
+/* ================= 工具 ================= */
+const pad = n => String(n).padStart(2,"0");
+function hms(sec){
+  sec = Math.max(0, Math.floor(sec));
+  return pad(Math.floor(sec/3600)) + ":" + pad(Math.floor(sec%3600/60)) + ":" + pad(sec%60);
+}
+function hm(sec){ return pad(Math.floor(sec/3600)) + ":" + pad(Math.floor(sec%3600/60)); }
+function durText(sec){
+  sec = Math.floor(sec);
+  const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  if(h) return h + " 时 " + m + " 分";
+  if(m) return m + " 分 " + s + " 秒";
+  return s + " 秒";
+}
+function toast(el, text){
+  const t = document.getElementById(el);
+  t.textContent = text;
+  t.classList.add("on");
+  clearTimeout(t._h);
+  t._h = setTimeout(()=>t.classList.remove("on"), 1600);
+}
+
+/* ================= 布局 ================= */
+const phone = document.getElementById("phone");
+function layout(){
+  const desktop = window.innerWidth >= 760 && window.innerHeight >= 700;
+  document.body.classList.toggle("desktop", desktop);
+  if(!desktop) return;
+  const w = state.land ? 844 : 390;
+  const h = state.land ? 390 : 844;
+  phone.style.width = w + "px";
+  phone.style.height = h + "px";
+  const s = Math.min(1, (window.innerHeight - 40) / (h + 24), (window.innerWidth - 40) / (w + 24));
+  phone.style.transform = "scale(" + s.toFixed(3) + ")";
+}
+window.addEventListener("resize", ()=>{ layout(); if(state.view==="player") drawScene(); });
+
+/* ================= tab ================= */
+document.querySelectorAll(".tb").forEach(b=>{
+  b.onclick = ()=>{
+    if(b.dataset.page !== "live" && state.liveView !== "snap"){
+      state.liveView = "snap";
+      document.getElementById("liveRoom").classList.remove("on");
+    }
+    document.querySelectorAll(".tb").forEach(x=>x.classList.toggle("on", x===b));
+    document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on", p.id==="page-"+b.dataset.page));
+    if(b.dataset.page === "cam"){
+      setTimeout(()=>{ renderMasks(); bindMaskCanvas(); drawMaskScene(); }, 30);
+    }
+    if(b.dataset.page === "live"){
+      updateSnapLabels();
+      setTimeout(renderLive, 20);   // 回到快照墙时重画，避免尺寸为 0
+    }
+  };
+});
+
+/* ================= 日期条 ================= */
+function renderDates(){
+  const box = document.getElementById("dates");
+  box.innerHTML = "";
+  DAYS.forEach((d,i)=>{
+    const dt = new Date(d+"T00:00:00");
+    let ktext;
+    if(state.pmode === "full"){
+      const cam = CAMERAS.find(c=>c.id===state.camId);
+      ktext = (fullDayMbps(cam)*86400/8/1000/1024).toFixed(0) + "G";
+    }else{
+      const segs = getSegs(state.camId, d);
+      let keep = 0; segs.forEach(s=>keep += s.e-s.s);
+      ktext = Math.round(keep/60) + "分";
+    }
+    const b = document.createElement("button");
+    b.className = "dchip" + (i===state.dayIdx ? " on" : "");
+    b.innerHTML = '<span class="w">' + (i===6?"今天":WD[dt.getDay()].replace("周","")) + '</span>' +
+      '<span class="d">' + d.slice(5).replace("-","/") + '</span>' +
+      '<span class="k">' + ktext + '</span>';
+    b.onclick = ()=>{ state.dayIdx = i; state.hourBlock = -1; loadDay(); };
+    box.appendChild(b);
+  });
+  const on = box.querySelector(".dchip.on");
+  if(on) on.scrollIntoView({inline:"center", block:"nearest"});
+}
+
+/* ================= 热力条 ================= */
+function renderHeat(){
+  const box = document.getElementById("heat");
+  const segs = state.activity;
+  const per = new Array(12).fill(0);   // 每格 2 小时，单位秒
+  segs.forEach(s=>{
+    const i = Math.min(11, Math.floor(s.s / 7200));
+    const blkEnd = (i+1)*7200;
+    per[i] += Math.min(s.e, blkEnd) - s.s;
+  });
+  const max = Math.max(...per, 1);
+  box.innerHTML = "";
+  per.forEach((v,i)=>{
+    const d = document.createElement("button");
+    d.className = "hcell" + (state.hourBlock===i ? " on" : "");
+    const ratio = v / max;
+    d.style.background = v <= 0 ? "#eef1f5"
+      : "rgba(31,157,99," + (0.16 + ratio*0.78).toFixed(2) + ")";
+    d.onclick = ()=>{
+      state.hourBlock = (state.hourBlock===i) ? -1 : i;
+      renderHeat(); renderClips();
+    };
+    box.appendChild(d);
+  });
+  const clear = document.getElementById("heatClear");
+  clear.style.display = state.hourBlock >= 0 ? "block" : "none";
+  clear.onclick = ()=>{ state.hourBlock = -1; renderHeat(); renderClips(); };
+  document.getElementById("heatTitle").textContent =
+    state.hourBlock >= 0 ? pad(state.hourBlock*2)+":00 – "+pad(state.hourBlock*2+2)+":00" : "全天活动";
+}
+
+/* ================= 概览 ================= */
+function renderOverview(){
+  const cam = CAMERAS.find(c=>c.id===state.camId);
+  document.getElementById("camSel").childNodes[0].nodeValue = cam.name + " ";
+  if(state.pmode === "full"){
+    const dayGB = fullDayMbps(cam)*86400/8/1000;
+    document.getElementById("ovKeep").textContent = "24:00:00";
+    document.getElementById("ovPct").textContent = "100%";
+    document.getElementById("ovCnt").textContent = state.segs.length;
+    document.getElementById("ovSize").textContent = dayGB.toFixed(1) + " GB";
+    document.getElementById("hdrSub").textContent = cam.ch + " · " + cam.res + " 主码流 · 录像中";
+  }else{
+    let keep = 0;
+    state.segs.forEach(s=>keep += s.e-s.s);
+    document.getElementById("ovKeep").textContent = hms(keep);
+    document.getElementById("ovPct").textContent = (keep/86400*100).toFixed(1) + "%";
+    document.getElementById("ovCnt").textContent = state.segs.length;
+    document.getElementById("ovSize").textContent = Math.round(keep*0.31) + " MB";
+    document.getElementById("hdrSub").textContent = cam.ch + " · " + cam.res + " · 已处理 3 / 4 路";
+  }
+}
+
+/* ================= 缩略图 ================= */
+function drawThumb(cv, level, redact){
+  const w = 192, h = 108;
+  cv.width = w; cv.height = h;
+  const c = cv.getContext("2d");
+  c.fillStyle = "#232830"; c.fillRect(0,0,w,h);
+  const hz = h*0.34;
+  c.fillStyle = "#2c313a"; c.fillRect(0,0,w,hz);
+  c.fillStyle = "#363c45"; c.fillRect(0,hz,w,h-hz);
+  c.strokeStyle = "rgba(255,255,255,.05)"; c.lineWidth = 1;
+  for(let i=-3;i<=3;i++){
+    c.beginPath(); c.moveTo(w*0.5+i*w*0.07, hz); c.lineTo(w*0.5+i*w*0.33, h); c.stroke();
+  }
+  c.fillStyle = "#1b1e24"; c.fillRect(w*0.40, h*0.06, w*0.14, hz-h*0.06);
+  c.fillStyle = "#262b33"; c.fillRect(w*0.80, h*0.10, w*0.06, h*0.60);
+  c.fillStyle = "#3f4650"; c.fillRect(w*0.05, h*0.66, w*0.26, h*0.14);
+  const px = w*(0.16 + 0.6*level);
+  const ph2 = h*0.20;
+  c.fillStyle = "#c2cad6";
+  c.fillRect(px-ph2*0.13, h*0.80-ph2*0.62, ph2*0.26, ph2*0.5);
+  c.beginPath(); c.arc(px, h*0.80-ph2*0.72, ph2*0.115, 0, Math.PI*2); c.fill();
+  if(redact){
+    c.fillStyle = "rgba(16,18,22,.94)"; c.fillRect(w*0.03, h*0.6, w*0.2, h*0.38);
+  }
+  const g = c.createLinearGradient(0,h*0.6,0,h);
+  g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.45)");
+  c.fillStyle = g; c.fillRect(0,h*0.6,w,h*0.4);
+}
+
+/* ================= 片段列表 ================= */
+function visibleSegs(){
+  if(state.hourBlock < 0) return state.segs.map((s,i)=>({s,i}));
+  const a = state.hourBlock*7200, b = a+7200;
+  return state.segs.map((s,i)=>({s,i})).filter(o=>o.s.s < b && o.s.e > a);
+}
+
+function renderClips(){
+  const box = document.getElementById("clips");
+  const list = visibleSegs();
+  const p = camParams[state.camId];
+  const hasRedact = p.masks.some(m=>m.type==="redact");
+  const full = state.pmode === "full";
+  const cam = CAMERAS.find(c=>c.id===state.camId);
+  box.innerHTML = "";
+  document.getElementById("listTitle").textContent =
+    state.hourBlock >= 0 ? pad(state.hourBlock*2)+":00 – "+pad(state.hourBlock*2+2)+":00" : (full ? "全时录像" : "全部片段");
+  document.getElementById("listCount").textContent = list.length + " 段";
+
+  if(!list.length){
+    box.innerHTML = '<div style="text-align:center;color:#9aa1ac;font-size:13px;padding:44px 0">'
+      + (full ? "该时段没有录像" : "这个时段没有任何画面变化") + '</div>';
+    return;
+  }
+
+  list.forEach(({s,i})=>{
+    const size = full
+      ? fullDayMbps(cam)*(s.e-s.s)/8/1000
+      : (s.e-s.s)*0.31/1000;
+    const d = document.createElement("div");
+    d.className = "card";
+    d.innerHTML =
+      '<canvas class="thumb"></canvas>' +
+      '<div class="cbody">' +
+        '<div class="ct mono">' + hms(s.s) + ' – ' + hms(s.e) + '</div>' +
+        '<div class="cm"><span>' + durText(s.e-s.s) + '</span><span>' + size.toFixed(1) + ' MB</span></div>' +
+        '<div style="margin-top:5px;display:flex;gap:5px">' +
+          (full
+            ? '<span class="tag ' + (s.hits?"b":"") + '">' + (s.hits ? "含活动 " + s.hits + " 段" : "无活动") + '</span>' +
+              (hasRedact && s.hits ? '<span class="tag">含遮蔽</span>' : '')
+            : '<span class="tag g">' + s.reason + '</span>' +
+              (hasRedact ? '<span class="tag">含遮蔽</span>' : '')) +
+        '</div>' +
+      '</div>' +
+      '<svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
+    box.appendChild(d);
+    drawThumb(d.querySelector(".thumb"), s.level, hasRedact && (full ? s.hits>0 : true));
+    d.onclick = ()=> openPlayer(i);
+  });
+}
+
+/* ================= 场景绘制 ================= */
+const scene = document.getElementById("scene");
+const sctx = scene.getContext("2d");
+let noiseSeed = 1;
+
+function roundRect(ctx,x,y,w,h,r){
+  r = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+function drawScene(){
+  const rect = scene.getBoundingClientRect();
+  if(!rect.width) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = rect.width, h = w * 9/16;
+  if(scene.width !== Math.round(w*dpr) || scene.height !== Math.round(h*dpr)){
+    scene.width = Math.round(w*dpr);
+    scene.height = Math.round(h*dpr);
+    scene.style.height = h + "px";
+  }
+  sctx.setTransform(dpr,0,0,dpr,0,0);
+  sctx.clearRect(0,0,w,h);
+
+  const seg = state.segIdx >= 0 ? state.segs[state.segIdx] : null;
+  const prog = seg ? Math.max(0, Math.min(1, (state.t-seg.s)/Math.max(1,seg.e-seg.s))) : 0;
+
+  sctx.fillStyle = "#20242a"; sctx.fillRect(0,0,w,h);
+  const hz = h*0.34;
+  sctx.fillStyle = "#292e36"; sctx.fillRect(0,0,w,hz);
+  sctx.fillStyle = "#333941"; sctx.fillRect(0,hz,w,h-hz);
+
+  sctx.strokeStyle = "rgba(255,255,255,.055)"; sctx.lineWidth = 1;
+  for(let i=-4;i<=4;i++){
+    sctx.beginPath();
+    sctx.moveTo(w*0.5+i*w*0.06, hz);
+    sctx.lineTo(w*0.5+i*w*0.30, h);
+    sctx.stroke();
+  }
+  sctx.fillStyle = "#181b20"; sctx.fillRect(w*0.40, h*0.06, w*0.15, hz-h*0.06);
+  sctx.fillStyle = "rgba(255,238,200,.10)"; sctx.fillRect(w*0.405, h*0.075, w*0.14, h*0.03);
+  sctx.fillStyle = "#242930"; sctx.fillRect(w*0.80, h*0.10, w*0.055, h*0.62);
+
+  sctx.fillStyle = "#3b414a"; roundRect(sctx, w*0.05, h*0.64, w*0.26, h*0.15, 4); sctx.fill();
+  sctx.fillStyle = "rgba(140,175,205,.16)"; roundRect(sctx, w*0.09, h*0.59, w*0.18, h*0.06, 3); sctx.fill();
+  sctx.fillStyle = "#434a54"; roundRect(sctx, w*0.47, h*0.71, w*0.28, h*0.16, 4); sctx.fill();
+
+  const px = w*(0.14 + 0.68*prog);
+  const py = h*(0.78 + 0.07*Math.sin(prog*Math.PI));
+  const ph2 = h*0.22;
+  sctx.fillStyle = "#bcc5d1";
+  roundRect(sctx, px-ph2*0.13, py-ph2*0.62, ph2*0.26, ph2*0.52, 3); sctx.fill();
+  sctx.beginPath(); sctx.arc(px, py-ph2*0.72, ph2*0.115, 0, Math.PI*2); sctx.fill();
+  sctx.fillStyle = "rgba(0,0,0,.35)";
+  sctx.beginPath(); sctx.ellipse(px, py+2, ph2*0.16, ph2*0.045, 0, 0, Math.PI*2); sctx.fill();
+
+  /* 检测框 */
+  if(seg){
+    const bx = px-ph2*0.24, by = py-ph2*0.88, bw = ph2*0.48, bh = ph2*0.92;
+    sctx.strokeStyle = "rgba(80,220,180,.9)"; sctx.lineWidth = 1.3;
+    sctx.setLineDash([5,4]); sctx.strokeRect(bx,by,bw,bh); sctx.setLineDash([]);
+    sctx.font = '9.5px "Cascadia Mono",Consolas,monospace';
+    const label = seg.reason + " " + Math.round(70+seg.level*29) + "%";
+    const tw2 = sctx.measureText(label).width + 9;
+    sctx.fillStyle = "rgba(80,220,180,.9)";
+    sctx.fillRect(bx, by-13, tw2, 12);
+    sctx.fillStyle = "#08231a"; sctx.fillText(label, bx+4, by-3.5);
+  }
+
+  /* 遮蔽区 */
+  camParams[state.camId].masks.forEach(m=>{
+    const x=m.x*w, y=m.y*h, ww=m.w*w, hh=m.h*h;
+    if(m.type==="redact"){
+      sctx.fillStyle = "rgba(16,18,22,.95)"; sctx.fillRect(x,y,ww,hh);
+      sctx.strokeStyle = "rgba(220,70,70,.7)";
+    }else{
+      sctx.fillStyle = "rgba(240,180,40,.10)"; sctx.fillRect(x,y,ww,hh);
+      sctx.strokeStyle = "rgba(240,180,40,.55)";
+    }
+    sctx.lineWidth = 1; sctx.setLineDash([4,3]); sctx.strokeRect(x,y,ww,hh); sctx.setLineDash([]);
+  });
+
+  /* 噪点 + 暗角 */
+  const rnd = mulberry(noiseSeed);
+  sctx.fillStyle = "rgba(255,255,255,.03)";
+  for(let i=0;i<90;i++) sctx.fillRect(rnd()*w, rnd()*h, 1, 1);
+  const g = sctx.createRadialGradient(w/2,h/2,Math.min(w,h)*0.3,w/2,h/2,Math.max(w,h)*0.72);
+  g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.45)");
+  sctx.fillStyle = g; sctx.fillRect(0,0,w,h);
+}
+
+/* ================= 播放器 ================= */
+const player = document.getElementById("player");
+
+function openPlayer(i){
+  state.segIdx = i;
+  state.t = state.segs[i].s;
+  state.playing = true;
+  player.classList.add("on");
+  const cam = CAMERAS.find(c=>c.id===state.camId);
+  document.getElementById("pTitle").textContent = cam.name + " · " + state.segs[i].reason;
+  document.getElementById("osdCam").textContent = cam.ch;
+  syncPlayer();
+  requestAnimationFrame(()=>{ drawScene(); });
+}
+
+document.getElementById("pClose").onclick = ()=>{
+  state.playing = false;
+  player.classList.remove("on");
+  if(state.land){ state.land = false; phone.classList.remove("land"); layout(); }
+};
+document.getElementById("bPlay").onclick = ()=>{ state.playing = !state.playing; syncPlayer(); };
+document.getElementById("bBack").onclick = ()=>{ seekBy(-10); };
+document.getElementById("bFwd").onclick = ()=>{ seekBy(10); };
+document.getElementById("bPrev").onclick = ()=> jumpSeg(-1);
+document.getElementById("bLand").onclick = ()=>{
+  state.land = !state.land;
+  phone.classList.toggle("land", state.land);
+  layout();
+  setTimeout(()=>{ drawScene(); }, 240);
+  toast(state.land ? "toast" : "toast", state.land ? "横屏预览 · 画面铺满" : "已回到竖屏");
+};
+document.getElementById("pMore").onclick = ()=> toast("toast", "下载原画质 / 导出该片段");
+
+function seekBy(d){
+  const seg = state.segs[state.segIdx];
+  if(!seg) return;
+  state.t = Math.max(seg.s, Math.min(seg.e-0.5, state.t + d));
+  state.playing = false;
+  syncPlayer();
+}
+function jumpSeg(dir){
+  const n = state.segIdx + dir;
+  if(n < 0 || n >= state.segs.length){ toast("toast", dir>0 ? "已经是最后一段" : "已经是第一段"); return; }
+  openPlayer(n);
+}
+
+function syncPlayer(){
+  const seg = state.segs[state.segIdx];
+  if(!seg) return;
+  document.getElementById("pSub").textContent = hms(seg.s) + " – " + hms(seg.e);
+  document.getElementById("tNow").textContent = hms(state.t);
+  document.getElementById("tEnd").textContent = hms(seg.e);
+  const pct = (state.t - seg.s) / Math.max(1, seg.e-seg.s);
+  document.getElementById("pFill").style.width = (pct*100).toFixed(1) + "%";
+  document.getElementById("pKnob").style.left = (pct*100).toFixed(1) + "%";
+  document.getElementById("playIcon").innerHTML = state.playing
+    ? '<path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/>'
+    : '<path d="M8 5v14l11-7z"/>';
+  document.getElementById("ring").classList.toggle("show", !state.playing);
+  document.getElementById("osdTime").textContent = DAYS[state.dayIdx] + " " + hms(state.t);
+}
+
+/* 进度条拖动 */
+(function bindBar(){
+  const bar = document.getElementById("pBar");
+  let on = false;
+  function set(e){
+    const seg = state.segs[state.segIdx];
+    if(!seg) return;
+    const r = bar.getBoundingClientRect();
+    const p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    state.t = seg.s + p*(seg.e-seg.s);
+    syncPlayer();
+  }
+  bar.addEventListener("pointerdown", e=>{ on=true; state.playing=false; bar.setPointerCapture(e.pointerId); set(e); });
+  bar.addEventListener("pointermove", e=>{ if(on) set(e); });
+  bar.addEventListener("pointerup", ()=>{ on=false; });
+})();
+
+/* 左右滑动切换片段 */
+(function bindSwipe(){
+  const stage = document.getElementById("stage");
+  let x0=null, y0=null;
+  stage.addEventListener("pointerdown", e=>{ x0=e.clientX; y0=e.clientY; });
+  stage.addEventListener("pointerup", e=>{
+    if(x0===null) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    if(Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy)*1.6){
+      jumpSeg(dx < 0 ? 1 : -1);
+    }else if(Math.abs(dx) < 8 && Math.abs(dy) < 8){
+      state.playing = !state.playing; syncPlayer();
+    }
+    x0 = null;
+  });
+})();
+
+/* 播放循环 */
+let last = 0, liveAcc = 0;
+function loop(ts){
+  if(!last) last = ts;
+  const dt = Math.min(0.1, (ts-last)/1000);
+  last = ts;
+  if(player.classList.contains("on")){
+    const seg = state.segs[state.segIdx];
+    if(seg && state.playing){
+      state.t += dt * 8;
+      if(state.t >= seg.e){
+        if(state.segIdx < state.segs.length-1){ openPlayer(state.segIdx+1); }
+        else { state.t = seg.e-0.2; state.playing = false; }
+      }
+      syncPlayer();
+    }
+    noiseSeed++;
+    drawScene();
+  }
+  /* 直播：快照墙按倒计时刷新；实时层按状态重绘 */
+  liveAcc += dt;
+  const roomEl = document.getElementById("liveRoom");
+  const roomOpen = roomEl.classList.contains("on");
+  if(roomOpen){
+    const step = state.liveView === "grid" ? 0.22 : 0.09;   // 宫格降帧，省解码
+    if(liveAcc > step){
+      liveAcc = 0;
+      if(!state.livePaused){
+        document.querySelectorAll("#lrBody .lr-tile").forEach(t=>drawLiveScene(t._cv, t._idx));
+        document.querySelectorAll("#lrBody [data-tf]").forEach(el=>el.textContent = clockStr());
+      }
+      document.getElementById("lrClock").textContent = clockStr();
+    }
+  }else if(document.getElementById("page-live").classList.contains("on")
+           && !player.classList.contains("on")){
+    tickSnaps(dt);
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ================= 直播页 =================
+   三种状态：
+     snap   快照墙（默认）—— 只有静态截图，显示"几秒前"与倒计时，几乎不耗流量
+     single 单路实时 —— 点某张快照进入，只解一路子码流
+     grid   宫格实时 —— 默认铺满全部摄像头，点任意窗口回到单路
+   ============================================ */
+const SNAP = { interval: 10 };   // 快照刷新间隔（秒）
+const snapState = {};            // camId -> { at: 上次抓拍时间戳 }
+let snapAcc = 0;
+
+function clockStr(){
+  const t = new Date();
+  return pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds());
+}
+function snapStamp(at){
+  const t = new Date(at);
+  return "2026-10-20 " + pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds());
+}
+function agoText(sec){
+  if(sec < 1) return "刚刚";
+  if(sec < 60) return Math.round(sec) + " 秒前";
+  return Math.floor(sec/60) + " 分前";
+}
+
+function renderLive(){
+  const wrap = document.getElementById("liveWrap");
+  wrap.innerHTML = "";
+  CAMERAS.forEach((c,i)=>{
+    if(!snapState[c.id]) snapState[c.id] = { at: Date.now() - (2 + i*1.7)*1000 };
+    const d = document.createElement("div");
+    d.className = "livecard" + (c.online ? "" : " off");
+    d.innerHTML =
+      '<canvas></canvas>' +
+      '<div class="lv-osd mono" data-stamp>' + snapStamp(snapState[c.id].at) + '</div>' +
+      '<div class="snap-cd"><i class="ring"></i><span data-cd>--</span></div>' +
+      '<div class="lv-name">' + c.name + '</div>' +
+      '<div class="snap-ago" data-ago><span data-ago-txt>-- 秒前</span></div>' +
+      '<div class="snap-play"><div class="p"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>';
+    d.onclick = ()=> enterLive(i);
+    wrap.appendChild(d);
+    d._camIdx = i;
+    d._cv = d.querySelector("canvas");
+    drawLiveScene(d._cv, i);
+  });
+  const hint = document.createElement("div");
+  hint.className = "livehint";
+  hint.textContent = "快照每 " + SNAP.interval + " 秒自动刷新 · 点任意画面开始实时播放";
+  wrap.appendChild(hint);
+
+  updateResBar();
+  updateSnapLabels();
+  document.getElementById("liveMode").textContent = "快照 · " + SNAP.interval + " 秒刷新";
+}
+
+function updateSnapLabels(){
+  const now = Date.now();
+  document.querySelectorAll("#liveWrap .livecard").forEach(card=>{
+    const i = card._camIdx;
+    const c = CAMERAS[i];
+    const st = snapState[c.id];
+    const age = (now - st.at)/1000;
+    const left = Math.max(0, SNAP.interval - age);
+    const ago = card.querySelector("[data-ago-txt]");
+    const cd = card.querySelector("[data-cd]");
+    const box = card.querySelector("[data-ago]");
+    if(ago) ago.textContent = c.online ? agoText(age) : "离线";
+    if(cd) cd.textContent = c.online ? Math.ceil(left) + "s" : "—";
+    if(box) box.classList.toggle("stale", c.online && age > SNAP.interval * 2.2);
+  });
+}
+
+function tickSnaps(dt){
+  snapAcc += dt;
+  if(snapAcc < 0.4) return;
+  snapAcc = 0;
+  const now = Date.now();
+  document.querySelectorAll("#liveWrap .livecard").forEach(card=>{
+    const i = card._camIdx;
+    const c = CAMERAS[i];
+    if(!c.online) return;
+    const st = snapState[c.id];
+    if((now - st.at)/1000 >= SNAP.interval){
+      st.at = now;
+      drawLiveScene(card._cv, i);                       // 抓一帧新的
+      const s = card.querySelector("[data-stamp]");
+      if(s) s.textContent = snapStamp(st.at);
+    }
+  });
+  updateSnapLabels();
+}
+
+/* ---------- 实时播放层 ---------- */
+function enterLive(idx){
+  state.liveView = "single";
+  state.liveCam = idx;
+  state.livePaused = false;
+  document.getElementById("liveRoom").classList.add("on");
+  buildLiveRoom();
+  updateResBar();
+}
+function leaveLive(){
+  state.liveView = "snap";
+  state.livePaused = false;
+  document.getElementById("liveRoom").classList.remove("on");
+  renderLive();          // 退出时刷新一遍快照，年龄从头算
+}
+
+function buildLiveRoom(){
+  const body = document.getElementById("lrBody");
+  const grid = state.liveView === "grid";
+  const total = CAMERAS.length;
+
+  document.getElementById("lrGridTxt").textContent = grid ? "单路" : "宫格";
+  document.getElementById("lrHint").textContent = grid
+    ? "点任意窗口放大 · 已铺满全部 " + total + " 路"
+    : "点画面暂停 / 继续";
+
+  /* 布局随摄像头数量自适应：1→1列，2~4→2列，5~9→3列 */
+  const cols = grid ? Math.min(3, Math.ceil(Math.sqrt(total))) : 1;
+  body.style.gridTemplateColumns = "repeat(" + cols + ",minmax(0,1fr))";
+
+  const list = grid ? CAMERAS.map((_,i)=>i) : [state.liveCam];
+  body.innerHTML = "";
+  list.forEach(i=>{
+    const c = CAMERAS[i];
+    const tile = document.createElement("div");
+    tile.className = "lr-tile" + (grid && i === state.liveCam ? " cur" : "");
+    tile.innerHTML = '<canvas></canvas>' +
+      '<div class="tf mono" data-tf>' + clockStr() + '</div>' +
+      '<div class="tn">' + c.name + '</div>' +
+      (c.online ? "" : '<div class="off">离线</div>');
+    tile.onclick = ()=>{
+      if(grid){ state.liveCam = i; state.liveView = "single"; buildLiveRoom(); }
+      else { state.livePaused = !state.livePaused; toast("toast2", state.livePaused ? "已暂停画面" : "已恢复实时画面"); }
+    };
+    body.appendChild(tile);
+    tile._cv = tile.querySelector("canvas");
+    tile._idx = i;
+    drawLiveScene(tile._cv, i);
+  });
+
+  const c = CAMERAS[state.liveCam];
+  document.getElementById("lrName").textContent = grid ? "全部 " + total + " 路" : c.name;
+  document.getElementById("lrSub").textContent = grid
+    ? "子码流 · " + total + " 路同时解码 · 每路约 0.6 Mbps"
+    : "子码流 · 0.6 Mbps · 延迟约 1.2 秒";
+  document.getElementById("lrClock").textContent = clockStr();
+}
+
+function updateResBar(){
+  const rng = a => Math.min(...a) === Math.max(...a)
+    ? Math.min(...a) + " 天"
+    : Math.min(...a) + "~" + Math.max(...a) + " 天";
+  const fulls = CAMERAS.map(c=>camParams[c.id].fullDays);
+  const clips = CAMERAS.map(c=>camParams[c.id].clipDays);
+  document.getElementById("resKeep").textContent = "全时 " + rng(fulls) + " / 缩时 " + rng(clips);
+  document.getElementById("resDir").textContent = REC.dir;
+  document.getElementById("resFree").textContent = REC.diskFreeGB.toFixed(1) + " GB";
+  document.getElementById("resTotal").textContent = REC.diskTotalGB.toFixed(1) + " GB";
+  document.getElementById("resGpu").textContent = GS.gpu ? "QSV" : "软件编码";
+  const room = document.getElementById("liveRoom").classList.contains("on");
+  document.getElementById("resCpu").textContent = room ? (state.liveView === "grid" ? "22%" : "9%") : "3%";
+  document.getElementById("resMem").textContent = room ? (state.liveView === "grid" ? "312.6" : "148.2") + " MB" : "96.4 MB";
+}
+const LIVE_PAL = [
+  { top:"#262c34", bot:"#3a4149", acc:"#4d5560", kind:"yard" },
+  { top:"#23272d", bot:"#454c55", acc:"#5b636e", kind:"garage" },
+  { top:"#2b3038", bot:"#363c44", acc:"#4a525d", kind:"room" },
+  { top:"#20242a", bot:"#3f454e", acc:"#545c68", kind:"hall" },
+];
+function drawLiveScene(cv, idx){
+  const rr = cv.getBoundingClientRect();
+  if(!rr.width) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = rr.width, h = w*9/16;
+  if(cv.width !== Math.round(w*dpr)){
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+    cv.style.height = h + "px";
+  }
+  const c = cv.getContext("2d");
+  c.setTransform(dpr,0,0,dpr,0,0);
+  const t = performance.now()/1000;
+  const P = LIVE_PAL[idx % 4];
+
+  c.fillStyle = P.top; c.fillRect(0,0,w,h*0.38);
+  c.fillStyle = P.bot; c.fillRect(0,h*0.38,w,h*0.62);
+
+  if(P.kind === "yard"){
+    c.fillStyle = "#333a44"; c.fillRect(w*0.06,h*0.30,w*0.26,h*0.26);
+    c.fillStyle = "#3f4a3a";
+    for(let i=0;i<5;i++){ c.beginPath(); c.arc(w*(0.08+i*0.055), h*0.30, w*0.032, 0, Math.PI*2); c.fill(); }
+    c.fillStyle = P.acc; c.fillRect(w*0.62,h*0.55,w*0.3,h*0.05);
+  }else if(P.kind === "garage"){
+    c.fillStyle = "#2b323b"; roundRect(c, w*0.10,h*0.48,w*0.46,h*0.30,6); c.fill();
+    roundRect(c, w*0.14,h*0.52,w*0.38,h*0.14,5); c.fillStyle="rgba(150,180,205,.20)"; c.fill();
+    c.fillStyle = "#171a1f";
+    c.beginPath(); c.arc(w*0.20,h*0.80,w*0.045,0,Math.PI*2); c.fill();
+    c.beginPath(); c.arc(w*0.46,h*0.80,w*0.045,0,Math.PI*2); c.fill();
+  }else if(P.kind === "room"){
+    c.fillStyle = P.acc; c.fillRect(w*0.08,h*0.56,w*0.34,h*0.13);
+    c.fillRect(w*0.50,h*0.52,w*0.4,h*0.17);
+    c.fillStyle = "rgba(190,205,220,.14)"; c.fillRect(w*0.12,h*0.20,w*0.2,h*0.16);
+  }else{
+    c.fillStyle = P.acc;
+    c.fillRect(w*0.2,h*0.42,w*0.05,h*0.5);
+    c.fillRect(w*0.75,h*0.42,w*0.05,h*0.5);
+    c.fillStyle = "rgba(200,215,230,.10)"; c.fillRect(w*0.30,h*0.24,w*0.4,h*0.2);
+  }
+
+  /* 移动的人影 */
+  const px = w*((t*0.045 + idx*0.37) % 1.15 - 0.07);
+  const ph2 = h*0.24;
+  c.fillStyle = "#c3ccd8";
+  c.fillRect(px-ph2*0.13, h*0.78-ph2*0.6, ph2*0.26, ph2*0.52);
+  c.beginPath(); c.arc(px, h*0.78-ph2*0.7, ph2*0.115, 0, Math.PI*2); c.fill();
+
+  /* 噪点 + 暗角（模拟子码流压缩感） */
+  const rnd = mulberry(hashStr(CAMERAS[idx].id) + Math.floor(t*3));
+  c.fillStyle = "rgba(255,255,255,.035)";
+  for(let i=0;i<70;i++) c.fillRect(rnd()*w, rnd()*h, 1.2, 1.2);
+  const g = c.createRadialGradient(w/2,h/2,Math.min(w,h)*0.34,w/2,h/2,Math.max(w,h)*0.74);
+  g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.42)");
+  c.fillStyle = g; c.fillRect(0,0,w,h);
+}
+
+/* ================= 摄像头页 ================= */
+function renderCamTabs(){
+  const box = document.getElementById("camTabs");
+  box.innerHTML = "";
+  CAMERAS.forEach(c=>{
+    const p = camParams[c.id];
+    const b = document.createElement("button");
+    b.className = "ctab" + (c.id===state.camId ? " on" : "");
+    b.innerHTML = '<i class="dot" style="' + (p.enabled?"":"background:#c9ced8") + '"></i>' + c.name;
+    b.onclick = ()=>{ state.camId = c.id; renderCamTabs(); renderCamBody(); loadDay(); };
+    box.appendChild(b);
+  });
+}
+
+function estMbps(pr, res, isNight){
+  const base = res === "4MP" ? 3.4 : 2.3;
+  const f = Math.pow(pr.fps/12, 0.62);
+  const s = Math.pow(pr.scale/100, 1.85);
+  const c = Math.pow(2, (pr.crf-24)/6);
+  const g = isNight ? 0.60 : 1;
+  const d = 1 - Math.min(0.38, pr.dn*0.095);
+  return base*f*s*c*g*d;
+}
+const DN_NAMES = ["关闭","轻","中","强"];
+
+/* 判读指标：与 fpk/app/server/params.py 同一套口径，避免原型与实现两套说法 */
+function judgeScene(p){
+  if(p.judge.scene !== "auto") return p.judge.scene;
+  return p.judge.chromaStd >= 1.5 ? "color" : "mono";
+}
+function judgeSummary(p){
+  const mono = judgeScene(p) === "mono";
+  const base = mono ? 0.00042 : 0.00041;
+  const th = Math.max(base * p.judge.noiseMult, 0.0005);
+  return "当前判据：" + (mono ? "黑白单路 · 模糊 1" : "彩色双路")
+    + " · 噪声底线 " + base.toFixed(5) + " · 阈值 " + th.toFixed(5)
+    + " · 已忽略整点调光";
+}
+
+function recBudgetText(){
+  let full = 0, clip = 0;
+  CAMERAS.forEach(c=>{
+    const p = camParams[c.id];
+    if(!p.enabled) return;
+    const dayGB = fullDayMbps(c) * 86400 / 8 / 1000 / 1024;
+    full += dayGB * p.fullDays;
+    clip += dayGB * 0.07 * p.clipDays;
+  });
+  const need = full + clip;
+  const ok = need <= REC.diskFreeGB;
+  return "合计占用 ≈ <b style=\"" + (ok ? "" : "color:#d43b3b") + "\">" + need.toFixed(0)
+    + " GB</b>（全时 " + full.toFixed(0) + " + 缩时 " + clip.toFixed(0)
+    + "）· 剩余 " + REC.diskFreeGB.toFixed(0) + " GB"
+    + (ok ? "" : "，<b style='color:#d43b3b'>空间不足：减全时天数或调低画质</b>");
+}
+
+function renderCamBody(){
+  const c = CAMERAS.find(x=>x.id===state.camId);
+  const p = camParams[c.id];
+  const isNight = p.profile === "night";
+  const pr = isNight ? p.night : p.day;
+  let keep = 0; state.segs.forEach(s=>keep += s.e-s.s);
+  const keepRatio = keep/86400;
+  const est = estMbps(pr, c.res, isNight);
+  const storage = est * 0.44 * 24 * Math.max(keepRatio, 0.01);
+  /* 资源估算：核显与软件编码差一个量级 */
+  const cpuPct = GS.gpu ? (GS.conc===2 ? 17 : 9) : (GS.conc===2 ? 178 : 96);
+  const memMB  = 78 + (GS.gpu ? 205 : 330) * GS.conc;
+  const cacheGB = GS.sprite ? 0.4 : 2.9;
+  const body = document.getElementById("camBody");
+  body.innerHTML = `
+    <div class="mcard">
+      <h3>摄像机连接 <span class="sub">${c.online ? '<span style="color:var(--keep)">● 已连接</span>' : '● 离线'}</span></h3>
+      <div class="fld half">
+        <div><label>名称</label><input type="text" value="${c.name}" data-cf="name"></div>
+        <div><label>IP 地址 *</label><input type="text" value="${c.ip}" data-cf="ip"></div>
+      </div>
+      <div class="fld half">
+        <div><label>品牌</label><select data-cf="brand">${Object.keys(BRAND_RTSP).map(b=>'<option '+(c.brand===b?"selected":"")+'>'+b+'</option>').join("")}</select></div>
+        <div><label>预览用码流</label><select><option>子码流 · 省资源</option><option>主码流 · 更清晰</option></select></div>
+      </div>
+      <div class="rtspbox">
+        <label>主码流 RTSP 地址 *（录像用）</label>
+        <code>${c.main}</code>
+        <label style="margin-top:7px">子码流 RTSP 地址（预览用，可空）</label>
+        <code>${c.sub}</code>
+      </div>
+      <div class="fld half" style="margin-top:10px">
+        <div><label>用户名</label><input type="text" value="${c.user}"></div>
+        <div><label>密码</label><input type="password" placeholder="留空 = 不修改（已保存）"></div>
+      </div>
+      <div class="fld half">
+        <div><label>录像策略</label><select data-cf="strategy">
+          <option ${c.strategy==="连续录像 + 事件"?"selected":""}>连续录像 + 事件</option>
+          <option ${c.strategy==="仅事件录像"?"selected":""}>仅事件录像</option>
+          <option ${c.strategy==="仅连续录像"?"selected":""}>仅连续录像</option>
+        </select></div>
+        <div><label>分组（可空）</label><input type="text" value="${c.group}" placeholder="例如：1 号楼 / 周界"></div>
+      </div>
+      <div class="hint" style="margin-top:2px">通过扫描添加的摄像机走 ONVIF：先填好「用户名 / 密码」，再点扫描、再点设备。密码只保存在本机 NAS，不会上传。</div>
+      <div class="btnline">🔎 扫描局域网摄像头</div>
+    </div>
+
+    <div class="mcard">
+      <h3>录像与保留 <span class="sub">全局目录 · 每路周期</span></h3>
+      <div class="fld">
+        <label>保存目录（按 摄像机 / 日期 / 时段 分目录）</label>
+        <div class="dirrow">
+          <input type="text" value="${REC.dir}" id="recDir" class="mono" style="font-size:12px">
+          <button class="pillbtn" id="recDirBtn">选择目录</button>
+        </div>
+      </div>
+      <div class="fld half">
+        <div><label>片段时长（秒）</label><input type="number" value="${REC.segSec}" min="60" max="900" step="60" id="recSeg"></div>
+        <div><label>每日清理时刻</label>
+          <select id="recCleanAt">
+            ${["02:00","03:00","04:00","05:00"].map(t=>'<option '+(REC.cleanupAt===t?"selected":"")+'>'+t+'</option>').join("")}
+          </select>
+        </div>
+      </div>
+      <div class="srow" style="display:flex;align-items:center;padding-top:0;border-top:none">
+        <span class="n">启用录像</span>
+        <div class="sw ${REC.enabled?"on":""}" data-rec="enabled" style="margin-left:auto"></div>
+      </div>
+
+      <div style="margin-top:12px;font-size:12px;color:var(--faint);margin-bottom:2px">保留周期（每路独立）</div>
+      ${CAMERAS.map(cc=>{
+        const cp = camParams[cc.id];
+        const dayGB = fullDayMbps(cc) * 86400 / 8 / 1000 / 1024;
+        const clipGB = dayGB * 0.07;
+        const totGB = dayGB * cp.fullDays + clipGB * cp.clipDays;
+        return '<div class="retrow">' +
+          '<div class="rn">' + cc.name + '<i>全时 ' + fullDayMbps(cc).toFixed(1) + ' Mbps · 缩时约 7%</i></div>' +
+          '<div class="retcol" style="display:flex;flex-direction:column;gap:5px">' +
+            '<div class="stepper"><button data-ret="fullDays" data-cam="' + cc.id + '" data-d="-1">−</button>' +
+              '<span class="val" id="full-' + cc.id + '">' + cp.fullDays + ' 天</span>' +
+              '<button data-ret="fullDays" data-cam="' + cc.id + '" data-d="1">+</button></div>' +
+            '<div class="stepper"><button data-ret="clipDays" data-cam="' + cc.id + '" data-d="-1">−</button>' +
+              '<span class="val" id="clip-' + cc.id + '">' + cp.clipDays + ' 天</span>' +
+              '<button data-ret="clipDays" data-cam="' + cc.id + '" data-d="1">+</button></div>' +
+          '</div>' +
+          '<div class="gb" id="gb-' + cc.id + '">' + totGB.toFixed(0) + ' GB</div>' +
+        '</div>';
+      }).join("")}
+
+      <div class="h" id="recBudget" style="margin-top:10px">${recBudgetText()}</div>
+      <div class="cleanline">
+        <i class="dot"></i>
+        <span>下次清理 <b>明天 ${REC.cleanupAt}</b> · 上次 ${REC.lastClean.at.slice(5)} 删除 <b>${REC.lastClean.dirs} 个日期目录 / ${REC.lastClean.files} 个文件</b>，释放 ${REC.lastClean.freed} GB</span>
+      </div>
+      <div class="hint" style="margin-top:8px">按<b>日期整目录删</b>，不在录像时倒数计时。清理只动超过保留期的日期目录；含 <code style="font-size:10.5px">.part</code> 或待压缩文件的目录会跳过并告警。</div>
+      <button class="btnline" id="btnCleanNow">立即预览清理（不删除）</button>
+    </div>
+
+    <div class="mcard">
+      <h3>${c.name} <span class="sub">${c.ch} · ${c.res}</span></h3>
+      <div class="srow">
+        <div class="top"><span class="n">变化灵敏度</span><span class="v" id="v-sens">${p.sensitivity}%</span></div>
+        <input type="range" min="5" max="95" value="${p.sensitivity}" data-r="sensitivity">
+        <div class="h">越低越保守，只留明显动作</div>
+      </div>
+      <div class="srow">
+        <div class="top"><span class="n">最短保留</span><span class="v" id="v-minKeep">${p.minKeep} 秒</span></div>
+        <input type="range" min="2" max="60" value="${p.minKeep}" data-r="minKeep">
+        <div class="h">短于此时长的碎片并入相邻片段</div>
+      </div>
+      <div class="srow">
+        <div class="top"><span class="n">静默合并</span><span class="v" id="v-mergeGap">${p.mergeGap} 秒</span></div>
+        <input type="range" min="0" max="120" value="${p.mergeGap}" data-r="mergeGap">
+        <div class="h">两段之间空白短于此值则拼成一段</div>
+      </div>
+    </div>
+
+    <div class="mcard">
+      <h3>输出压缩 <span class="sub" id="outSub">${isNight ? "夜间档" : "白天档"} · 预计 ${est.toFixed(1)} Mbps</span></h3>
+      <div class="seg2">
+        <button class="${p.mode==="fast"?"on":""}" data-mode2="fast">快速 · 流复制</button>
+        <button class="${p.mode==="fine"?"on":""}" data-mode2="fine">精细 · 重编码</button>
+      </div>
+      ${p.mode==="fast" ? '<div class="note" style="margin-top:9px">流复制只按关键帧裁切，不重新编码。下面的画质参数<b>不会生效</b>，要调参请切到精细模式。</div>' : ''}
+
+      <div class="${p.mode==="fast"?"dim":""}" style="margin-top:10px">
+        <div class="srow" style="display:flex;align-items:center;padding-top:0;border-top:none">
+          <span class="n">按昼夜自动分档</span>
+          <div class="sw ${p.autoDN?"on":""}" data-dn="1" style="margin-left:auto"></div>
+        </div>
+        <div class="detect">
+          <i class="k"></i>
+          <span>已判定 <b>${isNight?"夜间 · 红外黑白":"白天 · 彩色"}</b> · 平均饱和度 ${isNight?"3.2":"46.8"}</span>
+        </div>
+
+        <div class="seg2" style="margin-bottom:2px">
+          <button class="${!isNight?"on":""}" data-prof="day">白天 · 彩色</button>
+          <button class="${isNight?"on":""}" data-prof="night">夜间 · 黑白</button>
+        </div>
+
+        <div class="srow">
+          <div class="top"><span class="n">画质 CRF</span><span class="v" id="v-crf">${pr.crf}</span></div>
+          <input type="range" min="18" max="34" value="${pr.crf}" data-r="crf">
+          <div class="h">${isNight ? "黑白画面细节少，可用更高 CRF" : "彩色需保留衣着与车牌颜色，别超过 26"}</div>
+        </div>
+        <div class="srow">
+          <div class="top"><span class="n">帧率</span><span class="v" id="v-fps">${pr.fps} fps</span></div>
+          <input type="range" min="5" max="30" value="${pr.fps}" data-r="fps">
+          <div class="h">${isNight ? "红外下多为慢速移动，8 帧足够判断方向" : "12 帧在手机上看不出差别，体积减半"}</div>
+        </div>
+        <div class="srow">
+          <div class="top"><span class="n">分辨率</span><span class="v" id="v-scale">${pr.scale}%</span></div>
+          <input type="range" min="40" max="100" step="5" value="${pr.scale}" data-r="scale">
+          <div class="h">${pr.scale<100 ? "降至 "+Math.round(4*pr.scale/100*10)/10+"MP" : "保持原始分辨率"}</div>
+        </div>
+        <div class="srow">
+          <div class="top"><span class="n">去噪强度</span><span class="v" id="v-dn">${DN_NAMES[pr.dn]}</span></div>
+          <input type="range" min="0" max="3" value="${pr.dn}" data-r="dn">
+          <div class="h">${isNight ? "红外噪声是码率元凶，不先降噪钱全花在噪点上" : "白天噪声低，轻量即可，过强会糊掉人脸"}</div>
+        </div>
+
+        <div class="est">
+          <span>保留 ${(keepRatio*100).toFixed(1)}% 时，一天约</span>
+          <span><b id="estVal">${storage.toFixed(1)} GB</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="mcard">
+      <h3>播放速度 <span class="sub">只作用在保留段</span></h3>
+      <div class="chips">
+        ${[1,1.5,2,3].map(v=>'<button class="chip '+(+p.speed===v?"on":"")+'" data-speed="'+v+'">'+v+'×</button>').join("")}
+      </div>
+      <div class="seg2" style="margin-top:9px">
+        <button class="${p.speedMode==="pts"?"on":""}" data-spmode="pts">只改时间戳</button>
+        <button class="${p.speedMode==="reencode"?"on":""}" data-spmode="reencode">重编码丢帧</button>
+      </div>
+      <div class="note" style="margin-top:9px">${p.speedMode==="pts"
+        ? "一帧不删，只把时间戳除以倍速：快、无损，但<b>体积一分不减</b>。想省盘请改选重编码。"
+        : "按源帧率重新采样（2× = 每两帧留一帧），体积约按 1/" + p.speed + " 缩，代价是画质略降、有跳帧感。"}</div>
+      <div class="swrow"><span>先按包大小粗筛（不解码）</span><div class="sw ${p.prescan?"on":""}" data-prescan="1"></div></div>
+      <div class="hint">P 帧字节数天然反映变化量，先扫一遍只读容器，再对候选区间 ±10 秒精算，解码量常降到 10~30%。</div>
+    </div>
+
+    <div class="mcard">
+      <h3>判读指标 <span class="sub">画面变化怎么算</span></h3>
+      <div class="seg2">
+        ${[["auto","自动"],["mono","黑白 · 红外"],["color","彩色"]].map(([k,t])=>
+          '<button class="'+(p.judge.scene===k?"on":"")+'" data-scene="'+k+'">'+t+'</button>').join("")}
+      </div>
+      <div class="detect" style="margin-top:9px">
+        <i class="k"></i>
+        <span>已判定 <b>${judgeScene(p)==="mono"?"黑白 · 红外":"彩色"}</b> · 色度起伏 ${p.judge.chromaStd}（黑白 &lt; 1.5）</span>
+      </div>
+      <div class="hint">按<b>色度标准差</b>判黑白，不按饱和度：夜间彩色画面饱和度只有 0.15，按饱和度必误判；真黑白 U/V 恒定在 128。</div>
+
+      <div class="srow">
+        <div class="top"><span class="n">噪声自适应倍率</span><span class="v" id="v-noiseMult">${p.judge.noiseMult.toFixed(1)}×</span></div>
+        <input type="range" min="1.1" max="5" step="0.1" value="${p.judge.noiseMult}" data-j="noiseMult">
+        <div class="h">实际阈值 = 本机位噪声底线 × 倍率。树多、雨多就调大，这是最该动的旋钮</div>
+      </div>
+      <div class="srow">
+        <div class="top"><span class="n">像素差门槛</span><span class="v" id="v-pixelDelta">${judgeScene(p)==="mono"?14:p.judge.pixelDelta} 级</span></div>
+        <input type="range" min="1" max="80" value="${p.judge.pixelDelta}" data-j="pixelDelta">
+        <div class="h">单像素变化多少灰度才算"变了"；黑白画面颗粒噪声大，门槛反而更低但必须配空域模糊</div>
+      </div>
+      ${judgeScene(p)==="color" ? `
+      <div class="srow">
+        <div class="top"><span class="n">色度差门槛</span><span class="v" id="v-chromaDelta">${p.judge.chromaDelta}</span></div>
+        <input type="range" min="1" max="80" value="${p.judge.chromaDelta}" data-j="chromaDelta">
+        <div class="h">色度噪声底比亮度低 14 倍，所以门槛可以更低：抓"亮度几乎一样但颜色不同"的目标</div>
+      </div>` : ""}
+      <div class="srow">
+        <div class="top"><span class="n">前置 / 后置缓冲</span><span class="v" id="v-preBuf">各 ${p.judge.preBuf} 秒</span></div>
+        <input type="range" min="0" max="15" value="${p.judge.preBuf}" data-j="preBuf">
+        <div class="h">人进画面前常有准备动作，车驶出后还有尾段；两边各留 3 秒是实测值</div>
+      </div>
+      <div class="srow">
+        <div class="top"><span class="n">合并间隔</span><span class="v" id="v-merge">${p.judge.mergeGap} 秒</span></div>
+        <input type="range" min="0" max="30" value="${p.judge.mergeGap}" data-j="mergeGap">
+        <div class="h">两段间隔小于它就并成一段，避免人群断续经过被切成十几个碎片</div>
+      </div>
+      <div class="est" style="margin-top:2px">
+        <span id="judgeSum">${judgeSummary(p)}</span>
+      </div>
+    </div>
+
+    <div class="mcard">
+      <h3>画面区域 <span class="sub">在画面上拖拽框选</span></h3>
+      <div class="seg2" style="margin-bottom:0">
+        <button class="${state.maskTool!=="redact"?"on":""}" data-mtool="ignore">检测忽略区</button>
+        <button class="${state.maskTool==="redact"?"on":""}" data-mtool="redact">输出遮蔽区</button>
+      </div>
+      <div class="maskstage"><canvas id="maskCv"></canvas></div>
+      <div class="mtip" id="mtip">${state.maskTool==="redact"
+        ? '<span style="color:#d43b3b;font-weight:500">输出遮蔽区</span>：导出画面里打成黑块，别人看不到。'
+        : '<span style="color:#c47c00;font-weight:500">检测忽略区</span>：区域内变化不算事件，但画面照常保留。适合树影、马路。'}</div>
+      <div class="mlist" id="mlist"></div>
+    </div>
+
+    <div class="mcard">
+      <h3>其他</h3>
+      <div class="srow" style="display:flex;align-items:center;padding-top:0">
+        <span class="n">处理时段</span>
+        <span style="margin-left:auto;color:#9aa1ac;font-size:12.5px">全天 ›</span>
+      </div>
+      <div class="srow" style="display:flex;align-items:center">
+        <span class="n">该摄像头启用</span>
+        <div style="margin-left:auto;width:44px;height:26px;border-radius:13px;background:${p.enabled?"var(--primary)":"#dfe3ea"};position:relative">
+          <i style="position:absolute;top:3px;left:${p.enabled?"21px":"3px"};width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);display:block"></i>
+        </div>
+      </div>
+    </div>
+
+    <div class="mcard">
+      <h3>硬件加速与资源 <span class="sub">全局 · 四路共用</span></h3>
+
+      <div class="detect" style="margin:0 0 10px">
+        <span class="k" style="background:${GS.gpu ? "#22b573" : "#c9ced8"}"></span>
+        <span>${GS.gpu
+          ? "核显可用 · <b>Intel UHD 730 / QSV</b>，解码与编码都不占 CPU"
+          : "已关闭 · 回落 <b>x265 软件编码</b>，单路吃满 1 个核，速度约 1/10"}</span>
+      </div>
+
+      <div class="swrow"><span>解码 + 编码走核显</span><div class="sw ${GS.gpu?"on":""}" data-gs="gpu"></div></div>
+      <div class="hint">单路 4MP 只占媒体引擎约 1/5，2 路并行接近线性；3 路以上开始抢磁盘，NVR 回放会抖。</div>
+
+      <div class="srow">
+        <div class="top"><span class="n">同时处理</span><span class="v">${GS.conc} 路</span></div>
+        <div class="chips">
+          <button class="chip ${GS.conc===1?"on":""}" data-conc="1">串行 · 1 路</button>
+          <button class="chip ${GS.conc===2?"on":""}" data-conc="2">并行 · 2 路</button>
+        </div>
+        <div class="h">4 路一天素材约 96 小时，2 路刚好压进夜间窗口；8G 内存以下建议 1 路</div>
+      </div>
+
+      <div class="swrow"><span>只在夜间跑重编码</span><div class="sw ${GS.nightOnly?"on":""}" data-gs="nightOnly"></div></div>
+      <div class="hint">01:00–07:00 集中处理，白天只做轻量侦测（每秒约 1% CPU）。</div>
+
+      <div class="swrow"><span>低优先级 · 磁盘空闲才写</span><div class="sw ${GS.lowPrio?"on":""}" data-gs="lowPrio"></div></div>
+      <div class="hint">nice 19 / ionice 7；NVR 正在写盘时自动让路，避免拖慢回放。</div>
+
+      <div class="srow">
+        <div class="top"><span class="n">当前占用</span><span class="v" style="color:#22b573">${GS.conc===1?"待机":"处理中 · 2 路"}</span></div>
+        <div class="bars">
+          <div class="bcell"><div class="k">CPU</div><div class="num">${cpuPct}%</div>
+            <div class="track"><i style="width:${Math.min(100,cpuPct)}%;background:${cpuPct>60?"#e0862c":"var(--primary)"}"></i></div></div>
+          <div class="bcell"><div class="k">内存</div><div class="num">${memMB} MB</div>
+            <div class="track"><i style="width:${Math.min(100,memMB/20)}%"></i></div></div>
+          <div class="bcell"><div class="k">缩略图缓存</div><div class="num">${cacheGB} GB</div>
+            <div class="track"><i style="width:${Math.min(100,cacheGB*20)}%"></i></div></div>
+        </div>
+      </div>
+
+      <div class="swrow"><span>缩略图合并成雪碧图</span><div class="sw ${GS.sprite?"on":""}" data-gs="sprite"></div></div>
+      <div class="hint">4 路一天 2.8 万张小图 → 96 张拼图，省 inode 和目录碎片，翻找还更快。</div>
+    </div>
+
+    <div class="mcard">
+      <h3>侦测与执行 <span class="sub">全局 · 四路共用</span></h3>
+
+      <div class="srow" style="padding-top:2px;border-top:none">
+        <div class="n">多久扫一次新录像</div>
+        <div class="chips">
+          ${["now","m15","h1","d1"].map(k=>
+            '<button class="chip ' + (GS.mode===k?"on":"") + '" data-scan="' + k + '">' + SCAN_LABEL[k] + '</button>'
+          ).join("")}
+        </div>
+        <div class="h" style="margin-top:8px;line-height:1.55">${scanHint()}</div>
+      </div>
+
+      <div class="srow">
+        <div class="top"><span class="n">上次扫描</span><span class="v">${GS.lastScan}</span></div>
+        <div class="h">发现 2 个新文件 · 用时 1.4 秒 · 下次 ${nextScan()}</div>
+      </div>
+
+      <div class="srow">
+        <div class="top"><span class="n">断点续传</span><span class="v">${GS.resume} 个可续</span></div>
+        <div class="h">已完成 ${GS.done} · 待处理 ${GS.pending} · 中断 ${GS.resume}</div>
+        <div class="pbar" style="height:4px;margin-top:9px"><i style="width:${Math.round(GS.done/(GS.done+GS.pending+GS.resume)*100)}%"></i></div>
+        <button class="btnline" id="btnResume">继续未完成任务</button>
+      </div>
+
+      <div class="srow">
+        <div class="top"><span class="n">避免重复处理</span></div>
+        <div class="swrow"><span>同一源文件只处理一次</span><div class="sw on"></div></div>
+        <div class="swrow"><span>参数变更后重新处理</span><div class="sw ${GS.reprocessOnParam?"on":""}" data-gs="reprocessOnParam"></div></div>
+        <div class="swrow"><span>输出已存在则跳过</span><div class="sw ${GS.skipIfExists?"on":""}" data-gs="skipIfExists"></div></div>
+        <div class="h" style="margin-top:6px">判重依据：源路径 + 文件大小 + 修改时间 + 参数指纹</div>
+      </div>
+    </div>
+
+    <div class="mcard">
+      <h3>🧰 诊断与日志</h3>
+      <div class="hint" style="margin-top:0">画面出不来 / 录像中断 / 频繁重连 / 卡顿时，点下面的按钮导出诊断日志：包含运行环境、配置、每一路的运行状态、ffmpeg 子进程与服务日志尾部。文件已自动脱敏（摄像头密码、RTSP 内嵌凭据均换成 ***），可直接发给开发者定位问题。</div>
+      <button class="btnline" id="btnDiag">🧰 下载诊断日志</button>
+    </div>`;
+
+  body.querySelectorAll("[data-r]").forEach(inp=>{
+    inp.oninput = ()=>{
+      const k = inp.dataset.r;
+      const v = +inp.value;
+      const PROFILE_KEYS = ["crf","fps","scale","dn"];
+      if(PROFILE_KEYS.includes(k)){
+        p[p.profile][k] = v;
+      }else{
+        p[k] = v;
+      }
+      const el = body.querySelector("#v-"+k);
+      if(el){
+        if(k === "dn") el.textContent = DN_NAMES[v];
+        else if(k === "crf") el.textContent = v;
+        else if(k === "sensitivity") el.textContent = v + "%";
+        else if(k === "minKeep" || k === "mergeGap") el.textContent = v + " 秒";
+        else if(k === "fps") el.textContent = v + " fps";
+        else el.textContent = v + "%";
+      }
+      if(PROFILE_KEYS.includes(k)){
+        const e2 = estMbps(p[p.profile], c.res, p.profile==="night");
+        const kv = state.segs.reduce((a,s)=>a+(s.e-s.s),0)/86400;
+        const box = body.querySelector("#estVal");
+        if(box) box.textContent = (e2*0.44*24*Math.max(kv,0.01)).toFixed(1) + " GB";
+        const sub = body.querySelector("#outSub");
+        if(sub) sub.textContent = (p.profile==="night"?"夜间档":"白天档") + " · 预计 " + e2.toFixed(1) + " Mbps";
+      }
+    };
+  });
+  body.querySelectorAll("[data-mode2]").forEach(el=>{
+    el.onclick = ()=>{ p.mode = el.dataset.mode2; renderCamBody(); };
+  });
+  body.querySelectorAll("[data-prof]").forEach(el=>{
+    el.onclick = ()=>{ p.profile = el.dataset.prof; renderCamBody(); };
+  });
+  body.querySelectorAll("[data-dn]").forEach(el=>{
+    el.onclick = ()=>{ p.autoDN = !p.autoDN; renderCamBody(); };
+  });
+  /* 判读指标 */
+  body.querySelectorAll("[data-j]").forEach(inp=>{
+    inp.oninput = ()=>{
+      const k = inp.dataset.j;
+      p.judge[k] = +inp.value;
+      const el = body.querySelector("#v-" + k);
+      if(el){
+        if(k === "pixelDelta") el.textContent = inp.value + " 级";
+        else if(k === "chromaDelta") el.textContent = inp.value;
+        else if(k === "noiseMult") el.textContent = (+inp.value).toFixed(1) + "×";
+        else if(k === "preBuf") el.textContent = "各 " + inp.value + " 秒";
+        else el.textContent = inp.value + " 秒";
+      }
+      const sum = body.querySelector("#judgeSum");
+      if(sum) sum.textContent = judgeSummary(p);
+    };
+  });
+  body.querySelectorAll("[data-scene]").forEach(el=>{
+    el.onclick = ()=>{ p.judge.scene = el.dataset.scene; renderCamBody(); };
+  });
+  body.querySelectorAll("[data-speed]").forEach(el=>{
+    el.onclick = ()=>{ p.speed = +el.dataset.speed; renderCamBody(); };
+  });
+  body.querySelectorAll("[data-spmode]").forEach(el=>{
+    el.onclick = ()=>{ p.speedMode = el.dataset.spmode; renderCamBody(); };
+  });
+  body.querySelectorAll("[data-prescan]").forEach(el=>{
+    el.onclick = ()=>{ p.prescan = !p.prescan; renderCamBody(); };
+  });
+  body.querySelectorAll("[data-scan]").forEach(el=>{
+    el.onclick = ()=>{
+      GS.mode = el.dataset.scan;
+      if(GS.mode === "now"){
+        GS.lastScan = "刚刚";
+        toast("toast2", "已立即扫描 · 发现 2 个新文件");
+      }
+      renderCamBody();
+    };
+  });
+  body.querySelectorAll("[data-gs]").forEach(el=>{
+    el.onclick = ()=>{
+      GS[el.dataset.gs] = !GS[el.dataset.gs];
+      renderCamBody();
+    };
+  });
+  body.querySelectorAll("[data-conc]").forEach(el=>{
+    el.onclick = ()=>{
+      GS.conc = +el.dataset.conc;
+      renderCamBody();
+      toast("toast2", GS.conc===1 ? "改为串行：内存峰值减半，夜间窗口可能跑不完" : "并行 2 路：约 1.5～1.8 倍速，内存约 420 MB");
+    };
+  });
+  /* 录像引擎设置 */
+  body.querySelectorAll("[data-rec]").forEach(el=>{
+    el.onclick = ()=>{
+      REC.enabled = !REC.enabled;
+      renderCamBody(); updateResBar();
+      toast("toast2", REC.enabled ? "录像已启用" : "录像已停止，仅直播不受影响");
+    };
+  });
+  /* 保留周期步进器：全时 / 缩时各自独立 */
+  body.querySelectorAll("[data-ret]").forEach(el=>{
+    el.onclick = ()=>{
+      const camId = el.dataset.cam, key = el.dataset.ret, d = +el.dataset.d;
+      const cp = camParams[camId];
+      const lim = key === "fullDays" ? [1, 30] : [7, 3650];
+      cp[key] = Math.max(lim[0], Math.min(lim[1], cp[key] + d));
+      const cell = body.querySelector("#" + (key === "fullDays" ? "full" : "clip") + "-" + camId);
+      if(cell) cell.textContent = cp[key] + " 天";
+      const cc = CAMERAS.find(x=>x.id === camId);
+      const dayGB = fullDayMbps(cc) * 86400 / 8 / 1000 / 1024;
+      const g = body.querySelector("#gb-" + camId);
+      if(g) g.textContent = (dayGB*cp.fullDays + dayGB*0.07*cp.clipDays).toFixed(0) + " GB";
+      const bud = body.querySelector("#recBudget");
+      if(bud) bud.innerHTML = recBudgetText();
+      updateResBar();
+    };
+  });
+  const ca = body.querySelector("#recCleanAt");
+  if(ca) ca.onchange = ()=>{ REC.cleanupAt = ca.value; renderCamBody(); };
+  const cn = body.querySelector("#btnCleanNow");
+  if(cn) cn.onclick = ()=> toast("toast2", "预览：将删除 6 个日期目录 / 1247 个文件，释放 41.2 GB（未执行）");
+  const rs = body.querySelector("#recSeg");
+  if(rs) rs.onchange = ()=>{ REC.segSec = Math.max(60, +rs.value||300); renderCamBody(); updateResBar(); };
+  const rd = body.querySelector("#recDirBtn");
+  if(rd) rd.onclick = ()=> toast("toast2", "打开 fnOS 目录选择器（真机由向导注入路径）");
+  const dg = body.querySelector("#btnDiag");
+  if(dg) dg.onclick = ()=> toast("toast2", "诊断日志已导出（密码已脱敏为 ***）");
+  const rbtn = body.querySelector("#btnResume");
+  if(rbtn) rbtn.onclick = ()=>{
+    toast("toast2", "已恢复 2 个中断任务，从上次完成的片段继续");
+    GS.resume = 0;
+    setTimeout(renderCamBody, 1600);
+  };
+  body.querySelectorAll("[data-mtool]").forEach(el=>{
+    el.onclick = ()=>{
+      state.maskTool = el.dataset.mtool;
+      body.querySelectorAll("[data-mtool]").forEach(x=>x.classList.toggle("on", x===el));
+      document.getElementById("mtip").innerHTML = state.maskTool==="redact"
+        ? '<span style="color:#d43b3b;font-weight:500">输出遮蔽区</span>：导出画面里打成黑块，别人看不到。'
+        : '<span style="color:#c47c00;font-weight:500">检测忽略区</span>：区域内变化不算事件，但画面照常保留。适合树影、马路。';
+    };
+  });
+
+  renderMasks();
+  setTimeout(drawMaskScene, 0);
+}
+
+/* --- 遮蔽区画布 --- */
+let mdrag = null;
+
+function drawMaskScene(){
+  const cv = document.getElementById("maskCv");
+  if(!cv) return;
+  const rr = cv.getBoundingClientRect();
+  if(!rr.width) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = rr.width, h = w*9/16;
+  cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+  cv.style.height = h+"px";
+  const c = cv.getContext("2d");
+  c.setTransform(dpr,0,0,dpr,0,0);
+
+  c.fillStyle = "#20242a"; c.fillRect(0,0,w,h);
+  const hz = h*0.34;
+  c.fillStyle = "#292e36"; c.fillRect(0,0,w,hz);
+  c.fillStyle = "#333941"; c.fillRect(0,hz,w,h-hz);
+  c.strokeStyle = "rgba(255,255,255,.055)";
+  for(let i=-4;i<=4;i++){
+    c.beginPath(); c.moveTo(w*0.5+i*w*0.06, hz); c.lineTo(w*0.5+i*w*0.30, h); c.stroke();
+  }
+  c.fillStyle = "#181b20"; c.fillRect(w*0.40,h*0.06,w*0.15,hz-h*0.06);
+  c.fillStyle = "#242930"; c.fillRect(w*0.80,h*0.10,w*0.055,h*0.62);
+
+  camParams[state.camId].masks.forEach(m=>{
+    const x=m.x*w, y=m.y*h, ww=m.w*w, hh=m.h*h;
+    if(m.type==="redact"){
+      c.fillStyle = "rgba(14,16,20,.95)"; c.fillRect(x,y,ww,hh);
+      c.strokeStyle = "rgba(220,70,70,.8)";
+    }else{
+      c.fillStyle = "rgba(240,180,40,.14)"; c.fillRect(x,y,ww,hh);
+      c.strokeStyle = "rgba(240,180,40,.8)";
+    }
+    c.lineWidth = 1; c.setLineDash([4,3]); c.strokeRect(x,y,ww,hh); c.setLineDash([]);
+    c.font = '10px -apple-system,"Microsoft YaHei",sans-serif';
+    c.fillStyle = m.type==="redact" ? "rgba(255,120,120,.95)" : "rgba(250,200,90,.95)";
+    c.fillText(m.name, x+4, y+12);
+  });
+
+  if(mdrag){
+    const x=Math.min(mdrag.x0,mdrag.x1), y=Math.min(mdrag.y0,mdrag.y1);
+    const ww=Math.abs(mdrag.x1-mdrag.x0), hh=Math.abs(mdrag.y1-mdrag.y0);
+    c.strokeStyle = state.maskTool==="redact" ? "rgba(220,70,70,.95)" : "rgba(240,180,40,.95)";
+    c.setLineDash([5,3]); c.lineWidth = 1.5; c.strokeRect(x,y,ww,hh); c.setLineDash([]);
+    c.fillStyle = state.maskTool==="redact" ? "rgba(220,70,70,.12)" : "rgba(240,180,40,.12)";
+    c.fillRect(x,y,ww,hh);
+  }
+}
+
+function renderMasks(){
+  const box = document.getElementById("mlist");
+  if(!box) return;
+  const p = camParams[state.camId];
+  if(!p.masks.length){
+    box.innerHTML = '<span style="font-size:11.5px;color:#b6bcc6">还没有区域，在上方画面上直接拖拽</span>';
+  }else{
+    box.innerHTML = "";
+    p.masks.forEach((m,i)=>{
+      const d = document.createElement("span");
+      d.className = "mitem";
+      d.innerHTML = '<i style="background:' + (m.type==="redact"?"#d43b3b":"#e0a33a") + '"></i>' +
+        (m.type==="redact"?"遮蔽 · ":"忽略 · ") + m.name + '<span class="x" data-del="' + i + '">×</span>';
+      box.appendChild(d);
+    });
+    box.querySelectorAll("[data-del]").forEach(el=>{
+      el.onclick = ()=>{
+        camParams[state.camId].masks.splice(+el.dataset.del,1);
+        renderMasks(); drawMaskScene();
+      };
+    });
+  }
+}
+
+function bindMaskCanvas(){
+  const cv = document.getElementById("maskCv");
+  if(!cv) return;
+  cv.onpointerdown = e=>{
+    const r = cv.getBoundingClientRect();
+    mdrag = { x0:(e.clientX-r.left)/r.width, y0:(e.clientY-r.top)/r.height,
+              x1:(e.clientX-r.left)/r.width, y1:(e.clientY-r.top)/r.height };
+    cv.setPointerCapture(e.pointerId);
+  };
+  cv.onpointermove = e=>{
+    if(!mdrag) return;
+    const r = cv.getBoundingClientRect();
+    mdrag.x1 = (e.clientX-r.left)/r.width;
+    mdrag.y1 = (e.clientY-r.top)/r.height;
+    drawMaskScene();
+  };
+  cv.onpointerup = ()=>{
+    if(!mdrag) return;
+    const x=Math.min(mdrag.x0,mdrag.x1), y=Math.min(mdrag.y0,mdrag.y1);
+    const w=Math.abs(mdrag.x1-mdrag.x0), h=Math.abs(mdrag.y1-mdrag.y0);
+    if(w>0.03 && h>0.03){
+      const p = camParams[state.camId];
+      p.masks.push({ x,y,w,h, type:state.maskTool,
+        name:(state.maskTool==="redact"?"遮蔽区 ":"忽略区 ")+(p.masks.length+1) });
+      renderMasks(); drawMaskScene();
+    }
+    mdrag = null;
+  };
+}
+
+/* ================= 启动 ================= */
+function loadDay(){
+  state.activity = getSegs(state.camId, DAYS[state.dayIdx]);
+  state.segs = state.pmode === "full"
+    ? getFullSegs(state.camId, DAYS[state.dayIdx])
+    : state.activity;
+  renderDates(); renderOverview(); renderHeat(); renderClips();
+}
+
+/* 回放模式切换 */
+document.querySelectorAll("[data-pmode]").forEach(el=>{
+  el.onclick = ()=>{
+    if(state.pmode === el.dataset.pmode) return;
+    state.pmode = el.dataset.pmode;
+    document.querySelectorAll("[data-pmode]").forEach(x=>x.classList.toggle("on", x===el));
+    state.hourBlock = -1; state.segIdx = -1;
+    loadDay();
+    toast("toast2", state.pmode==="full" ? "全时录像 · 主码流原画质" : "精简片段 · 压缩后成品");
+  };
+});
+
+renderDates();
+renderCamTabs();
+renderLive();
+loadDay();
+renderCamBody();
+layout();
+setTimeout(()=>{ bindMaskCanvas(); drawMaskScene(); renderLive(); }, 60);
+requestAnimationFrame(loop);
+
+document.getElementById("btnScan").onclick = ()=> toast("toast2", "正在扫描 NVR 目录…");
+document.getElementById("btnGoSet").onclick = ()=>{
+  document.querySelector('.tb[data-page="cam"]').click();
+};
+document.getElementById("lrBack").onclick = ()=> leaveLive();
+document.getElementById("lrGrid").onclick = ()=>{
+  state.liveView = state.liveView === "grid" ? "single" : "grid";
+  state.livePaused = false;
+  buildLiveRoom();
+  updateResBar();
+};
+</script>
+</body>
+</html>

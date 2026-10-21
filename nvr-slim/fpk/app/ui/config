@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "nvr.main": {
+      "title": "NVR-L",
+      "icon": "images/icon-{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "18081",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}

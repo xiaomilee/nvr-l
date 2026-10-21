@@ -1,0 +1,145 @@
+#!/bin/bash
+# 安装后：建目录、写初始配置、做一次核显自检
+# 原则：核显不可用不允许导致安装失败（NAS 换了机器/驱动被占用都可能发生）
+set -u
+
+TMPLOG="${TRIM_TEMP_LOGFILE:-}"
+fail() {
+  printf '%s\n' "$1" >&2
+  [ -n "$TMPLOG" ] && printf '%s\n' "$1" >>"$TMPLOG"
+  exit 1
+}
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+APP_DIR="${TRIM_APPDEST:-$ROOT/app}"
+VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
+# 录制根目录：向导没填就自己挑一个能写的。
+# 优先 @appshare 下的共享目录（config/resource 已声明 data-share，系统会自动授权，
+# 用户还能通过 SMB 直接翻看）；实在不行退到数据目录内 —— 那里一定属于应用用户。
+# 向导字段现在统一带 wizard_ 前缀（官方建议），同时兼容早期不带前缀的写法。
+REC="${wizard_record_dir:-${record_dir:-${wizard_output_dir:-${output_dir:-}}}}"
+if [ -z "$REC" ]; then
+  for cand in /vol1/@appshare/nvr-output "$VAR_DIR/rec"; do
+    if mkdir -p "$cand" 2>/dev/null; then REC="$cand"; break; fi
+  done
+fi
+[ -n "$REC" ] || fail "无法创建录制目录，请重新安装并在向导里指定一个可写目录"
+OUT="$REC"
+LOG_DIR="$VAR_DIR/log"
+
+# 应用名与运行用户：优先环境变量，其次 manifest / privilege，最后兜底
+APP_NAME="${TRIM_APPNAME:-}"
+[ -n "$APP_NAME" ] || APP_NAME="$(sed -n 's/^appname[[:space:]]*=[[:space:]]*//p' \
+  "$ROOT/manifest" 2>/dev/null | head -1 | tr -d ' \r')"
+[ -n "$APP_NAME" ] || APP_NAME="nvr"
+APP_USER="$APP_NAME"
+if [ -f "$ROOT/config/privilege" ]; then
+  _u="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$ROOT/config/privilege" 2>/dev/null | head -1)"
+  [ -n "$_u" ] && APP_USER="$_u"
+fi
+
+# 数据目录的属主/权限修正。系统建目录后若 chown 没落到应用用户，服务写
+# config.json、日志、快照全部会失败，而报错点往往离根因很远，所以这里兜一层。
+# 只在属主不对时递归，避免每次安装都全盘 chown（目录大时会很慢）。
+fix_perm() {
+  local d="$1" cur=""
+  [ -d "$d" ] || return 0
+  cur="$(stat -c %U "$d" 2>/dev/null || echo "")"
+  if [ "$cur" != "$APP_USER" ]; then
+    chown -R "$APP_USER:$APP_USER" "$d" 2>/dev/null \
+      || echo "warn: chown $APP_USER:$APP_USER $d 失败（目录属主仍为 ${cur:-unknown}）" >&2
+  fi
+  chmod 700 "$d" 2>/dev/null || true
+  # ACL 的 mask 被压成 --- 时，属主权限再对也写不进去，必须清掉继承来的 ACL
+  if command -v setfacl >/dev/null 2>&1; then
+    setfacl -b "$d" 2>/dev/null || true
+  fi
+}
+
+PY=""
+for c in "${NVR_PYTHON:-}" python3 python; do
+  [ -n "$c" ] || continue
+  if command -v "$c" >/dev/null 2>&1; then PY="$(command -v "$c")"; break; fi
+done
+[ -n "$PY" ] || fail "系统未找到 python3"
+
+# 先建顶层再修正属主，然后建子目录：顺序反了会在子目录上留下 root 属主
+mkdir -p "$VAR_DIR" 2>/dev/null
+fix_perm "$VAR_DIR"
+mkdir -p "$LOG_DIR" "$VAR_DIR/slots" "$VAR_DIR/thumbs" "$VAR_DIR/tmp" \
+  "$VAR_DIR/rec" 2>/dev/null \
+  || fail "无法创建数据目录：$VAR_DIR（运行用户 $APP_USER，请检查该目录属主与 ACL）"
+fix_perm "$VAR_DIR"
+
+# 输出目录必须现在建好：装完再发现没权限，用户很难自己排查
+# 不 chown：它可能是用户自选的共享目录，写权限靠 config/resource 的 data-share 授权
+mkdir -p "$OUT" 2>/dev/null || fail "输出目录无法创建：$OUT（请换一个有写权限的目录，或先在文件管理里建好）"
+
+"$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
+  init --record "$REC" --output "$OUT" >/dev/null 2>&1 || fail "初始化配置失败，详见 $LOG_DIR/install.log"
+
+# 端口：向导里选的值落到 config.json，并写死到 app/ui/config 的桌面入口，
+# 保证「应用实际监听的端口」和「桌面图标指向的端口」永远是同一个。
+# setport 会再探一次占用；万一此刻仍被抢占就自动顺延到下一个空闲端口。
+PORT_WANT="${wizard_port:-${port:-${wizard_app_port:-${TRIM_SERVICE_PORT:-18081}}}}"
+PORT_INFO="$("$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
+  setport --port "$PORT_WANT" 2>/dev/null)"
+PORT_FINAL="$(printf '%s' "$PORT_INFO" | sed -n 's/.*"port":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)"
+[ -n "$PORT_FINAL" ] || PORT_FINAL="$PORT_WANT"
+
+# 桌面入口写不进去时，图标会停在默认 18081，而服务可能跑在顺延后的端口上。
+# 这种"装完点不开"最难自查，必须在安装日志里留一句能照着做的提示。
+case "$PORT_INFO" in
+  *'"ui_config": false'*|*'"ui_config":false'*)
+    UI_WARN="桌面入口端口改写失败（$APP_DIR/ui/config 不可写）：图标仍指向 18081，实际端口 $PORT_FINAL。启动应用后会自动对齐，或重装时把端口填成 18081。"
+    printf 'warn: %s\n' "$UI_WARN" >&2
+    [ -n "${TRIM_TEMP_LOGFILE:-}" ] && printf '%s\n' "$UI_WARN" >>"$TRIM_TEMP_LOGFILE"
+    ;;
+esac
+
+# 向导里选的衔接方式也一并落进配置，免得用户装完还得再进设置改一遍
+ARGS=()
+LM="${wizard_link_mode:-${link_mode:-}}"
+LI="${wizard_link_interval_h:-${link_interval_h:-}}"
+RS="${wizard_record_segment_sec:-${record_segment_sec:-}}"
+[ -n "$LM" ] && ARGS+=(--set "link_mode=$LM")
+[ -n "$LI" ] && ARGS+=(--set "link_interval_h=$LI")
+[ -n "$RS" ] && ARGS+=(--set "record_segment_sec=$RS")
+if [ "${#ARGS[@]}" -gt 0 ]; then
+  "$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" set "${ARGS[@]}" >/dev/null 2>&1
+fi
+
+GPU_JSON="$VAR_DIR/tmp/gpu.json"
+"$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" gpu >"$GPU_JSON" 2>/dev/null
+INFO="$("$PY" - "$GPU_JSON" <<'PYEOF' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    d = {}
+print("%s|%s|%s" % (d.get("state", "unknown"),
+                    (d.get("reason") or "-").replace("\n", " "),
+                    d.get("ffmpeg") or "-"))
+PYEOF
+)"
+STATE="$(printf '%s' "$INFO" | cut -d'|' -f1)"
+REASON="$(printf '%s' "$INFO" | cut -d'|' -f2)"
+FF="$(printf '%s' "$INFO" | cut -d'|' -f3)"
+[ -n "$STATE" ] || STATE="unknown"
+
+{
+  echo "---- $(date '+%Y-%m-%d %H:%M:%S') install v${TRIM_APPVER:-?} ----"
+  echo "record_dir=$REC"
+  echo "output_dir=$OUT"
+  echo "service_port=$PORT_FINAL (wizard=$PORT_WANT)"
+  echo "gpu_state=$STATE reason=$REASON ffmpeg=${FF:-none}"
+} >>"$LOG_DIR/install.log"
+
+if [ "$STATE" = "none" ]; then
+  # 不阻断安装，只留痕；应用内会显示原因
+  echo "warn: 硬件加速不可用 -> $REASON" >&2
+fi
+
+exit 0
