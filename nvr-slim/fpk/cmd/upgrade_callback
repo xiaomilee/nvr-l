@@ -24,6 +24,18 @@ done
 "$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" migrate >/dev/null 2>&1 \
   || fail "配置迁移失败，可回滚到 $VAR_DIR/backup 下的备份"
 
+# 升级会整目录替换 app：包内 ui/config 的端口是新包默认值，而用户配置里还是老端口。
+# 不对齐的话，桌面图标指向一个没人监听的端口，用户点开就是 ERR_CONNECTION_REFUSED
+# （0.9.18 真机实锤）。这里把图标拉回用户现有端口；启动阶段 main 的 pinport 还会
+# 用 port.txt 的真实端口再兜一次。
+PORT_HAVE="$(sed -n 's/.*"service_port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+  "$VAR_DIR/config.json" 2>/dev/null | head -1)"
+if [ -n "$PORT_HAVE" ]; then
+  mkdir -p "$VAR_DIR/log" 2>/dev/null || true
+  "$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
+    pinport --port "$PORT_HAVE" >>"$VAR_DIR/log/upgrade.log" 2>&1 || true
+fi
+
 mkdir -p "$VAR_DIR/slots" "$VAR_DIR/log" "$VAR_DIR/rec" 2>/dev/null
 
 # 升级会整目录替换 app，但数据目录通常不动；只有属主被改过才修（幂等且不慢）

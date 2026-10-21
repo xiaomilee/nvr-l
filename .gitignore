@@ -3,3 +3,5 @@ __pycache__/
 .workbuddy/
 *.tmp
 .DS_Store
+var/
+test/.shots/

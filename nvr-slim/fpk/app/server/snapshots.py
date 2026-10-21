@@ -12,7 +12,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import ffmpeg_cmd
+import ffmpeg_cmd  # noqa: F401  （保留导出，脚本内自检与外部调用方依赖）
 
 
 class SnapshotWorker:
@@ -30,6 +30,7 @@ class SnapshotWorker:
         self._ok = {}                           # cam_id -> True/False/None（None=还没试过）
         self._fails = {}                        # cam_id -> 连续失败次数（用于换传输协议）
         self._udp_ok = {}                       # cam_id -> UDP 探测结果（None=没试过；False=不可用则固定 TCP）
+        self._last = {}                         # cam_id -> 上一轮内容的去重键，避免日志里重复同一句
         self.thread = threading.Thread(target=self._loop, daemon=True, name="snapshots")
 
     def start(self):
@@ -71,7 +72,6 @@ class SnapshotWorker:
             self.stop_event.wait(wait)
 
     def _round(self, parallel=False):
-        cams = []
         try:
             cams = [c for c in (self.cams_fn() or [])]
         except Exception as e:
@@ -92,31 +92,34 @@ class SnapshotWorker:
                 if u and u not in urls:
                     urls.append(u)
             if urls:
-                redact = []
-                m = c.get("masks") or {}
-                if m.get("redact"):
-                    redact = [int(x) for x in m["redact"] if isinstance(x, int)]
-                targets.append((c.get("id"), urls, redact))
+                targets.append((c.get("id"), urls))
         if not targets:
             return
-        if parallel and len(targets) > 1:
+        # 每轮都并行：单路最坏要 8 秒超时、再加子码流失败回退主码流又一 8 秒，
+        # 4 路串行时一轮能跑 30 秒以上，interval=10 就名存实亡。
+        # 只在线程池里等，抓帧本身仍是"一路一个 ffmpeg"，不会放大并发。
+        if len(targets) > 1:
             with ThreadPoolExecutor(max_workers=min(self.workers, len(targets))) as ex:
                 list(ex.map(lambda t: self._grab_any(*t), targets))
         else:
             for t in targets:
                 self._grab_any(*t)
 
-    def _grab_any(self, cam_id, urls, redact=None):
+    def _grab_any(self, cam_id, urls):
         """按候选地址逐个抓：子码流优先，失败就回退主码流再试一次。"""
         for i, url in enumerate(urls):
-            if self._grab(cam_id, url, redact):
+            if self._grab(cam_id, url):
                 return True
             if i < len(urls) - 1:
-                self.log("子码流抓帧失败：%s，改用主码流再试" % cam_id)
+                # 只在"首次回退"时记一条：每 10 秒刷一次会把 800 行环形日志全占满
+                key = "%s|fallback" % cam_id
+                if self._last.get(key) != urls[i]:
+                    self._last[key] = urls[i]
+                    self.log("子码流抓帧失败：%s，改用主码流再试" % cam_id)
         return False
 
     # ------------------------------------------------------------ 单路抓帧
-    def _grab(self, cam_id, url, redact=None):
+    def _grab(self, cam_id, url):
         if not self.ffmpeg:                 # 没有 ffmpeg（比如开发机），整路跳过
             self._state(cam_id, False, "ffmpeg 未找到")
             return False
@@ -138,9 +141,8 @@ class SnapshotWorker:
         # "Error opening output files: Invalid argument"。显式指定 mjpeg+image2，
         # 不再依赖扩展名（这正是「手动测 .jpg 成功、程序写 .part 失败」的根因）。
         cmd += ["-i", url]
-        vf = ffmpeg_cmd.redact_filter(redact)     # 遮蔽区打黑块（预览可见）
-        if vf:
-            cmd += ["-vf", vf]
+        # 快照就是快照：不加任何滤镜。以前这里为"输出遮蔽区"走 drawbox，
+        # 逼着 ffmpeg 每抓一帧都过一次滤镜链；去掉后每路仍是 1 帧解码 + 直出。
         cmd += ["-frames:v", "1", "-c:v", "mjpeg", "-q:v", "5",
                 "-f", "image2", "-y", tmp]
         ok = False

@@ -14,18 +14,37 @@ SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SELF_DIR/.." && pwd)"
 APP_DIR="${TRIM_APPDEST:-$ROOT/app}"
 VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
-# 录制根目录：向导没填就自己挑一个能写的。
-# 优先 @appshare 下的共享目录（config/resource 已声明 data-share，系统会自动授权，
-# 用户还能通过 SMB 直接翻看）；实在不行退到数据目录内 —— 那里一定属于应用用户。
-# 向导字段现在统一带 wizard_ 前缀（官方建议），同时兼容早期不带前缀的写法。
-REC="${wizard_record_dir:-${record_dir:-${wizard_output_dir:-${output_dir:-}}}}"
-if [ -z "$REC" ]; then
-  for cand in /vol1/@appshare/nvr-output "$VAR_DIR/rec"; do
-    if mkdir -p "$cand" 2>/dev/null; then REC="$cand"; break; fi
-  done
+# 录制根目录：向导首选，但建不出/写不进就逐级回退，绝不让安装卡死。
+# （0.9.19 真机教训：把 /vol2/1000/NVRL 写死为默认值导致安装直接失败——
+#   fnOS 只对 config/resource 声明的共享目录自动建目录并授权应用用户，
+#   个人存储空间既不能 mkdir 也没有运行时写权限。包默认改为 @appshare
+#   共享目录；其它目录装完在应用内「修改+探测」设置，保存时真实验证。）
+# 回退顺序：向导目录 → 配置里已有目录（升级）→ @appshare 共享目录 → 数据目录内。
+REC_WIZARD="${wizard_record_dir:-${record_dir:-${wizard_output_dir:-${output_dir:-}}}}"
+REC_HAVE=""
+if [ -f "$VAR_DIR/config.json" ]; then
+  REC_HAVE="$(sed -n 's/.*"record_dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$VAR_DIR/config.json" 2>/dev/null | head -1)"
 fi
-[ -n "$REC" ] || fail "无法创建录制目录，请重新安装并在向导里指定一个可写目录"
+can_write() {  # 可写探针：真落一个文件再删。mkdir 成功不代表可写（ACL/只读挂载）
+  ( : >"$1/.wprobe.$$" ) 2>/dev/null && { rm -f "$1/.wprobe.$$" 2>/dev/null; return 0; }
+  return 1
+}
+REC=""
+for cand in "$REC_WIZARD" "$REC_HAVE" /vol1/@appshare/nvr-output "$VAR_DIR/rec"; do
+  [ -n "$cand" ] || continue
+  mkdir -p "$cand" 2>/dev/null || continue
+  if can_write "$cand"; then REC="$cand"; break; fi
+done
+[ -n "$REC" ] || fail "无法创建任何可用的录制目录（试过向导目录、共享目录与数据目录），请重新安装并在向导里指定一个可写目录"
 OUT="$REC"
+# 向导/已有目录没用上时，把原因留在安装界面与日志里——
+# 静默降级比安装失败更危险：用户以为录到了 A，实际录到了 B。
+if [ -n "$REC_WIZARD" ] && [ "$REC" != "$REC_WIZARD" ]; then
+  DIR_WARN="向导目录 $REC_WIZARD 无法创建或不可写，已回退到 $REC。装完后可在应用 设置→保存目录 里改成实际想要的目录（保存时会真实探测写权限）。"
+  printf 'warn: %s\n' "$DIR_WARN" >&2
+  [ -n "${TMPLOG:-}" ] && printf '%s\n' "$DIR_WARN" >>"$TMPLOG"
+fi
 LOG_DIR="$VAR_DIR/log"
 
 # 应用名与运行用户：优先环境变量，其次 manifest / privilege，最后兜底
@@ -82,18 +101,44 @@ mkdir -p "$OUT" 2>/dev/null || fail "输出目录无法创建：$OUT（请换一
 
 # 端口：向导里选的值落到 config.json，并写死到 app/ui/config 的桌面入口，
 # 保证「应用实际监听的端口」和「桌面图标指向的端口」永远是同一个。
-# setport 会再探一次占用；万一此刻仍被抢占就自动顺延到下一个空闲端口。
-PORT_WANT="${wizard_port:-${port:-${wizard_app_port:-${TRIM_SERVICE_PORT:-18081}}}}"
-PORT_INFO="$("$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
-  setport --port "$PORT_WANT" 2>/dev/null)"
-PORT_FINAL="$(printf '%s' "$PORT_INFO" | sed -n 's/.*"port":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)"
-[ -n "$PORT_FINAL" ] || PORT_FINAL="$PORT_WANT"
+#
+# 端口决策分三路（0.9.18 的教训：升级安装绝不能动用户已在用的端口）：
+#   1) 向导给了端口（全新安装才会出现）→ setport：落配置 + 对齐图标 + 探测占用顺延；
+#   2) 向导没给但配置里已有端口（升级/重装覆盖安装）→ 只把图标对齐到现有端口
+#      （pinport），**绝不重新探测占用** —— 升级瞬间旧进程可能还占着端口，
+#      setport 会把端口顺延挪走，图标跟着错位，用户点开就是 ERR_CONNECTION_REFUSED；
+#   3) 全新安装且配置为空（理论不该发生，向导字段是 required）→ 落 manifest 默认。
+PORT_HAVE=""
+if [ -f "$VAR_DIR/config.json" ]; then
+  PORT_HAVE="$(sed -n 's/.*"service_port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+    "$VAR_DIR/config.json" 2>/dev/null | head -1)"
+fi
+PORT_WIZARD="${wizard_port:-${port:-${wizard_app_port:-}}}"
+PORT_INFO=""
+if [ -n "$PORT_WIZARD" ]; then
+  PORT_INFO="$("$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
+    setport --port "$PORT_WIZARD" 2>/dev/null)"
+  PORT_FINAL="$(printf '%s' "$PORT_INFO" | sed -n 's/.*"port":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)"
+  [ -n "$PORT_FINAL" ] || PORT_FINAL="$PORT_WIZARD"
+elif [ -n "$PORT_HAVE" ]; then
+  PORT_FINAL="$PORT_HAVE"
+  "$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
+    pinport --port "$PORT_HAVE" >>"$LOG_DIR/install.log" 2>&1 || true
+  # port.txt 一并对齐：cmd/main 的健康检查等它，服务真实端口也以它为准
+  printf '%s\n' "$PORT_HAVE" >"$VAR_DIR/port.txt" 2>/dev/null || true
+else
+  PORT_WANT="${TRIM_SERVICE_PORT:-18080}"
+  PORT_INFO="$("$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
+    setport --port "$PORT_WANT" 2>/dev/null)"
+  PORT_FINAL="$(printf '%s' "$PORT_INFO" | sed -n 's/.*"port":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1)"
+  [ -n "$PORT_FINAL" ] || PORT_FINAL="$PORT_WANT"
+fi
 
-# 桌面入口写不进去时，图标会停在默认 18081，而服务可能跑在顺延后的端口上。
+# 桌面入口写不进去时，图标会停在包内默认端口，而服务可能跑在顺延后的端口上。
 # 这种"装完点不开"最难自查，必须在安装日志里留一句能照着做的提示。
 case "$PORT_INFO" in
   *'"ui_config": false'*|*'"ui_config":false'*)
-    UI_WARN="桌面入口端口改写失败（$APP_DIR/ui/config 不可写）：图标仍指向 18081，实际端口 $PORT_FINAL。启动应用后会自动对齐，或重装时把端口填成 18081。"
+    UI_WARN="桌面入口端口改写失败（ui/config 不可写）：图标可能仍指向包内默认端口，实际端口 $PORT_FINAL。启动应用一次后会自动对齐；若桌面图标仍打不开，请直接访问 http://NAS的IP:$PORT_FINAL"
     printf 'warn: %s\n' "$UI_WARN" >&2
     [ -n "${TRIM_TEMP_LOGFILE:-}" ] && printf '%s\n' "$UI_WARN" >>"$TRIM_TEMP_LOGFILE"
     ;;
@@ -133,7 +178,7 @@ FF="$(printf '%s' "$INFO" | cut -d'|' -f3)"
   echo "---- $(date '+%Y-%m-%d %H:%M:%S') install v${TRIM_APPVER:-?} ----"
   echo "record_dir=$REC"
   echo "output_dir=$OUT"
-  echo "service_port=$PORT_FINAL (wizard=$PORT_WANT)"
+  echo "service_port=$PORT_FINAL (wizard=${PORT_WIZARD:-})"
   echo "gpu_state=$STATE reason=$REASON ffmpeg=${FF:-none}"
 } >>"$LOG_DIR/install.log"
 

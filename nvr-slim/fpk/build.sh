@@ -13,23 +13,28 @@ NODE="${NVR_NODE:-}"
 echo "== 1/7 结构校验 =="
 "$PY" "$ROOT/tools/validate.py" || exit 1
 
-echo "== 2/7 参数与命令断言 =="
-"$PY" "$ROOT/test/test_params.py" || exit 1
-
-echo "== 3/7 保留策略断言 =="
-"$PY" "$ROOT/test/test_retention.py" || exit 1
-
-echo "== 4/7 录制与衔接断言 =="
-"$PY" "$ROOT/test/test_link.py" || exit 1
-
-echo "== 5/7 端口断言 =="
-"$PY" "$ROOT/test/test_port.py" || exit 1
-echo "== 3b/7 快照 worker =="
-"$PY" "$ROOT/test/test_snapshots.py" || exit 1
-echo "== 3c/7 诊断日志 =="
-"$PY" "$ROOT/test/test_log.py" || exit 1
-echo "== 3d/7 ffmpeg 查找逻辑 =="
-"$PY" "$ROOT/test/test_find_ffmpeg.py" || exit 1
+echo "== 2/7 后端单测（遍历 test/test_*.py）=="
+# 逐个列文件名的写法漏过 test_condense.py / test_dirname.py / test_playback.py，
+# 它们其实一直在跑却从没进过构建闸门。改成遍历，新加的测试自动纳入。
+# test_http_smoke.py 需要真起服务、且依赖 18081 空闲，单独手动跑（见 BUILD.md）。
+FAILED=""
+for f in "$ROOT"/test/test_*.py; do
+  case "$(basename "$f")" in
+    test_http_smoke.py) continue ;;
+  esac
+  printf '  - %-24s ' "$(basename "$f")"
+  if out="$("$PY" "$f" 2>&1)"; then
+    echo "OK  $(echo "$out" | grep -oE 'Ran [0-9]+ test' | head -1)"
+  else
+    echo "FAIL"
+    echo "$out" | tail -20
+    FAILED="$FAILED $(basename "$f")"
+  fi
+done
+if [ -n "$FAILED" ]; then
+  echo "后端单测失败：$FAILED" >&2
+  exit 1
+fi
 
 echo "== 6/7 设置页交互断言 =="
 if [ -n "$NODE" ]; then

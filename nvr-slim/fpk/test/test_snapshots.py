@@ -152,7 +152,12 @@ class SnapshotWorkerTest(unittest.TestCase):
         self.assertTrue(cmd[-1].endswith(".part"))   # 仍写 .part（原子改名）
 
     def test_grab_applies_redact_drawbox(self):
-        """遮蔽区（redact）在预览快照上打黑块：带 -vf drawbox。"""
+        """抓帧不再带任何滤镜。
+
+        遮蔽区（redact）连同 drawbox 一起下线了：每秒过一遍滤镜链去涂黑块，
+        代价远大于收益，而且录像那边为了它还得重编码。忽略区只影响缩时判定，
+        不碰画面内容。
+        """
         CompletedProcess = snapshots.subprocess.CompletedProcess
         cmds = []
         def fake_run(cmd, timeout=None, **kw):
@@ -163,9 +168,10 @@ class SnapshotWorkerTest(unittest.TestCase):
                 f.write(b"\xff\xd8" + b"x" * 4096)
             return CompletedProcess(cmd, 0, b"", b"")
         with mock.patch.object(snapshots.subprocess, "run", fake_run):
-            self.w._grab("cam-01", "rtsp://a", redact=[3, 20])
-        self.assertIn("-vf", cmds[0])
-        self.assertIn("drawbox", " ".join(cmds[0]))
+            self.w._grab("cam-01", "rtsp://a")
+        seen = " ".join(cmds[0])
+        self.assertNotIn("-vf", cmds[0])
+        self.assertNotIn("drawbox", seen)
 
 
 if __name__ == "__main__":

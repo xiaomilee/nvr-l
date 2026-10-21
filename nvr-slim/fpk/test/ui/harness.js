@@ -44,7 +44,16 @@ global.window = {
   addEventListener(){}, devicePixelRatio:2, innerWidth:390, innerHeight:844
 };
 global.matchMedia = global.window.matchMedia;
-global.localStorage = { getItem:()=>null, setItem(){} };
+/* 内存版 localStorage。
+   以前是空转桩（getItem 永远 null、setItem 什么都不做），于是所有
+   "存进去再读回来"的断言都不可能通过 —— 测试等于在验证一个假实现。 */
+const _ls = Object.create(null);
+global.localStorage = {
+  getItem: k => (k in _ls ? _ls[k] : null),
+  setItem: (k, v) => { _ls[k] = String(v); },
+  removeItem: k => { delete _ls[k]; },
+  clear: () => { Object.keys(_ls).forEach(k => delete _ls[k]); },
+};
 global.location = { search:"" };
 global.URLSearchParams = class { get(){ return null; } };
 global.requestAnimationFrame = ()=>0;

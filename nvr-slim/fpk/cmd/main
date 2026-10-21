@@ -7,7 +7,7 @@ SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SELF_DIR/.." && pwd)"
 APP_DIR="${TRIM_APPDEST:-$ROOT/app}"
 VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
-PORT="${TRIM_SERVICE_PORT:-18081}"
+PORT="${TRIM_SERVICE_PORT:-18080}"
 # 用户可能在向导/应用设置里改过端口，配置里的值优先于 manifest 的静态声明
 if [ -f "$VAR_DIR/config.json" ]; then
   _cp="$(sed -n 's/.*"service_port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \

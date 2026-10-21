@@ -165,6 +165,9 @@ def plan(root, cameras, cam_cfg=None, today=None, kinds=("full", "clip")):
                         "kind": kind, "kind_label": KIND_LABEL[kind],
                         "date": d.isoformat(), "age_days": (today - d).days,
                         "keep_days": days, "bytes": size, "files": files,
+                        # 指纹 = 目录名 + 文件数 + 总字节。用户看到的清单和真正要删的
+                        # 必须是同一份：中间要是又写进来新文件，指纹就变，删除时跳过。
+                        "fp": "%s:%d:%d" % (d.isoformat(), files, size),
                     }
                     if prot:
                         item["reason"] = "%d 个文件正在写或待处理" % len(prot)
@@ -177,11 +180,22 @@ def plan(root, cameras, cam_cfg=None, today=None, kinds=("full", "clip")):
     return out
 
 
-def execute(plan_obj, dry_run=False, on_item=None):
-    """按计划删。整目录删（先文件后 rmdir），单个失败不影响其它目录。"""
-    done, failed, freed, files = [], [], 0, 0
+def execute(plan_obj, dry_run=False, on_item=None, only=None):
+    """按计划删。整目录删（先文件后 rmdir），单个失败不影响其它目录。
+
+    only: 可选的 {path: fp} 白名单。传了就只删清单里出现、且指纹没变的目录 ——
+    用户在预览里看到的是哪几个，删的就是哪几个；期间新写进来的目录不会被顺手删掉。
+    """
+    done, failed, freed, files, skipped = [], [], 0, 0, []
     for item in plan_obj.get("delete", []):
         path = item["path"]
+        if only is not None:
+            want_fp = only.get(path)
+            if want_fp is None:
+                continue                       # 不在用户确认过的清单里
+            if want_fp != item.get("fp"):
+                skipped.append({**item, "error": "预览后目录内容已变化，已跳过"})
+                continue
         if dry_run:
             done.append(item)
             freed += item.get("bytes", 0)
@@ -206,6 +220,7 @@ def execute(plan_obj, dry_run=False, on_item=None):
         "dry_run": bool(dry_run),
         "deleted": done,
         "failed": failed,
+        "skipped": skipped,
         "freed_bytes": freed,
         "files": files,
         "freed_mb": round(freed / 1024.0 / 1024.0, 1),

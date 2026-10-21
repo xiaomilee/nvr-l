@@ -6,7 +6,7 @@
         "type": "text",
         "field": "wizard_port",
         "label": "Web 服务端口",
-        "initValue": "18081",
+        "initValue": "18080",
         "rules": [
           {
             "required": true,

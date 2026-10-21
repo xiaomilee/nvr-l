@@ -32,7 +32,7 @@ const pickHtml = () => document.getElementById("camPick").innerHTML;
 
 /* ---- 0. 初始状态 ---- */
 ck("通用·默认收起", get('SET.genOpen') === false);
-ck("后端·配置推送与快照钩子就绪", typeof get('pushCfg') === "function" && typeof get('hookSnapImg') === "function");
+ck("后端·配置推送与快照拉取就绪", typeof get('pushCfg') === "function" && typeof get('pullSnap') === "function");
 
 /* ---- 1. 非编辑态：通用设置在上，摄像头在下，两区明显分开 ---- */
 run('state.camId="cam-01"; SET.open=null; SET.editing=false; SET.draft=null; SET.genOpen=true; renderCamTabs();');
@@ -71,7 +71,9 @@ ck("只读·画布锁定", h.includes("maskstage locked"));
 ck("只读·展示主码流", h.includes("rtsp://192.168.2.108:8554/ch1"));
 ck("只读·无滑杆", !h.includes('type="range"'));
 
-/* ---- 4. 编辑态独占一屏 ---- */
+/* ---- 4. 编辑态独占一屏 ----
+   0.9.18 起「缩时压制」默认折叠，判定/画质/网格都在折叠区里，
+   先展开再断言这些区块；折叠行为本身在第 4b 段验证。 */
 run('openEditor("cam-01");');
 h = body();
 ck("编辑·不再显示公共卡", !h.includes("保存目录"));
@@ -80,10 +82,33 @@ ck("编辑·有恢复默认", h.includes('data-reset="1"'));
 ck("编辑·有取消", h.includes('data-cancel="1"'));
 ck("编辑·主码流输入框", h.includes('data-k="main"'));
 ck("编辑·子码流输入框", h.includes('data-k="sub"'));
-ck("编辑·灵敏度滑杆", h.includes('data-k="sensitivity"'));
-ck("编辑·画质滑杆", h.includes('data-k="day.crf"'));
-ck("编辑·画布可画", !h.includes("maskstage locked"));
 ck("编辑·未保存提示", h.includes("编辑中 · 未保存"));
+
+/* ---- 4b. 0.9.18：缩时压制折叠菜单 + 每路总开关 + 倍速 ---- */
+ck("缩时·折叠菜单默认收起", get('SET.tlOpen') === false && !h.includes('data-k="sensitivity"'));
+run('SET.tlOpen = true; renderCamTabs();');
+h = body();
+ck("缩时·展开后有总开关", h.includes('data-cond="1"'));
+ck("缩时·缩时保留在菜单里", h.includes('data-ret="clipDays"'));
+ck("缩时·保留周期不再有缩时行", !h.includes('<span class="n">缩时片段</span>'));
+ck("缩时·倍速四档", (h.match(/data-speed="\d"/g) || []).length === 4);
+ck("缩时·展开后有灵敏度滑杆", h.includes('data-k="sensitivity"'));
+ck("缩时·展开后有画质滑杆", h.includes('data-k="day.crf"'));
+ck("缩时·展开后有忽略区画布", h.includes("maskCv-ig"));
+run('SET.tlOpen = false; renderCamTabs();');
+ck("缩时·菜单可再收起（总开关保留，明细收起）",
+   body().includes('data-cond="1"') && !body().includes('data-ret="clipDays"'));
+run('SET.tlOpen = true; renderCamTabs();');
+h = body();
+ck("编辑·画布可画", !h.includes("maskstage locked"));
+
+/* ---- 4c. 总开关关闭 → 参数区置灰 ---- */
+run('draftSet("condense", false); renderCamTabs();');
+h = body();
+ck("缩时·关闭后参数区 dim", h.includes('class="dim"'));
+ck("缩时·关闭后有提示", h.includes("缩时压制总开关已关闭"));
+run('draftSet("condense", true); renderCamTabs();');
+h = body();
 
 /* ---- 5. 草稿语义：改草稿不动原值 ---- */
 const orig = get('camParams["cam-01"].sensitivity');
@@ -107,23 +132,35 @@ ck("默认·码流保留", get('draftGet("main")') === "rtsp://192.168.2.108:855
 ck("默认·不自动落盘", get('camParams["cam-01"].sensitivity') === 88);
 
 /* ---- 8. 画面区域：16×9 方块预选 ---- */
+/* 上一段 resetDraft() 把 masks 重置成空的了；openEditor 在"已在编辑这一路"时
+   会直接 return，不会重建 draft，所以先退出再进，拿到干净的草稿。 */
+run('closeEditor();');
+run('openEditor("cam-01");');     // 编辑态才有画布
+h = body();
 ck("网格·16 列 9 行", get('GRID_COLS === 16 && GRID_ROWS === 9'));
-ck("网格·两个画布并存（上下两组）", h.includes("maskCv-ig") && h.includes("maskCv-rd"));
-ck("网格·上下两组标题", h.includes("检测忽略区") && h.includes("输出遮蔽区"));
+ck("网格·只剩忽略区画布", h.includes("maskCv-ig") && !h.includes("maskCv-rd"));
+ck("网格·标题只剩检测忽略区", h.includes("检测忽略区") && !h.includes("输出遮蔽区"));
 ck("网格·旧的类型切换已去掉", !h.includes("data-mtool"));
-ck("网格·示例数据带格子", get('camParams["cam-01"].masks.ignore.length') > 0);
 const ig0 = get('maskArr("ignore").length');
 run('maskArr("ignore").push(143);');
 ck("网格·可追加", get('maskArr("ignore").length') === ig0 + 1);
 run('maskArr("ignore").pop();');
 ck("网格·可删除", get('maskArr("ignore").length') === ig0);
-run('maskArr("redact").length = 0; maskArr("redact").push(5,6,21,22);');
-ck("网格·遮蔽区独立存储", get('maskArr("redact").length') === 4);
+/* 输出遮蔽区整块下线：没有它的画布、也没有它的数据通道。
+   这里的 DOM 是极简桩，innerHTML 不会真的重建节点，所以用源码断言。 */
+ck("网格·遮蔽区画布已移除", !src.includes("maskCv-rd") && !src.includes("rdCnt"));
+ck("网格·normMasks 只留 ignore",
+   get('JSON.stringify(Object.keys(normMasks({ignore:[1,2],redact:[3,4]})))') === '["ignore"]');
 run('renderMasks();');
 ck("网格·列表可清空", document.getElementById("mlist").innerHTML.includes("data-clrmask"));
 ck("网格·格号换算成矩形", JSON.stringify(get('rectCells(1,1,2,2)')) === "[17,18,33,34]");
+// 单路分片长度：0 表示跟随通用设置。注意 saveDraft 会清空 draft，
+// 所以先断言落盘结果，再单独验证一次"默认跟随"。
+ck("分片·默认跟随通用设置", get('defaultCamParams().segSec') === 0);
+run('SET.draft.segSec = 60;');
 run('saveDraft();');
-ck("网格·随保存落盘", get('camParams["cam-01"].masks.redact.length') === 4);
+ck("分片·单路长度随保存落盘", get('camParams["cam-01"].segSec') === 60);
+ck("网格·随保存落盘", get('normMasks(camParams["cam-01"].masks).ignore.length') > 0);
 ck("网格·旧自由框可迁移", get('normMasks([{x:0,y:0,w:0.1,h:0.12,type:"ignore"}]).ignore.length') === 2);
 run('closeEditor();');
 
@@ -140,21 +177,18 @@ run('state.camId = CAMERAS[0].id;');
 /* ---- 10. 默认保留天数 + 保留周期位置 ---- */
 ck("默认·全时 3 天", get('defaultCamParams(CAMERAS[0],0).fullDays') === 3);
 ck("默认·缩时 10 天", get('defaultCamParams(CAMERAS[0],0).clipDays') === 10);
-run('state.camId="cam-01"; SET.open="cam-01"; SET.editing=false; SET.draft=null; renderCamTabs(); openEditor("cam-01");');
+run('state.camId="cam-01"; SET.open="cam-01"; SET.editing=false; SET.draft=null; renderCamTabs(); openEditor("cam-01"); SET.tlOpen=true; renderCamTabs();');
 h = body();
 ck("布局·保留周期在码流地址之后", h.indexOf("保留周期") > h.indexOf('data-k="sub"'));
-ck("布局·保留周期在事件判定之前", h.indexOf("保留周期") < h.indexOf("事件判定"));
+ck("布局·保留周期在缩时压制之前", h.indexOf("保留周期") < h.indexOf("缩时压制")
+   && h.indexOf("保留周期") < h.indexOf("事件判定"));
 run('closeEditor(); SET.open="cam-01"; renderCamTabs();');
 h = body();
 ck("布局·只读态同样顺序", h.indexOf("保留周期") > h.indexOf("子码流 · 预览") && h.indexOf("保留周期") < h.indexOf("事件判定"));
 
 /* ---- 11. 拖动排序 ---- */
-const store = {};
-global.localStorage = {
-  getItem:k=>Object.prototype.hasOwnProperty.call(store,k) ? store[k] : null,
-  setItem:(k,v)=>{ store[k] = String(v); },
-  removeItem:k=>{ delete store[k]; }
-};
+/* 直接复用 harness 的内存版 localStorage：这里换一份新实现会把前一段
+   （含 masks / segSec）的存档丢掉，后面的"持久化读回"就必然失败。 */
 run('saveCfg();');                     // 先存一份原始顺序，排序后再读回来验证
 ck("排序·有拖动手柄", h.includes("data-drag"));
 const orderBefore = get('CAMERAS.map(c=>c.id)');
@@ -174,7 +208,9 @@ run('loadCfg();');
 ck("持久化·数量读回", get('CAMERAS.length') === snapshot.length);
 ck("持久化·顺序读回", JSON.stringify(get('CAMERAS.map(c=>c.id)')) === JSON.stringify(snapshot));
 ck("持久化·参数读回", get('camParams[CAMERAS[0].id].fullDays') === 3);
-ck("持久化·区域读回", get('normMasks(camParams[CAMERAS[0].id].masks).ignore.length + normMasks(camParams[CAMERAS[0].id].masks).redact.length') > 0);
+/* 注意：第 11 段把 cam-01 拖到了第三位，所以这里不能假设 CAMERAS[0] 还是 cam-01 */
+ck("持久化·区域读回", get('normMasks(camParams["cam-01"].masks).ignore.length') > 0);
+ck("持久化·单路分片长度读回", get('camParams["cam-01"].segSec') === 60);
 run('delCamera(CAMERAS[0].id); saveCfg(); const n = CAMERAS.length; CAMERAS.length = 0; loadCfg();');
 ck("持久化·删除后刷新不再复活", get('CAMERAS.length') === snapshot.length - 1);
 ck("持久化·删掉那台确实没了", !get('CAMERAS.map(c=>c.id)').includes(snapshot[0]));
@@ -211,7 +247,7 @@ ck("诊断·读/复制/清函数就绪",
 ck("诊断·旧版警告条 + 重启按钮", h.includes("diagWarn") && h.includes("btnRestart"));
 ck("诊断·重启/环境自检函数就绪",
    typeof get('restartDiag') === "function" && typeof get('loadDiagEnv') === "function");
-ck("全屏·切换函数就绪", typeof get('toggleLiveFull') === "function");
+ck("全屏·切换函数就绪", typeof get('toggleFull') === "function");
 ck("在线状态·pollLive 同步函数就绪", typeof get('pollLive') === "function");
 ck("历史·导航函数就绪",
    typeof get('goPage') === "function" && typeof get('activatePage') === "function" && typeof get('activePage') === "function");
@@ -220,7 +256,14 @@ ck("历史·导航函数就绪",
 ck("倒计时·徽标在右上角", /\.snap-cd\{position:absolute;right:10px;top:8px/.test(src));
 ck("倒计时·徽标压在快照图上", /\.snap-cd\{[^}]*z-index:4/.test(src));
 ck("倒计时·失败时红点", src.includes(".snap-cd.bad .dot") && src.includes('"-" + Math.ceil(left) + "s"'));
-ck("实时流·悬浮播放/暂停按钮", src.includes("lr-float") && src.includes("data-lrplay") && typeof get('toggleLiveStream') === "function");
+ck("实时流·播放按钮在画面外的底栏", src.includes('id="lrPlay"') && src.includes('class="lr-play"')
+   && typeof get('toggleLiveStream') === "function");
+ck("实时流·旧的画面悬浮胶囊已移除", !src.includes("lr-float") && !src.includes("data-lrplay"));
+ck("实时流·宫格也走流（不再是只拉快照）",
+   src.includes("mountLiveStream(tile, c, grid)") && src.includes("STREAM_Q.grid"));
+ck("实时流·流失败要回落快照",
+   src.includes("img.onerror") && src.includes("实时流不可用 · 已回落快照")
+   && src.includes("pullSnap(c.id, img"));
 ck("实时流·服务端端点接线", src.includes("/api/live/stream/"));
 ck("实时流·进入实时层默认播放", src.includes("state.liveStream = true"));
 ck("回放·缩时清单通道", src.includes('realSegs(state.camId, curDay(), "clip")') && src.includes("rec.clips"));
@@ -243,7 +286,37 @@ ck("配置·分片长度随 pushCfg 上送", src.includes("record_segment_sec: L
    && src.includes("link_mode: LK.mode") && src.includes("link_interval_h: LK.intervalH"));
 ck("配置·改分片立即保存并推送", /data-linkseg[\s\S]{0,320}saveCfgSoon\(\)/.test(src));
 ck("配置·启动时以服务端为准", typeof get('syncFromServer') === "function"
-   && src.includes("syncFromServer();"));
+   && /syncFromServer\(\)/.test(src) && src.includes('apiGet("/api/config")'));
+
+/* ---- 18. 录制自愈与诊断（0.9.15）
+   真机上五路全报 "Output file does not contain any stream"，页面只显示这句英文
+   原文，用户完全无从下手。这一组守住三件事：说人话、能自证、别刷屏。 ---- */
+ck("录制·每路有诊断按钮", src.includes('class="recprobe" data-probe="')
+   && src.includes("forEach(el=>{\n    el.onclick = ()=> runProbe(el.dataset.probe, el);"));
+ck("录制·诊断函数就绪", typeof get('runProbe') === "function"
+   && typeof get('probeHtml') === "function");
+ck("录制·诊断走独立端点", src.includes('"/api/record/probe?id="'));
+ck("录制·失败时先说建议再说原文", src.includes('else if(hint) tail = " · " + hint;'));
+ck("录制·ffmpeg 原文收进折叠区", src.includes('recmore"><summary>ffmpeg 原文</summary>'));
+ck("录制·自动跳过的参数要如实显示", src.includes("rec.bad_opts && rec.bad_opts.length")
+   && src.includes("本机 ffmpeg 不支持的参数已自动跳过"));
+ck("录制·诊断结果展示编码与分辨率", src.includes("s.type, s.codec || \"?\", dim, s.fps"));
+ck("录制·诊断结果展示 Stream mapping", src.includes('h += \'<div class="h">Stream mapping：\'')
+   || src.includes("Stream mapping："));
+ck("录制·诊断弹的是人话结论不是英文", src.includes("j.verdict")
+   && !src.includes('box.innerHTML = j.trial_err'));
+
+/* ---- 19. 0.9.18：目录锁定 / 端口默认 / 缩时时间轴 ---- */
+ck("目录·默认共享目录", src.includes('dir:"/vol1/@appshare/nvr-output"') && !src.includes('/vol2/1000/NVRL'));
+ck("目录·默认锁定 + 修改按钮", src.includes('id="btnDirEdit"') && src.includes('id="btnDirSave"')
+   && src.includes("api/dir/check"));
+ck("目录·折叠后不显示输入框", !src.includes('id="recDir"') || src.includes('id="dirEditBox"'));
+ck("端口·UI 默认 18080", src.includes("port:18080"));
+ck("缩时·每路开关与倍速推服务端", src.includes("condense: p.condense !== false")
+   && src.includes("clip_speed: p.clipSpeed || 1"));
+ck("缩时·时间轴用源时刻", src.includes("function segA(") && src.includes("function segB(")
+   && src.includes("src: st, srcEnd: en"));
+ck("缩时·播放器显示源时刻", src.includes("覆盖 ") && src.includes("hms(srcNow)"));
 
 console.log("设置页 " + (pass + fail) + " 项：通过 " + pass + "，失败 " + fail);
 process.exit(fail ? 1 : 0);
