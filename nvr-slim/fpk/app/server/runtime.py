@@ -5,11 +5,15 @@
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
 
-VERSION = "0.9.12"
+VERSION = "0.9.21"
+
+# RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
+_CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
 
 DEFAULTS = {
     "source_dir": "/vol1/nvr",
@@ -21,9 +25,11 @@ DEFAULTS = {
     "retention_days": 3,
     "night_only": False,
     "low_priority": True,
-    "sprite_thumbs": True,
     "snapshot_interval": 10,    # 直播页快照刷新间隔（秒）
-    "record_dir": "/vol1/@appshare/nvr-output",  # 录像与缩时片段根目录
+    # 录制根目录。默认放在 vol2 的数据卷（大容量监控盘常用位置）；
+    # 这是「不常改」的配置，界面默认只读，要点「修改」才展开编辑，
+    # 保存时由 /api/dir/check 真实探测存在性与写权限。
+    "record_dir": "/vol1/@appshare/nvr-output",  # 录像与缩时片段根目录：fnOS 自动建目录+授权的共享目录
     "cleanup_at": "03:00",            # 每天清理过期录像的时刻
     # ---- 录制（由本应用拉主码流落盘，不再依赖飞牛 NVR 的目录） ----
     "record_enable": True,
@@ -36,7 +42,9 @@ DEFAULTS = {
     # ---- 服务端口 ----
     # 安装向导里选定后写在这里；TRIM_SERVICE_PORT 只是 manifest 的静态默认值，
     # 用户改过端口就以本字段为准。范围见 PORT_LIMITS。
-    "service_port": 18081,
+    # 默认端口 0.9.18 起改为 18080（向导里可改）；已装用户的 config.json
+    # 里存的是旧值，merge_defaults 会保留，不受默认值变化影响。
+    "service_port": 18080,
     "updated_at": None,
 }
 
@@ -49,12 +57,181 @@ PORT_LIMITS = (1024, 65000)
 LINK_INTERVAL_LIMITS = (1, 24)
 
 
+# 离散取值的键：只认白名单，别让 true/false 混进来顶掉 "auto"/"off"
+_ENUM_KEYS = {"gpu": ("auto", "qsv", "off"), "scan_mode": ("now", "m15", "h1", "d1"),
+              "process_mode": ("fast", "fine")}
+
+
+def coerce(key, value):
+    """把外部推来的配置值收敛成 DEFAULTS 里的类型。
+
+    这里必须按 DEFAULTS 的类型逐键校验 —— 以前直接 cfg[k] = body[k]，
+    前端推个 `gpu: true` 就把 `"auto"` 顶掉了，而 gpu_report / status_payload
+    都靠字符串比较，于是"硬件不可用自动降级单路"的保护静默失效。
+    """
+    default = DEFAULTS.get(key)
+    if key in _ENUM_KEYS:
+        if not isinstance(value, str):
+            return default                    # 只收字符串，别让 dict/list 混成 "{'x': 1}"
+        v = value.strip().lower()
+        return v if v in _ENUM_KEYS[key] else default
+    if isinstance(default, bool):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if not isinstance(value, str):
+            return default
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(default, int) and not isinstance(default, bool):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+    if isinstance(default, float):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+    if default is None:                     # updated_at 之类：只收字符串
+        return str(value) if value is not None else None
+    # 字符串键（cleanup_at / record_dir / source_dir…）：
+    # str(None) 会得到 "None" 落盘，之后 retention.parse_hhmm("None") 天天抛异常，
+    # 清理整条链全废。空值一律回落到默认值。
+    if value is None or value == "":
+        return default
+    if not isinstance(value, str):
+        return default
+    v = value.strip()
+    if not v:
+        return default
+    # 录像目录是唯一会真的拿去建目录/写文件的字符串键：形态不合法的一律
+    # 回落默认值，别让 "nvr" 这种相对路径混进配置，之后录制器每 5 秒报一次错。
+    if key == "record_dir":
+        ok, _why = valid_record_dir(v)
+        return v if ok else default
+    return v
+
+
+def redact_url(text):
+    """把 RTSP 地址里的 user:pass@ 抹成 ***：日志与 API 响应共用一处规则。"""
+    return _CRED_RE.sub(r'\1***@', str(text or ""))
+
+
+def redact_cams(cams):
+    """摄像头列表出接口前脱敏：id/name/掩码留着，url 里的凭据抹掉。"""
+    out = []
+    for c in cams or []:
+        d = dict(c) if isinstance(c, dict) else c
+        if isinstance(d, dict):
+            for k in ("url", "sub_url"):
+                if d.get(k):
+                    d[k] = redact_url(d[k])
+        out.append(d)
+    return out
+
+
+def redact_cfg(cfg):
+    """整个配置对象出接口前脱敏：cfg["cameras"] 里的 url 也一并处理。"""
+    d = dict(cfg or {})
+    if isinstance(d.get("cameras"), list):
+        d["cameras"] = redact_cams(d["cameras"])
+    return d
+
+
 def clamp_int(v, lo, hi, default):
     try:
         n = int(v)
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
+
+
+def under(root, path):
+    """path 是否真的落在 root 里面。
+
+    只判断 startswith 是有洞的：root=/var/apps/nvr/ui 时
+    /var/apps/nvr/ui2/x 也能通过。必须按「等于 root 或以 root+分隔符开头」比。
+    """
+    root = os.path.normpath(os.path.abspath(root))
+    path = os.path.normpath(os.path.abspath(path))
+    return path == root or path.startswith(root + os.sep)
+
+
+# 录制目录的合法形态：绝对路径、不是盘根/系统目录。存这一份给 coerce 与
+# /api/dir/check 共用，别让两处各写一套规则。
+_DIR_DENY = ("/", "/bin", "/boot", "/dev", "/etc", "/lib", "/proc", "/run",
+             "/sbin", "/sys", "/tmp", "/usr", "/var", "/root")
+
+
+def valid_record_dir(path):
+    """录像根目录合法性：绝对路径、不落在系统目录上。返回 (ok, 原因)。
+
+    只做纯字符串判断、不用 os.path.normpath：生产在 Linux 上没问题，
+    但开发机是 Windows，normpath 会把 "/vol2/x" 变成 "\\vol2\\x"，
+    startswith("/") 就永远不成立 —— 测试没法跨平台跑。
+    """
+    p = str(path or "").strip()
+    if not p:
+        return False, "路径为空"
+    if "\x00" in p:
+        return False, "路径包含非法字符"
+    # POSIX 绝对路径（/ 开头）或 Windows 盘符路径（C:\，仅开发机测试会用）
+    is_win = len(p) >= 3 and p[1] == ":" and p[2] in ("\\", "/")
+    if not p.startswith("/") and not is_win:
+        return False, "必须是绝对路径（以 / 开头）"
+    n = p.replace("\\", "/").rstrip("/")
+    if not n or n.lower() in _DIR_DENY:
+        return False, "不能使用系统目录或盘根"
+    return True, ""
+
+
+def probe_record_dir(path, create=True):
+    """真实探测一个目录能不能用来存录像。
+
+    三步都有独立结论，UI 才能告诉用户"差在哪一步"：
+      1. 存在吗（不存在时可选自动创建）
+      2. 是目录吗（存在但是个文件也不行）
+      3. 真的写得进去吗 —— 落一个临时文件再删掉，比 os.access(X_OK) 可靠得多：
+         ACL、只读挂载、磁盘满都会让 access 通过而写入失败。
+    """
+    p = str(path or "").strip()
+    ok, why = valid_record_dir(p)
+    if not ok:
+        return {"ok": False, "path": p, "exists": False, "is_dir": False,
+                "writable": False, "created": False, "error": why}
+    n = os.path.normpath(p)
+    created = False
+    exists = os.path.isdir(n)
+    if not exists and os.path.exists(n):
+        return {"ok": False, "path": n, "exists": True, "is_dir": False,
+                "writable": False, "created": False,
+                "error": "该路径已被一个文件占用，不是目录"}
+    if not exists:
+        if not create:
+            return {"ok": False, "path": n, "exists": False, "is_dir": False,
+                    "writable": False, "created": False,
+                    "error": "目录不存在（保存时可自动创建）"}
+        try:
+            os.makedirs(n, exist_ok=True)
+            created = True
+            exists = True
+        except OSError as e:
+            return {"ok": False, "path": n, "exists": False, "is_dir": False,
+                    "writable": False, "created": False,
+                    "error": "目录不存在且无法创建：%s" % e}
+    # 写探针：真实落一个文件。文件名带随机后缀，避免并发探测互相踩。
+    probe = os.path.join(n, ".nvr-write-probe-%d" % os.getpid())
+    try:
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("probe")
+        os.remove(probe)
+    except OSError as e:
+        return {"ok": False, "path": n, "exists": True, "is_dir": True,
+                "writable": False, "created": created,
+                "error": "目录存在但写不进去：%s（检查应用用户对该目录的权限/ACL）" % e}
+    return {"ok": True, "path": n, "exists": True, "is_dir": True,
+            "writable": True, "created": created, "error": ""}
 
 
 def link_mode(v):
@@ -69,7 +246,7 @@ def link_interval_h(v):
     return clamp_int(v, LINK_INTERVAL_LIMITS[0], LINK_INTERVAL_LIMITS[1], 6)
 
 
-def clamp_port(v, default=18081):
+def clamp_port(v, default=18080):
     """端口：非法值回落默认；越界夹到 [1024, 65000]。"""
     return clamp_int(v, PORT_LIMITS[0], PORT_LIMITS[1], default)
 
@@ -136,7 +313,29 @@ def save_config(var_dir, cfg):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2, sort_keys=True)
-    os.replace(tmp, path)
+        f.flush()
+        try:
+            os.fsync(f.fileno())        # 断电时宁可慢一点，也别留半截配置
+        except OSError:
+            pass
+    # Windows 上 os.replace 会因目标文件被杀毒/索引服务/别的进程短暂持有句柄
+    # 而抛 PermissionError(WinError 5)。以前这里直接冒泡，整个 POST /api/config
+    # 变成 500 空响应，前端只看到"保存失败"却不知道原因。重试几次足够躲过这种
+    # 毫秒级的占用。
+    last = None
+    for i in range(6):
+        try:
+            os.replace(tmp, path)
+            break
+        except OSError as e:
+            last = e
+            time.sleep(0.02 * (i + 1))
+    else:
+        try:
+            os.unlink(tmp)              # 别在 var 目录里留一个 .tmp 残骸
+        except OSError:
+            pass
+        raise last
     _CFG_CACHE["key"] = None                    # 失效，下次读盘后重建
     return path
 
@@ -197,7 +396,7 @@ def set_ui_port(app_dir, port):
     return ok
 
 
-def apply_port(var_dir=None, app_dir=None, port=18081):
+def apply_port(var_dir=None, app_dir=None, port=18080):
     """端口落三处：config.json（下次启动用它）、ui/config（桌面图标）、var/port.txt（脚本读）。"""
     port = clamp_port(port)
     if var_dir:
@@ -214,7 +413,7 @@ def apply_port(var_dir=None, app_dir=None, port=18081):
     return {"port": port, "ui_config": ok_ui}
 
 
-def read_port(var_dir, default=18081):
+def read_port(var_dir, default=18080):
     """脚本侧读实际端口：优先 var/port.txt（服务启动时写的真实值），其次配置。"""
     p = os.path.join(var_dir, "port.txt")
     if os.path.isfile(p):

@@ -207,6 +207,58 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .phone.land .stage{position:absolute;inset:0}
 .phone.land .p-swipe{display:none}
 
+/* ---------- 全屏模式 ----------
+   真全屏时 .phone 必须铺满整个视口，不能再是 390×844 的"手机壳"；
+   桌面端原本靠 transform:scale 缩放，进全屏后要复位成 1，否则会缩成一小块。 */
+body.fsmode{overflow:hidden;background:#000}
+body.fsmode .phone{
+  position:fixed!important;inset:0!important;
+  width:100vw!important;height:100vh!important;
+  height:100dvh!important;
+  max-width:none!important;max-height:none!important;
+  margin:0!important;border-radius:0!important;
+  transform:none!important;box-shadow:none!important;
+  background:#000;z-index:9000;
+}
+body.fsmode .hdr,body.fsmode .tabbar,body.fsmode .resbar{display:none!important}
+body.fsmode .toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%)}
+
+/* 方向锁不住时的旋转兜底：把整个容器转 90° 吃满视口。
+   宽高互换 + 以中心旋转，视觉上就是横屏。 */
+body.rot .phone{
+  width:100vh!important;height:100vw!important;
+  left:50%!important;top:50%!important;
+  transform:translate(-50%,-50%) rotate(90deg)!important;
+  transform-origin:center center!important;
+}
+body.rot{background:#000}
+/* 旋转兜底时整个容器被转了 90°，退出按钮如果跟着容器走，文字也会躺倒。
+   它挂在 body 上（不在 .phone 内），所以这里把它摆到「用户眼中的右上角」
+   —— 也就是屏幕物理的右上角，按钮自身再反向转 90° 抵消。
+
+   关键在于**定位和旋转分开**：外层 #fsExit 只负责摆位置，内层 span 负责转。
+   如果把 rotate 直接加在定位元素上，right/bottom 锚定的是变换前的盒子，
+   旋转后宽高对调、按钮会被推出视口（实测跑到 y=791 之外）。 */
+body.rot #fsExit{
+  top:10px!important;right:10px!important;left:auto!important;bottom:auto!important;
+  transform:none!important;
+}
+body.rot #fsExit span{display:inline-block;transform:rotate(90deg)}
+body.rot #fsExit svg{transform:rotate(90deg)}
+
+/* 退出全屏按钮：全屏期间常驻右上角，任何情况下都能点 */
+#fsExit{
+  display:none;position:fixed;top:calc(10px + env(safe-area-inset-top));right:12px;z-index:9999;
+  align-items:center;gap:6px;padding:8px 12px;border-radius:999px;
+  background:rgba(20,22,28,.78);color:#fff;border:1px solid rgba(255,255,255,.22);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  font-size:12.5px;font-weight:600;line-height:1;cursor:pointer;
+  box-shadow:0 4px 16px rgba(0,0,0,.4);
+}
+#fsExit.on{display:flex}
+#fsExit svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#fsExit:active{transform:scale(.95)}
+
 /* ---------- 底部 tab ---------- */
 .tabbar{flex:0 0 auto;height:58px;background:var(--surface);border-top:1px solid var(--line);
   display:flex;align-items:center;padding-bottom:env(safe-area-inset-bottom)}
@@ -327,6 +379,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .livecard.hasphoto .lv-osd,.livecard.hasphoto .snap-cd,.livecard.hasphoto .snap-ago{visibility:visible}
 #stageVideo{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
   background:#000;z-index:1}
+/* 预加载用的第二个 video：叠在同一位置，就绪前不可见。
+   切段时把旧的那个淡出，观感上就是"一条连续的长片"。 */
+#stageVideoB{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+  background:#000;z-index:1;opacity:0;pointer-events:none;transition:opacity .18s ease}
+#stageVideoB.on{opacity:1}
 .livecard .lv-osd{position:absolute;left:10px;top:8px;font-size:10.5px;color:#e9ecf1;text-shadow:0 1px 3px #000;line-height:1.5}
 .livecard .lv-osd .mono{opacity:.92}
 .livecard .lv-name{position:absolute;left:10px;bottom:9px;background:rgba(0,0,0,.5);border-radius:6px;
@@ -392,13 +449,18 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
   border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:500}
 .lr-ctrl .live i{width:5px;height:5px;border-radius:50%;background:#34d399;display:block}
 .lr-ctrl .sp{margin-left:auto}
-/* 悬浮在实时画面上方的播放/暂停（HomeKit 风格：居中胶囊，半透明） */
-.lr-float{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:6;display:flex;gap:8px}
-.lr-float button{height:30px;padding:0 14px;border-radius:15px;border:none;cursor:pointer;
-  background:rgba(0,0,0,.5);color:#fff;font-size:12px;display:flex;align-items:center;gap:6px;
-  backdrop-filter:blur(4px)}
-.lr-float button i{width:7px;height:7px;border-radius:50%;background:#34d399;display:block}
-.lr-float button.paused i{background:#8b93a1;box-shadow:none}
+/* 播放控制全部移出画面：
+   1) 常态只有底部控制条上的按钮，画面上一个控件都没有；
+   2) 暂停时才在画面正中出现一个播放图标（此时画面本来就是静帧，不挡信息）。 */
+.lr-ctrl .lr-play{display:flex;align-items:center;gap:6px;height:26px;padding:0 12px;
+  border-radius:13px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.1);
+  color:#e8ecf3;font-size:11.5px;cursor:pointer;flex:0 0 auto}
+.lr-ctrl .lr-play i{width:6px;height:6px;border-radius:50%;background:#34d399;display:block}
+.lr-ctrl .lr-play.paused i{background:#8b93a1}
+.lr-tile .lr-pausebtn{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:8px;background:rgba(0,0,0,.42);cursor:pointer}
+.lr-tile .lr-pausebtn svg{width:38px;height:38px;fill:#fff;opacity:.92}
+.lr-tile .lr-pausebtn span{font-size:11px;color:rgba(255,255,255,.75);letter-spacing:.06em}
 .lr-tile .nophoto{z-index:3}
 
 .resbar{flex:0 0 auto;background:var(--surface);border-top:1px solid var(--line);padding:9px 16px calc(9px + env(safe-area-inset-bottom))}
@@ -477,6 +539,34 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 
 /* 公共卡：普通白卡 */
 .gcard{background:var(--surface);border-radius:14px;padding:14px;margin-bottom:11px}
+/* 每路录制状态：进程是否在跑 + ffmpeg 最后一次报错，直接给结论 */
+.gcard .recrow{display:flex;align-items:baseline;gap:7px;font-size:11.5px;margin-top:6px;color:var(--text2)}
+.gcard .recrow i{width:6px;height:6px;border-radius:50%;flex:0 0 auto}
+.gcard .recrow b{font-weight:600;flex:0 0 auto;color:var(--text)}
+.gcard .recrow span{color:var(--faint);word-break:break-word}
+/* ffmpeg 原文折叠：默认收起，只在用户想深挖时展开，不占版面 */
+.gcard .recmore{margin:4px 0 0 13px}
+.gcard .recmore summary{font-size:10.5px;color:var(--faint2);cursor:pointer;list-style:none}
+.gcard .recmore summary::-webkit-details-marker{display:none}
+.gcard .recmore summary:before{content:"▸ ";font-size:9px}
+.gcard .recmore[open] summary:before{content:"▾ "}
+.gcard .recmore code{display:block;margin-top:4px;font-size:10.5px;line-height:1.5;
+  color:var(--faint);background:var(--bg2);border:1px solid var(--line2);border-radius:8px;
+  padding:7px 8px;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace}
+/* 每路诊断按钮：靠右、极小，不抢"状态"这句话的注意力 */
+.gcard .recprobe{margin-left:auto;flex:0 0 auto;border:1px solid var(--line2);
+  background:var(--bg2);color:var(--faint);font-size:10px;line-height:1;
+  padding:4px 7px;border-radius:7px;cursor:pointer;font-family:inherit}
+.gcard .recprobe:hover{color:var(--text);border-color:var(--line)}
+.gcard .recprobe:disabled{opacity:.45;cursor:default}
+.gcard .probeout{margin:6px 0 2px 13px;padding:8px 9px;border-radius:10px;
+  background:var(--bg2);border:1px solid var(--line2)}
+.gcard .probeout .pv{font-size:11.5px;font-weight:600;line-height:1.5;margin-bottom:4px}
+.gcard .probeout .h{font-size:10.5px;line-height:1.55}
+.gcard .probeout .pstreams{display:flex;flex-wrap:wrap;gap:5px;margin:5px 0}
+.gcard .probeout .ps{font-size:10px;padding:2px 6px;border-radius:6px;
+  background:var(--bg);border:1px solid var(--line2);color:var(--faint);
+  font-family:ui-monospace,Menlo,Consolas,monospace}
 .gcard h3{font-size:13px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;gap:6px}
 .gcard h3 .sub{font-weight:400;color:var(--faint);font-size:11.5px;margin-left:auto}
 .gcard .divline{height:1px;background:var(--line2);margin:11px 0}
@@ -617,9 +707,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       <div class="livescroll">
         <div class="livewrap" id="liveWrap"></div>
         <div class="resbar">
-          <div class="r"><span class="k">存储</span><span>剩余 <b id="resFree">336.0 GB</b> / 共 <b id="resTotal">473.9 GB</b>（保留 <b id="resKeep">4 天</b>，循环覆盖）</span></div>
-          <div class="r"><span class="k">资源</span><span>CPU <b id="resCpu">6%</b> · 内存 <b id="resMem">96.4 MB</b> · 核显 <b id="resGpu">QSV</b></span></div>
-          <div class="r"><span class="k">目录</span><span class="mono" id="resDir" style="font-size:11.5px">/vol2/1000/NVR</span></div>
+          <div class="r"><span class="k">存储</span><span>剩余 <b id="resFree">—</b> / 共 <b id="resTotal">—</b>（保留 <b id="resKeep">—</b>，循环覆盖）</span></div>
+          <div class="r"><span class="k">目录</span><span class="mono" id="resDir" style="font-size:11.5px">—</span></div>
         </div>
       </div>
 
@@ -643,8 +732,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         </div>
         <div class="lr-body" id="lrBody"></div>
         <div class="lr-ctrl">
+          <button class="lr-play" id="lrPlay"><i class="on"></i><span>暂停</span></button>
           <span class="live"><i></i>实时</span>
-          <span class="mono" id="lrClock">18:01:23</span>
+          <span class="mono" id="lrClock">--:--:--</span>
           <span class="sp" id="lrHint">点画面暂停 / 继续</span>
         </div>
       </div>
@@ -734,12 +824,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       </div>
 
       <div class="stage" id="stage">
-        <video id="stageVideo" playsinline></video>
+        <!-- 双 video 交替：一个在播、另一个预加载下一段。切段时旧帧留在屏幕上，
+             新段就绪后才互换，避免每切一次就黑屏闪一下。 -->
+        <video id="stageVideo" class="sv" playsinline></video>
+        <video id="stageVideoB" class="sv" playsinline muted></video>
         <canvas id="scene"></canvas>
         <div class="osd mono">
           <span id="osdCam">CH01</span>
           <span class="rec"><i></i>REC</span>
-          <div id="osdTime" style="margin-top:1px">2026-10-20 08:12:04</div>
+          <div id="osdTime" style="margin-top:1px">—</div>
         </div>
         <div class="qchip" id="qchip"><span class="dot" style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:block"></span>预览 480p</div>
         <div class="pcenter"><div class="ring" id="ring"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>
@@ -791,6 +884,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
    摄像头只留「身份 + 码流」两类字段：不区分品牌、不存账号密码（要认证就直接写进
    RTSP 地址里，形如 rtsp://user:pass@ip:554/...），也不做分组/录像策略。
    每路的录像与画质参数统一放 camParams，与该路一一对应。 */
+/* 所谓「默认配置」只是首次打开时的演示骨架，不是用户数据。
+   它一旦被 saveCfg 写进 localStorage 并 pushCfg 推给服务端，就会把 NAS 上
+   已经配好的真实摄像头全部顶掉 —— 换台设备打开页面、或清了浏览器缓存，
+   都会触发这一次覆盖。所以推送前必须判断"这份配置是不是来自服务端"。 */
+let demoSeeded = false;
 const CAMERAS = [
   { id:"cam-01", name:"车库入口", ch:"CH01", res:"4MP",   online:true,
     main:"rtsp://192.168.2.108:8554/ch1", sub:"rtsp://192.168.2.108:8554/ch3" },
@@ -805,13 +903,15 @@ const CAMERAS = [
 /* 录像引擎（全时存储）设置 */
 const REC = {
   enabled:true,
-  dir:"/vol1/@appshare/nvr-output",   // 按摄像头/日期/时段分目录
+  dir:"/vol1/@appshare/nvr-output",   // 按摄像头/日期/时段分目录；默认锁定，点「修改」才可编辑
   segSec:300,             // 段落时长（秒）
-  port:18081,             // Web 服务端口（安装时选，应用设置里改）
+  port:18080,             // Web 服务端口（安装时选，应用设置里改）
   cleanupAt:"03:00",      // 每天定点清理过期录像
   lastClean:{ at:"2026-10-20 03:00", freed:41.2, dirs:6, files:1247 },
-  diskTotalGB:473.9,
-  diskFreeGB:336.0,
+  /* 容量不在前端写死：等 /api/status 的 disk_free_gb / disk_total_gb 回来再显示，
+     没拿到就显示 "—"（以前这里写死 473.9 / 336.0，换台机器照样报旧数字） */
+  diskTotalGB:null,
+  diskFreeGB:null,
 };
 const REASONS = ["人形移动","车辆进出","画面变化","光照突变","物体遗留"];
 const DAYS = ["2026-10-14","2026-10-15","2026-10-16","2026-10-17","2026-10-18","2026-10-19","2026-10-20"];
@@ -884,7 +984,10 @@ function getFullSegs(camId, day){
 /* 每路的完整默认值：新增摄像头与「恢复默认」共用同一份，
    保证"默认"只有一个定义，不会两处漂移。 */
 /* 画面区域：16×9 方块预选（对齐摄像头 App 的隐私遮蔽交互）。
-   masks = { ignore:[格号…], redact:[格号…] }，格号 = 行*16+列，行在上。 */
+   masks = { ignore:[格号…] }，格号 = 行*16+列，行在上。
+   「输出遮蔽区」已移除：录制阶段打黑块必须放弃 -c copy 改重编码，CPU 翻倍，
+   而它想解决的问题（这块别算成事件）本来就该由忽略区在判定阶段处理。
+   旧配置里的 redact 字段读到后会被静默丢弃，不会报错。 */
 const GRID_COLS = 16, GRID_ROWS = 9;
 function rectToCells(x, y, w, h){
   const out = [];
@@ -896,12 +999,13 @@ function rectToCells(x, y, w, h){
 }
 function normMasks(m){
   if(Array.isArray(m)){   /* 旧自由框格式 → 换算成格号，中心点落在框里即选中 */
-    const ig=[], rd=[];
-    m.forEach(r=>{ rectToCells(r.x,r.y,r.w,r.h).forEach(i=>{ (r.type==="redact"?rd:ig).push(i); }); });
-    return { ignore:[...new Set(ig)], redact:[...new Set(rd)] };
+    const ig=[];
+    m.forEach(r=>{ if(r.type!=="redact") rectToCells(r.x,r.y,r.w,r.h).forEach(i=>ig.push(i)); });
+    return { ignore:[...new Set(ig)] };
   }
   const o = m || {};
-  return { ignore:(o.ignore||[]).slice(), redact:(o.redact||[]).slice() };
+  const ig = (o.ignore || []).filter(x=>Number.isInteger(x));
+  return { ignore:[...new Set(ig)] };
 }
 
 function defaultCamParams(cam, i){
@@ -928,19 +1032,24 @@ function defaultCamParams(cam, i){
       strongArea:5,
     },
     speed:1, speedMode:"pts", prescan:true,
+    /* 缩时压制（每路总开关 + 输出倍速）：
+       condense=false 时这一路只录全时、不产出缩时片段；
+       clipSpeed>1 时导出走重编码压时间轴（2× = 播放时间缩短一半） */
+    condense: true,
+    clipSpeed: 1,
     /* 保留周期：全时录像按天、缩时片段按天，各自独立 */
     fullDays: 3,
     clipDays: 10,
-    masks: { ignore:[], redact:[] }
+    /* 单路分片长度（秒）；0 = 跟随「通用设置」。这是真正写进 ffmpeg 命令行的值 */
+    segSec: 0,
+    masks: { ignore:[] }
   };
 }
 
 CAMERAS.forEach((c,i)=>{
   const d = defaultCamParams(c, i);
   d.enabled = i < 3;
-  d.masks = c.id==="cam-01"
-    ? { ignore: rectToCells(.62,.55,.22,.30), redact: [] }
-    : (c.id==="cam-02" ? { ignore: [], redact: rectToCells(.04,.62,.18,.32) } : { ignore:[], redact:[] });
+  d.masks = { ignore: c.id==="cam-01" ? rectToCells(.62,.55,.22,.30) : [] };
   camParams[c.id] = d;
 });
 
@@ -955,6 +1064,7 @@ const state = {
   t:0,
   playing:false,
   land:false,
+  rot:false,        /* 方向锁不住时，画面转了 90° 兜底 */
   maskTool:"ignore",
   pmode:"full",     // full = 全时录像 | clip = 精简片段
   rec:null,         // /api/recordings 的结果：真实落盘的录像清单
@@ -964,6 +1074,44 @@ const state = {
   livePaused:false,
   liveStream:false,   // 单路视图是否在播 MJPEG 实时流（false = 静态快照轮换）
 };
+
+/* ================= 真实资源状态 =================
+   这里只剩"有没有拿到过服务端数据"和错误信息。
+   CPU / 内存 / 核显那套读过 /proc 与 ffmpeg -encoders，在 NAS 的精简运行
+   环境里经常拿不到（进程 CPU 为空、容器里看不到 /dev/dri），界面上只能显示
+   "—"；与其留一排读不出来的数字，不如把这块整体去掉，只保留存储与目录。
+   服务端的 res 字段仍然保留（/api/status），需要时可直接查。 */
+const RES = {
+  ok:false,          // 有没有成功拉到过一次 /api/status
+  at:0,              // 上次拉取时间
+  err:""
+};
+/* 资源条只剩「存储 + 目录」。这个请求现在只做一件事：
+   把服务端 os.statvfs / disk_usage 读到的真实容量拿回来。
+   CPU / 内存 / 核显不再展示，也不再往 RES 里塞没人读的字段。 */
+function refreshRes(){
+  return fetch("/api/status?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" })
+    .then(r=> r.json())
+    .then(d=>{
+      if(!d || d.ok === false) throw new Error((d && d.error) || "status 失败");
+      const r = d.res || {};
+      RES.ok = true;
+      RES.at = Date.now();
+      RES.err = "";
+      if(r.disk_free_gb != null) REC.diskFreeGB = +r.disk_free_gb;
+      if(r.disk_total_gb != null) REC.diskTotalGB = +r.disk_total_gb;
+      updateResBar();
+      updateLiveHeader();
+      return RES;
+    })
+    .catch(e=>{
+      /* 读不到就是读不到：容量显示 "—"，不保留上次的数字假装还在 */
+      RES.ok = false;
+      RES.err = (e && e.message) || "无法读取系统状态";
+      updateResBar();
+      return RES;
+    });
+}
 
 /* 全局执行设置（对所有摄像头生效） */
 const GS = {
@@ -981,7 +1129,6 @@ const GS = {
   conc:2,            // 同时处理路数
   nightOnly:false,   // 只在夜间重编码
   lowPrio:true,      // nice / ionice / 磁盘空闲才写
-  sprite:true,       // 缩略图合并为雪碧图
 };
 /* 录制与压制衔接。
    live      = 分片一封口就压，数据还热着
@@ -998,6 +1145,7 @@ const LK = {
   nextBatch:"—",
   lastBatch:"—",
   lastItem:"",
+  rec:null,           // /api/link 里的 record.channels：每路录制进程的真实状态
 };
 /* 服务端 /api/link 的真实状态 → 本地 LK。只有这里写 pending/done/failed，
    别的地方不许手写这些数字，否则又会回到「界面说在处理、服务端其实闲着」。 */
@@ -1016,6 +1164,9 @@ function applyLink(ls){
   LK.lastBatch = ls.last_batch_at || "—";
   LK.lastItem = ls.last_item && ls.last_item.file
     ? (ls.last_item.ok ? "完成 " : "失败 ") + ls.last_item.file : "";
+  /* 每路录制进程的真实状态（在跑没跑、上次 ffmpeg 报了什么），
+     以前这些只躺在日志里，用户只能看到"一条录像都没有" */
+  if(ls.record) LK.rec = ls.record;
   try{ renderCamTabs(); }catch(e){}
 }
 function syncLink(){
@@ -1034,11 +1185,34 @@ function nextLinkAt(){
   return (sameDay ? "今天 " : "明天 ") + String(t.getHours()).padStart(2,"0") + ":00";
 }
 const SCAN_LABEL = { now:"立即", m15:"每 15 分钟", h1:"每小时", d1:"每天 03:00" };
-function nextScan(){
+/* 分片长度的统一描述：60 秒以下按秒说，整分钟按分钟说 —— 免得出现 "0.5 分钟" */
+function segLabel(sec){
+  const s = Math.max(0, Math.round(+sec || 0));
+  if(!s) return "—";
+  if(s < 60) return s + " 秒";
+  return Math.round(s/60) + " 分钟";
+}
+/* 下次扫描时刻 = 从"现在"往上取整到下一个档位。
+   以前这里是写死的 "16:45" / "17:00" / "明天 03:00"，无论几点打开都报同样的字。 */
+function nextScan(nowMs){
+  const now = new Date(nowMs || Date.now());
   if(GS.mode === "now") return "—";
-  if(GS.mode === "m15") return "16:45";
-  if(GS.mode === "h1")  return "17:00";
-  return "明天 03:00";
+  const t = new Date(now.getTime());
+  t.setSeconds(0, 0);
+  if(GS.mode === "m15"){
+    t.setMinutes(Math.floor(t.getMinutes()/15)*15 + 15);
+  }else if(GS.mode === "h1"){
+    t.setMinutes(0);
+    t.setHours(t.getHours() + 1);
+  }else{ /* d1：每天 03:00 */
+    t.setMinutes(0, 0, 0);
+    t.setHours(3);
+    if(t.getTime() <= now.getTime()) t.setDate(t.getDate() + 1);
+  }
+  const dayDiff = Math.round((new Date(t.getFullYear(),t.getMonth(),t.getDate())
+    - new Date(now.getFullYear(),now.getMonth(),now.getDate())) / 86400000);
+  return (dayDiff === 0 ? "" : dayDiff === 1 ? "明天 " : dayDiff + " 天后 ")
+       + pad(t.getHours()) + ":" + pad(t.getMinutes());
 }
 function scanHint(){
   const d = GS.retentionDays;
@@ -1075,63 +1249,204 @@ function toast(el, text){
 /* ================= 布局 ================= */
 const phone = document.getElementById("phone");
 function layout(){
+  /* 全屏/旋转状态下的尺寸完全交给 CSS（body.fsmode / body.rot）：
+     这里再写 width/transform 会把它顶掉，桌面端会缩成一小块。 */
+  if(state.land || state.rot || isFullscreen()){
+    document.body.classList.toggle("desktop", false);
+    return;
+  }
   const desktop = window.innerWidth >= 760 && window.innerHeight >= 700;
   document.body.classList.toggle("desktop", desktop);
-  if(!desktop) return;
-  const w = state.land ? 844 : 390;
-  const h = state.land ? 390 : 844;
-  phone.style.width = w + "px";
-  phone.style.height = h + "px";
-  const s = Math.min(1, (window.innerHeight - 40) / (h + 24), (window.innerWidth - 40) / (w + 24));
+  if(!desktop){
+    phone.style.width = "";
+    phone.style.height = "";
+    phone.style.transform = "";
+    return;
+  }
+  phone.style.width = "390px";
+  phone.style.height = "844px";
+  const s = Math.min(1, (window.innerHeight - 40) / (844 + 24), (window.innerWidth - 40) / (390 + 24));
   phone.style.transform = "scale(" + s.toFixed(3) + ")";
 }
 window.addEventListener("resize", ()=>{ layout(); if(state.view==="player") drawScene(); });
 
-/* ================= 全屏横屏（预览页） ================= */
+/* ================= 全屏横屏 =================
+   目标：点全屏 → 真的进全屏 + 尽量横过来，并且**永远有路退出**。
+
+   三级降级（任何一步失败都不影响下一步）：
+     1. Fullscreen API  元素级全屏（真全屏，地址栏也没了）
+     2. orientation.lock('landscape')  仅手机浏览器在真全屏下可用；
+        桌面 Chrome / Safari / HTTP 页面一律 reject，所以必须 try/catch 后继续
+     3. CSS 旋转          锁不了方向时，把画面转 90° 并让容器铺满视口
+                          —— 用户要的是"横过来看"，不是"调用成功"
+
+   为什么以前"点了没反应"：`state.land` 只是给 .phone 加了个类（844×390 的
+   模拟尺寸），在手机上那只是把内容挤进一个小框，并没有进全屏；而
+   orientation.lock 的 rejection 被空 catch 吞了，什么提示都没有。
+*/
 function isFullscreen(){
   return !!(document.fullscreenElement || document.webkitFullscreenElement);
 }
+function fsElement(){
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+/* 横屏状态：land=容器按横向排版；rot=没有真横屏，只能把画面转 90° */
 function setLand(on){
-  state.land = on;
-  phone.classList.toggle("land", on);
+  state.land = !!on;
+  phone.classList.toggle("land", state.land);
+  document.body.classList.toggle("fsmode", !!on);
+  if(!on){
+    state.rot = false;
+    phone.classList.remove("rot");
+    document.body.classList.remove("rot");
+  }
   layout();
 }
-async function toggleLiveFull(){
-  if(isFullscreen()){
-    try{ if(document.exitFullscreen) document.exitFullscreen();
-         else if(document.webkitExitFullscreen) document.webkitExitFullscreen(); }catch(e){}
-    try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}
-    setLand(false);
-    toast("toast2", "已退出全屏");
+
+/* 画面旋转兜底：真的转不过来时，把舞台转 90° 铺满 */
+function applyRotate(on){
+  state.rot = !!on;
+  phone.classList.toggle("rot", state.rot);
+  document.body.classList.toggle("rot", state.rot);
+  layout();
+}
+
+/* 退出按钮：全屏时浮在右上角。桌面端和手机端都显示，这是最可靠的出口。 */
+function ensureExitBtn(){
+  let b = document.getElementById("fsExit");
+  if(b) return b;
+  b = document.createElement("button");
+  b.id = "fsExit";
+  b.type = "button";
+  b.title = "退出全屏（Esc）";
+  b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 3v6H3M15 3v6h6M15 21v-6h6M9 21v-6H3"/></svg><span>退出全屏</span>';
+  b.onclick = (e)=>{ e.stopPropagation(); exitFull(); };
+  document.body.appendChild(b);
+  return b;
+}
+
+async function enterFull(target){
+  const el = target || document.documentElement;
+  let ok = false;
+  try{
+    if(el.requestFullscreen) { await el.requestFullscreen({ navigationUI: "hide" }); ok = true; }
+    else if(el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); ok = true; }
+  }catch(e){
+    /* 用户手势过期 / iframe 没 allowfullscreen / 浏览器策略禁止 —— 都退到容器铺满 */
+    ok = false;
+  }
+  setLand(true);
+  ensureExitBtn().classList.add("on");
+
+  /* 锁横屏：成功了就不用旋转；失败就转画面 */
+  let locked = false;
+  try{
+    const so = screen.orientation;
+    if(so && so.lock){
+      await so.lock("landscape");
+      locked = true;
+    }
+  }catch(e){ locked = false; }
+
+  if(!locked){
+    /* 已经是横向视口（比如桌面宽屏）就没必要转；竖屏才转 */
+    applyRotate(window.innerHeight > window.innerWidth);
+  }
+  /* 全屏/旋转都可能改变视口尺寸，等一帧再量 */
+  requestAnimationFrame(()=>{ layout(); drawScene(); });
+
+  if(!ok){
+    toast("toast2", "浏览器不允许真全屏 · 已切换为铺满横屏（Esc 退出）");
+  }else if(!locked && state.rot){
+    toast("toast2", "已全屏 · 设备不支持锁定方向，画面已旋转（Esc 退出）");
   }else{
-    const el = document.documentElement;
-    try{
-      if(el.requestFullscreen) await el.requestFullscreen();
-      else if(el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-    }catch(e){}
-    try{ if(screen.orientation && screen.orientation.lock) await screen.orientation.lock("landscape"); }catch(e){}
-    setLand(true);
-    toast("toast2", "全屏横屏 · 左滑返回退出");
+    toast("toast2", "已进入全屏横屏 · 右上角或 Esc 退出");
   }
 }
-document.addEventListener("fullscreenchange", ()=>{
-  if(!isFullscreen() && state.land){
-    setLand(false);
-  }
+
+async function exitFull(){
+  try{
+    if(document.exitFullscreen) await document.exitFullscreen();
+    else if(document.webkitExitFullscreen) document.webkitExitFullscreen();
+  }catch(e){}
+  try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}
+  const b = document.getElementById("fsExit");
+  if(b) b.classList.remove("on");
+  setLand(false);
+  requestAnimationFrame(()=>{ layout(); drawScene(); });
+  toast("toast2", "已退出全屏");
+}
+
+function toggleFull(target){
+  if(isFullscreen() || state.land) return exitFull();
+  return enterFull(target);
+}
+
+/* 浏览器自己退出全屏（按 Esc / 手势 / 切走）时同步 UI，别让按钮状态和数据打架 */
+["fullscreenchange","webkitfullscreenchange"].forEach(ev=>
+  document.addEventListener(ev, ()=>{
+    if(!isFullscreen()){
+      const b = document.getElementById("fsExit");
+      if(b) b.classList.remove("on");
+      if(state.land) setLand(false);
+    }
+  })
+);
+/* Esc 兜底：部分 WebView 不派发 fullscreenchange */
+document.addEventListener("keydown", e=>{
+  if(e.key === "Escape" && (isFullscreen() || state.land)){ e.preventDefault(); exitFull(); }
 });
+
 const _btnLiveFull = document.getElementById("btnLiveFull");
-if(_btnLiveFull) _btnLiveFull.onclick = toggleLiveFull;
+if(_btnLiveFull) _btnLiveFull.onclick = ()=> toggleFull();
 const _lrFull = document.getElementById("lrFull");
-if(_lrFull) _lrFull.onclick = toggleLiveFull;
+if(_lrFull) _lrFull.onclick = ()=> toggleFull();
+const _lrPlay = document.getElementById("lrPlay");
+if(_lrPlay) _lrPlay.onclick = e=>{ e.stopPropagation(); toggleLiveStream(); };
 
 /* ================= tab / 历史返回 =================
-   安卓左滑返回手势（触发 history.back）：
-     非直播页 → 退回直播页；直播页（根历史）→ 系统默认退出应用。
-   实现：离开直播页时 pushState 压一层；回直播页时弹掉，让直播页永远停在根历史。 */
+   安卓左滑返回手势的本质是 `history.back()`。以前只有"非直播页 → 回直播页"
+   一档，于是：
+     · 实时播放层里左滑  → 整个应用直接退到桌面（用户以为闪退）
+     · 设置页展开了摄像头 → 直接跳回直播页，丢掉了"上一层"
+   现在做成一个真正的返回栈，每一层都压一条历史：
+     播放器 → 实时层 → 直播快照墙(根)   /   设置展开 → 设置页 → 直播(根)
+   只有**已经在根（直播快照墙）**时，返回才交给系统退出应用。 */
 function activePage(){
   const on = document.querySelector(".page.on");
   return on ? on.id.replace("page-", "") : "live";
 }
+
+/* 当前"在根历史"吗？只有根才允许系统接管返回键。 */
+function atRoot(){
+  return activePage() === "live"
+      && state.liveView === "snap"
+      && !document.getElementById("liveRoom").classList.contains("on")
+      && !document.getElementById("player").classList.contains("on")
+      && !(SET.editing || SET.open);
+}
+
+/* 自己数压了几层。
+   绝不能拿 history.length 当层数 —— 它是整个标签页会话的累计长度（用户之前
+   逛过别的页面也算在内），用它算 history.go(-(n-1)) 会一次性跳过太多，
+   表现就是"点了一下回直播，结果直接退出应用"。 */
+let LAYERS = 0;
+
+/* 压一层历史。tag 只用于调试。 */
+function pushLayer(tag){
+  try{ history.pushState({_nvr:1, layer:LAYERS+1, tag:tag || "layer"}, ""); LAYERS++; }catch(e){}
+}
+
+/* 一次弹掉所有自己压的层，回到根。 */
+function popToRoot(){
+  if(LAYERS > 0){
+    const n = LAYERS;
+    LAYERS = 0;
+    try{ history.go(-n); }catch(e){}
+  }
+}
+
 function activatePage(page){
   if(page !== "live" && state.liveView !== "snap"){
     state.liveView = "snap";
@@ -1154,28 +1469,71 @@ function activatePage(page){
     renderCamPick(); renderDates(); renderOverview(); renderHeat(); renderClips();
   }
 }
+
+/* 用户主动点 tab：改页 + 压历史。回直播页时把叠在上面的层全部弹掉，
+   保证"直播快照墙"永远是唯一根。 */
 function goPage(page){
   const cur = activePage();
   if(page === cur) return;
+  activatePage(page);
   if(page === "live"){
-    activatePage("live");
-    if(history.state && history.state._nvr){
-      try{ history.back(); }catch(e){}   // 弹掉那层，直播页回到根历史 → 左滑即退出
-    }
+    /* 回直播 = 回根：把压过的层弹干净（不触发二次界面切换，见 popstate 里的守卫） */
+    popToRoot();
     return;
   }
-  activatePage(page);
-  try{
-    if(history.state && history.state._nvr){ history.replaceState({_nvr:1}, ""); }
-    else { history.pushState({_nvr:1}, ""); }
-  }catch(e){}
+  pushLayer(page);
 }
 document.querySelectorAll(".tb").forEach(b=>{
   b.onclick = ()=>{ goPage(b.dataset.page); };
 });
-window.addEventListener("popstate", ()=>{
-  /* 非直播页被返回 → 回直播页；直播页已在根历史，popstate 不触发，交给系统退出 */
-  if(activePage() !== "live"){ activatePage("live"); }
+
+/* 返回键/左滑：按"最内层优先"逐层退出。
+   顺序必须是 播放器 → 实时层 → 设置展开 → 页面 → 根。
+   每次 popstate 都是"用户从自己压的那一层退出去"，所以先扣减层深；
+   如果退出这一层后界面已经回到根，就不该再补压回去。 */
+window.addEventListener("popstate", (e)=>{
+  /* 弹掉一层：计入自己的账本（浏览器只告诉我们会话在退，不告诉退了几层） */
+  if(LAYERS > 0) LAYERS--;
+  const st = e && e.state;
+  if(st && st.layer != null && st.layer >= 0 && st.layer < LAYERS) LAYERS = st.layer;
+
+  /* 1) 播放器 */
+  const pl = document.getElementById("player");
+  if(pl && pl.classList.contains("on")){
+    if(isFullscreen() || state.land) exitFull();
+    closePlayer();
+    if(!atRoot()) pushLayer("player");
+    return;
+  }
+  /* 2) 实时播放层 */
+  const room = document.getElementById("liveRoom");
+  if(room && room.classList.contains("on")){
+    leaveLive();
+    if(!atRoot()) pushLayer("live");
+    return;
+  }
+  /* 3) 设置页里展开的摄像头 / 未保存的编辑 */
+  if(SET.editing && SET.draft){
+    toast("toast2", "还有未保存的改动 · 已保留草稿");
+    SET.editing = false; SET.draft = null;
+    renderCamTabs();
+    if(!atRoot()) pushLayer("cam");
+    return;
+  }
+  if(SET.open){
+    SET.open = null;
+    renderCamTabs();
+    if(!atRoot()) pushLayer("cam");
+    return;
+  }
+  /* 4) 非直播页 → 回直播页 */
+  if(activePage() !== "live"){
+    activatePage("live");
+    /* 回到直播页时把剩余层弹掉；根上的返回仍然交给系统 */
+    popToRoot();
+    return;
+  }
+  /* 5) 已经在根：什么都不做，让系统处理（退出应用） */
 });
 
 /* ================= 日期条 ================= */
@@ -1210,14 +1568,20 @@ function renderDates(){
 }
 
 /* ================= 热力条 ================= */
+/* 按「展示坐标」（缩时=源时刻，全时=分片起点）落进 2 小时格 */
 function renderHeat(){
   const box = document.getElementById("heat");
   const segs = state.activity;
   const per = new Array(12).fill(0);   // 每格 2 小时，单位秒
   segs.forEach(s=>{
-    const i = Math.min(11, Math.floor(s.s / 7200));
-    const blkEnd = (i+1)*7200;
-    per[i] += Math.min(s.e, blkEnd) - s.s;
+    const a = Math.max(0, segA(s));
+    const b = Math.min(86400, Math.max(a + 1, segB(s)));
+    const i0 = Math.min(11, Math.floor(a / 7200));
+    const i1 = Math.min(11, Math.floor(Math.max(a, b - 0.01) / 7200));
+    for(let i = i0; i <= i1; i++){
+      const blkEnd = (i+1)*7200;
+      per[i] += Math.max(0, Math.min(b, blkEnd) - Math.max(a, i*7200));
+    }
   });
   const max = Math.max(...per, 1);
   box.innerHTML = "";
@@ -1254,7 +1618,7 @@ function renderOverview(){
     return;
   }
   let keep = 0, bytes = 0;
-  state.segs.forEach(sg=>{ keep += sg.e-sg.s; bytes += sg.bytes || 0; });
+  state.segs.forEach(sg=>{ keep += Math.max(1, segB(sg) - segA(sg)); bytes += sg.bytes || 0; });
   document.getElementById("ovKeep").textContent = hms(keep);
   document.getElementById("ovPct").textContent = (keep/86400*100).toFixed(1) + "%";
   document.getElementById("ovCnt").textContent = state.segs.length;
@@ -1264,7 +1628,7 @@ function renderOverview(){
 }
 
 /* ================= 缩略图 ================= */
-function drawThumb(cv, level, redact){
+function drawThumb(cv, level){
   const w = 192, h = 108;
   cv.width = w; cv.height = h;
   const c = cv.getContext("2d");
@@ -1284,26 +1648,25 @@ function drawThumb(cv, level, redact){
   c.fillStyle = "#c2cad6";
   c.fillRect(px-ph2*0.13, h*0.80-ph2*0.62, ph2*0.26, ph2*0.5);
   c.beginPath(); c.arc(px, h*0.80-ph2*0.72, ph2*0.115, 0, Math.PI*2); c.fill();
-  if(redact){
-    c.fillStyle = "rgba(16,18,22,.94)"; c.fillRect(w*0.03, h*0.6, w*0.2, h*0.38);
-  }
   const g = c.createLinearGradient(0,h*0.6,0,h);
   g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.45)");
   c.fillStyle = g; c.fillRect(0,h*0.6,w,h*0.4);
 }
 
-/* ================= 片段列表 ================= */
+/* ================= 片段列表 =================
+   过滤/展示都用「展示坐标」：缩时片段按源时刻（segA/segB），全时按分片起点。
+   以前缩时模式直接把播放坐标（从 0 累加的秒数）当钟点过滤，点 14:00 的
+   格子永远提示"这个时段没有任何画面变化"。 */
 function visibleSegs(){
   if(state.hourBlock < 0) return state.segs.map((s,i)=>({s,i}));
   const a = state.hourBlock*7200, b = a+7200;
-  return state.segs.map((s,i)=>({s,i})).filter(o=>o.s.s < b && o.s.e > a);
+  return state.segs.map((s,i)=>({s,i})).filter(o=>segA(o.s) < b && segB(o.s) > a);
 }
 
 function renderClips(){
   const box = document.getElementById("clips");
   const list = visibleSegs();
   const p = camParams[state.camId];
-  const hasRedact = normMasks(p && p.masks).redact.length > 0;
   const full = state.pmode === "full";
   const cam = CAMERAS.find(c=>c.id===state.camId);
   box.innerHTML = "";
@@ -1313,24 +1676,27 @@ function renderClips(){
 
   if(!list.length){
     box.innerHTML = '<div style="text-align:center;color:var(--faint);font-size:13px;padding:44px 0">'
-      + (full ? "该时段没有录像" : "这个时段没有任何画面变化") + '</div>';
+      + (full ? "该时段没有录像"
+              : "这个时段没有缩时片段（该时段的画面可能被判为静止，或缩时压制未开启）") + '</div>';
     return;
   }
 
   list.forEach(({s,i})=>{
     const size = s.bytes ? s.bytes/1048576
       : fullDayMbps(cam)*(s.e-s.s)/8/1000;
+    const cov = Math.max(1, segB(s) - segA(s));
     const d = document.createElement("div");
     d.className = "card";
     d.innerHTML =
       '<canvas class="thumb"></canvas>' +
       '<div class="cbody">' +
-        '<div class="ct mono">' + hms(s.s) + ' – ' + hms(s.e) + '</div>' +
-        '<div class="cm"><span>' + durText(s.e-s.s) + '</span><span>' + size.toFixed(1) + ' MB</span></div>' +
+        '<div class="ct mono">' + hms(segA(s)) + ' – ' + hms(segB(s)) + '</div>' +
+        '<div class="cm"><span>' + (full ? durText(s.e-s.s)
+            : "播放 " + durText(s.e-s.s) + " · 覆盖源 " + durText(cov)) + '</span><span>' + size.toFixed(1) + ' MB</span></div>' +
         '<div style="margin-top:5px;display:flex;gap:5px">' +
           (full
             ? '<span class="tag">' + (s.hits ? "含活动 " + s.hits + " 段" : (s.file ? "连续录像" : "无活动")) + '</span>'
-            : '<span class="tag g">' + s.reason + '</span>') +
+            : '<span class="tag g">' + (s.src != null ? "缩时 · " + hms(s.src) : s.reason) + '</span>') +
         '</div>' +
       '</div>' +
       '<svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
@@ -1338,7 +1704,7 @@ function renderClips(){
     if(s.file){
       drawThumbReal(d.querySelector(".thumb"), s);   // 真分片：时间+体积，不画假画面
     }else{
-      drawThumb(d.querySelector(".thumb"), s.level, hasRedact && (full ? s.hits>0 : true));
+      drawThumb(d.querySelector(".thumb"), s.level);
     }
     d.onclick = ()=> openPlayer(i);
   });
@@ -1352,7 +1718,7 @@ function drawThumbReal(cv, seg){
   c.fillStyle = "#14171c"; c.fillRect(0,0,w,h);
   c.fillStyle = "#1e232a"; c.fillRect(0,h*0.66,w,h*0.34);
   c.fillStyle = "#9aa2ad"; c.font = "11px Consolas,monospace"; c.textAlign = "center";
-  c.fillText(hms(seg.s) + " – " + hms(seg.e), w/2, h/2);
+  c.fillText(hms(segA(seg)) + " – " + hms(segB(seg)), w/2, h/2);
   c.fillStyle = "#5d646f"; c.font = "10px sans-serif";
   c.fillText((seg.bytes/1048576).toFixed(1) + " MB", w/2, h/2 + 17);
 }
@@ -1431,18 +1797,19 @@ function drawScene(){
     sctx.fillStyle = "#08231a"; sctx.fillText(label, bx+4, by-3.5);
   }
 
-  /* 遮蔽区 */
-  camParams[state.camId].masks.forEach(m=>{
-    const x=m.x*w, y=m.y*h, ww=m.w*w, hh=m.h*h;
-    if(m.type==="redact"){
-      sctx.fillStyle = "rgba(16,18,22,.95)"; sctx.fillRect(x,y,ww,hh);
-      sctx.strokeStyle = "rgba(220,70,70,.7)";
-    }else{
-      sctx.fillStyle = "rgba(240,180,40,.10)"; sctx.fillRect(x,y,ww,hh);
-      sctx.strokeStyle = "rgba(240,180,40,.55)";
-    }
-    sctx.lineWidth = 1; sctx.setLineDash([4,3]); sctx.strokeRect(x,y,ww,hh); sctx.setLineDash([]);
-  });
+  /* 检测忽略区：在画布占位场景上标出来，让用户确认"这块确实不算事件" */
+  const igCells = normMasks(camParams[state.camId] && camParams[state.camId].masks).ignore;
+  if(igCells.length){
+    const cellW = w/GRID_COLS, cellH = h/GRID_ROWS;
+    sctx.fillStyle = "rgba(240,180,40,.14)";
+    sctx.strokeStyle = "rgba(240,180,40,.55)";
+    sctx.lineWidth = 1;
+    igCells.forEach(idx=>{
+      const col = idx % GRID_COLS, row = (idx - col) / GRID_COLS;
+      sctx.fillRect(col*cellW, row*cellH, cellW, cellH);
+      sctx.strokeRect(col*cellW+.5, row*cellH+.5, cellW-1, cellH-1);
+    });
+  }
 
   /* 噪点 + 暗角 */
   const rnd = mulberry(noiseSeed);
@@ -1456,75 +1823,232 @@ function drawScene(){
 /* ================= 播放器 ================= */
 const player = document.getElementById("player");
 
-function openPlayer(i){
+/* ---------- 双 video 无缝续播 ----------
+   缩时片段每个文件只有几秒（一个文件 = 源录像 5 分钟压成十几秒）。单 video 播完
+   再换 src，会有一次黑屏 + 解码冷启动，一天几百段就是"一直在闪"。
+   做法：A/B 两个 video 交替，播 A 时把 B 预加载成下一段；A 一结束就切到已经
+   就绪的 B，同时用 A 去预加载再下一段。切换用透明度过渡，旧帧不会先消失。 */
+const vidA = document.getElementById("stageVideo");
+const vidB = document.getElementById("stageVideoB");
+let curVid = vidA, nxtVid = vidB;
+let preloadFor = -1;        /* nxtVid 里预加载的是第几段 */
+let switching = false;      /* 防止 ended 重入 */
+
+function videoEls(){ return [vidA, vidB]; }
+
+function stopAllVideos(){
+  videoEls().forEach(v=>{
+    try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+    v.classList.remove("on");
+    v.style.display = "none";
+  });
+  curVid = vidA; nxtVid = vidB; preloadFor = -1;
+}
+
+function setSegTitle(i){
+  const seg = state.segs[i];
+  const cam = CAMERAS.find(c=>c.id===state.camId);
+  const extra = seg.clip ? (" · 第 " + (i+1) + "/" + state.segs.length + " 段") : "";
+  document.getElementById("pTitle").textContent =
+    (cam ? cam.name : "") + " · " + seg.reason + extra;
+  if(cam) document.getElementById("osdCam").textContent = cam.ch;
+}
+
+function openPlayer(i, keepSrc){
+  const seg = state.segs[i];
+  if(!seg) return;
+  const wasOn = player.classList.contains("on");
   state.segIdx = i;
-  state.t = state.segs[i].s;
+  state.t = seg.s;
   state.playing = true;
   player.classList.add("on");
-  const cam = CAMERAS.find(c=>c.id===state.camId);
-  document.getElementById("pTitle").textContent = cam.name + " · " + state.segs[i].reason;
-  document.getElementById("osdCam").textContent = cam.ch;
-  /* 磁盘上有真实录像文件 → 用 <video> 播；没有 → 画布占位，绝不假装在播 */
-  const video = document.getElementById("stageVideo");
+  /* 压一层历史：从回放列表点进播放器后，左滑/返回键先关播放器，
+     而不是把整个应用退出掉。热切换（wasOn=true）不重复压。 */
+  if(!wasOn) pushLayer("player");
+  setSegTitle(i);
   const sceneEl = document.getElementById("scene");
-  if(state.segs[i].file && video && sceneEl){
-    state.videoSeg = true;
-    video.src = state.segs[i].file;
-    video.style.display = "block";
-    sceneEl.style.display = "none";
-    try{ video.currentTime = 0; video.play(); }catch(e){}
-  }else{
+
+  if(!seg.file){
+    /* 没有真实文件 → 画布占位，绝不假装在播 */
+    stopAllVideos();
     state.videoSeg = false;
-    try{ video.pause(); video.removeAttribute("src"); video.load(); }catch(e){}
-    video.style.display = "none";
-    sceneEl.style.display = "";
+    if(sceneEl) sceneEl.style.display = "";
+    syncPlayer();
+    requestAnimationFrame(()=>{ drawScene(); });
+    return;
+  }
+
+  state.videoSeg = true;
+  if(sceneEl) sceneEl.style.display = "none";
+
+  /* 如果下一段已经预加载好并且正是它，直接热切换，不重新 load */
+  if(keepSrc !== false && preloadFor === i && nxtVid !== curVid
+     && nxtVid.getAttribute("src")){
+    swapVideos(true);
+  }else{
+    /* 冷启动：整个 src 一次加载，避免"清空再加载"的两帧黑 */
+    curVid.style.display = "block";
+    curVid.classList.add("on");
+    if(curVid.getAttribute("src") !== seg.file){
+      curVid.src = seg.file;
+      try{ curVid.load(); }catch(e){}
+    }
+    try{ curVid.currentTime = 0; }catch(e){}
+    safePlay(curVid);
+    nxtVid.classList.remove("on");
+    /* 注意：这里**不能**把 preloadFor 置 -1。
+       置了之后 preloadNext() 会被 loop 每帧重新触发，和预加载相互打断，
+       永远赶不到就绪 —— 表现就是"短片段每段都冷启动、卡一下"。
+       preloadNext() 自己带着 "目标段 + src 已一致" 的短路判断，不需要外部清。 */
   }
   syncPlayer();
   requestAnimationFrame(()=>{ drawScene(); });
+  preloadNext();
 }
 
-document.getElementById("pClose").onclick = ()=>{
+function safePlay(v){
+  const p = v.play();
+  if(p && p.catch) p.catch(()=>{ /* 自动播放被拦时由用户点播放，不算错误 */ });
+}
+
+/* 交换 A/B：把已经就绪的 nxtVid 推到前台。
+   注意：不要在 200ms 过渡期间把 preloadFor 清掉 —— 下一段可能只有 2、3 秒，
+   过渡还没走完它就要接着预加载了。preloadNext() 只在目标段变化时才重新设
+   src，所以这里提前调用是安全的。 */
+function swapVideos(fromPreload){
+  switching = true;
+  const old = curVid, nv = nxtVid;
+  nv.style.display = "block";
+  if(fromPreload){
+    try{ nv.currentTime = 0; }catch(e){}
+    safePlay(nv);
+  }
+  old.classList.remove("on");
+  /* 先亮新的，再淡出旧的：中间不会出现黑底那一帧 */
+  requestAnimationFrame(()=>{ nv.classList.add("on"); });
+  curVid = nv;
+  nxtVid = old;
+  /* 立刻开始为「下一段」预加载；过渡结束只负责收拾旧的 */
+  preloadNext();
+  setTimeout(()=>{
+    old.classList.remove("on");
+    try{ old.pause(); }catch(e){}
+    switching = false;
+  }, 220);
+}
+
+/* 预加载下一段：不播、只把数据拉够第一帧。
+   缩时片段一段只有几秒，切完再预加载来不及 —— 所以在切换完成的回调里立刻
+   启动，并额外检查"下一段是否已经就该是它"。 */
+function preloadNext(){
+  const n = state.segIdx + 1;
+  const seg = state.segs[n];
+  if(!seg || !seg.file){ preloadFor = -1; return; }
+  const v = nxtVid;
+  if(!v) return;
+  if(preloadFor === n && v.getAttribute("src") === seg.file) return;
+  preloadFor = n;
+  v.style.display = "block";
+  v.classList.remove("on");
+  try{
+    if(v.getAttribute("src") !== seg.file){
+      v.preload = "auto";
+      v.src = seg.file;
+      v.load();
+    }
+  }catch(e){}
+}
+
+/* 当前在播的元素（永远读 curVid，不要在别处缓存） */
+function activeVideo(){ return curVid; }
+
+/* 用户在段内跳转：把当前位置喂给前台 video。
+   跳完后当前位置离段尾可能不到 1 秒，下一段的预加载必须立刻重排 —— 否则
+   「刚拖到末尾就播完」会走冷启动，观感上就是一次卡顿。 */
+function seekVideo(sec){
+  const v = activeVideo();
+  if(!state.videoSeg || !v) return;
+  try{ v.currentTime = Math.max(0, sec); }catch(e){}
+  preloadNext();
+}
+
+function closePlayer(){
   state.playing = false;
-  const v = document.getElementById("stageVideo");
-  try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+  stopAllVideos();
   state.videoSeg = false;
-  v.style.display = "none";
-  document.getElementById("scene").style.display = "";
+  const sceneEl = document.getElementById("scene");
+  if(sceneEl) sceneEl.style.display = "";
   player.classList.remove("on");
-  if(state.land){ state.land = false; phone.classList.remove("land"); layout(); }
-};
+  if(isFullscreen()) exitFull();
+  else if(state.land){ setLand(false); }
+}
+document.getElementById("pClose").onclick = closePlayer;
+
 document.getElementById("bPlay").onclick = ()=>{
   state.playing = !state.playing;
-  const v = document.getElementById("stageVideo");
-  if(state.videoSeg && v){ if(state.playing){ try{ v.play(); }catch(e){} } else { try{ v.pause(); }catch(e){} } }
+  const v = activeVideo();
+  if(state.videoSeg && v){
+    if(state.playing) safePlay(v);
+    else { try{ v.pause(); }catch(e){} }
+  }
   syncPlayer();
 };
 document.getElementById("bBack").onclick = ()=>{ seekBy(-10); };
 document.getElementById("bFwd").onclick = ()=>{ seekBy(10); };
 document.getElementById("bPrev").onclick = ()=> jumpSeg(-1);
 
-/* 真实录像：时间轴跟随 <video> 的实际播放进度，播完自动接下一段 */
-const stageVideoEl = document.getElementById("stageVideo");
-stageVideoEl.addEventListener("timeupdate", ()=>{
-  if(!state.videoSeg || state.segIdx < 0) return;
-  const seg = state.segs[state.segIdx];
+/* 绑定 A/B 两个 video 的事件（逻辑完全一致，只是作用对象不同） */
+videoEls().forEach(v=>{
+  v.addEventListener("timeupdate", ()=>{
+    if(v !== curVid || !state.videoSeg || state.segIdx < 0) return;
+    const seg = state.segs[state.segIdx];
+    if(!seg) return;
+    state.t = seg.s + (v.currentTime || 0);
+    syncPlayer();
+  });
+  v.addEventListener("ended", ()=>{
+    if(v !== curVid || switching) return;
+    /* 一段播完：有下一段就无缝接上，没有再停。
+       预加载若已把当前元素换掉（curVid 变了），这里自然就不再命中。 */
+    if(state.segIdx >= 0 && state.segIdx < state.segs.length-1){
+      finishSegAndNext();
+    }else{
+      state.playing = false;
+      state.t = state.segs[state.segIdx] ? state.segs[state.segIdx].e - 0.05 : 0;
+      syncPlayer();
+    }
+  });
+  v.addEventListener("play", ()=>{ if(v === curVid && state.videoSeg && !state.playing){ state.playing = true; syncPlayer(); } });
+  v.addEventListener("pause", ()=>{
+    if(v === curVid && state.videoSeg && state.playing && !v.ended){ state.playing = false; syncPlayer(); }
+  });
+});
+
+/* 播完一段 → 接下一段。若下一段已预加载好就走热切换（观感连续），
+   否则退回冷启动。两种情况都保持播放状态，用户不用再点播放。 */
+function finishSegAndNext(){
+  const n = state.segIdx + 1;
+  const seg = state.segs[n];
   if(!seg) return;
-  state.t = seg.s + (stageVideoEl.currentTime || 0);
+  state.segIdx = n;
+  state.t = seg.s;
+  state.playing = true;
+  setSegTitle(n);
+  if(preloadFor === n && nxtVid.getAttribute("src")){
+    swapVideos(true);     /* 已就绪：热切换，旧帧淡出、新帧接上 */
+  }else{
+    /* 预加载没赶上（比如磁盘慢）：直接给前台换 src，尽快续上 */
+    curVid.src = seg.file;
+    try{ curVid.currentTime = 0; }catch(e){}
+    safePlay(curVid);
+    preloadFor = -1;
+    preloadNext();
+  }
   syncPlayer();
-});
-stageVideoEl.addEventListener("ended", ()=>{
-  if(state.segIdx >= 0 && state.segIdx < state.segs.length-1){ openPlayer(state.segIdx+1); }
-  else { state.playing = false; syncPlayer(); }
-});
-stageVideoEl.addEventListener("play",  ()=>{ if(state.videoSeg && !state.playing){ state.playing = true; syncPlayer(); } });
-stageVideoEl.addEventListener("pause", ()=>{ if(state.videoSeg && state.playing && !stageVideoEl.ended){ state.playing = false; syncPlayer(); } });
-document.getElementById("bLand").onclick = ()=>{
-  state.land = !state.land;
-  phone.classList.toggle("land", state.land);
-  layout();
-  setTimeout(()=>{ drawScene(); }, 240);
-  toast(state.land ? "toast" : "toast", state.land ? "横屏预览 · 画面铺满" : "已回到竖屏");
-};
+}
+/* 回放页横屏按钮：走统一的 toggleFull（真全屏 + 锁横屏 + 右上角退出按钮）。
+   以前这里只是给 .phone 加个类，手机上那只是把内容挤进一个小框，不是全屏。 */
+document.getElementById("bLand").onclick = ()=> toggleFull();
 document.getElementById("pMore").onclick = ()=> toast("toast", "下载原画质 / 导出该片段");
 
 function seekBy(d){
@@ -1532,8 +2056,9 @@ function seekBy(d){
   if(!seg) return;
   state.t = Math.max(seg.s, Math.min(seg.e-0.5, state.t + d));
   state.playing = false;
-  const v = document.getElementById("stageVideo");
-  if(state.videoSeg && v){ try{ v.pause(); v.currentTime = Math.max(0, state.t - seg.s); }catch(e){} }
+  const v = activeVideo();
+  if(state.videoSeg && v){ try{ v.pause(); }catch(e){} }
+  seekVideo(Math.max(0, state.t - seg.s));
   syncPlayer();
 }
 function jumpSeg(dir){
@@ -1542,20 +2067,40 @@ function jumpSeg(dir){
   openPlayer(n);
 }
 
+function durStr(sec){
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  return h ? (h + ":" + pad(m) + ":" + pad(s)) : (m + ":" + pad(s));
+}
+
 function syncPlayer(){
   const seg = state.segs[state.segIdx];
   if(!seg) return;
-  document.getElementById("pSub").textContent = hms(seg.s) + " – " + hms(seg.e);
-  document.getElementById("tNow").textContent = hms(state.t);
-  document.getElementById("tEnd").textContent = hms(seg.e);
-  const pct = (state.t - seg.s) / Math.max(1, seg.e-seg.s);
-  document.getElementById("pFill").style.width = (pct*100).toFixed(1) + "%";
-  document.getElementById("pKnob").style.left = (pct*100).toFixed(1) + "%";
+  /* 缩时模式：时间与标题都按「源时刻」显示（seg.src 来自分片文件名），
+     播放进度条仍按真实播放时长推进 —— 用户对的是"事情发生的钟点"，
+     播的是压缩成品，两套坐标并存且都标注清楚。 */
+  const clipMode = !!seg.clip;
+  const p = Math.max(0, Math.min(1, (state.t - seg.s) / Math.max(0.2, seg.e - seg.s)));
+  const srcNow = clipMode && seg.src != null
+    ? seg.src + p * Math.max(1, seg.srcEnd - seg.src) : state.t;
+  document.getElementById("pSub").textContent = clipMode
+    ? ("第 " + (state.segIdx+1) + "/" + state.segs.length + " 段 · 覆盖 "
+       + hms(seg.src) + " – " + hms(seg.srcEnd) + " · 播放 " + durStr(seg.e-seg.s))
+    : (hms(seg.s) + " – " + hms(seg.e));
+  document.getElementById("tNow").textContent = clipMode
+    ? hms(srcNow) : hms(state.t);
+  document.getElementById("tEnd").textContent = clipMode
+    ? (seg.src != null ? hms(seg.srcEnd) : durStr(state.segs.reduce((a,x)=>a+(x.e-x.s),0)))
+    : hms(seg.e);
+  document.getElementById("pFill").style.width = (p*100).toFixed(1) + "%";
+  document.getElementById("pKnob").style.left = (p*100).toFixed(1) + "%";
   document.getElementById("playIcon").innerHTML = state.playing
     ? '<path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/>'
     : '<path d="M8 5v14l11-7z"/>';
   document.getElementById("ring").classList.toggle("show", !state.playing);
-  document.getElementById("osdTime").textContent = curDay() + " " + hms(state.t);
+  document.getElementById("osdTime").textContent = clipMode
+    ? (curDay() + " " + hms(srcNow) + " · 缩时")
+    : (curDay() + " " + hms(state.t));
 }
 
 /* 进度条拖动 */
@@ -1568,8 +2113,7 @@ function syncPlayer(){
     const r = bar.getBoundingClientRect();
     const p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
     state.t = seg.s + p*(seg.e-seg.s);
-    const v = document.getElementById("stageVideo");
-    if(state.videoSeg && v){ try{ v.currentTime = Math.max(0, state.t - seg.s); }catch(e){} }
+    seekVideo(Math.max(0, state.t - seg.s));
     syncPlayer();
   }
   bar.addEventListener("pointerdown", e=>{ on=true; state.playing=false; bar.setPointerCapture(e.pointerId); set(e); });
@@ -1605,12 +2149,14 @@ function loop(ts){
     const seg = state.segs[state.segIdx];
     if(seg && state.playing){
       if(state.videoSeg){
-        /* 真实录像：进度由 <video> 推进，这里只兜底同步；播完由 ended 事件接管 */
-        if(stageVideoEl && !stageVideoEl.paused){ state.t = seg.s + (stageVideoEl.currentTime||0); }
-        if(state.t >= seg.e && stageVideoEl && stageVideoEl.paused){
-          if(state.segIdx < state.segs.length-1){ openPlayer(state.segIdx+1); }
-          else { state.t = seg.e-0.2; state.playing = false; }
-        }
+        /* 真实录像：进度由 <video> 推进。切段由 ended 事件 + 预加载接管，
+           这里只兜底同步进度，绝不要在这里再调 openPlayer —— 那会和预加载
+           的交叉淡入打架，出现"切两次"。 */
+        const v = activeVideo();
+        if(v && !v.paused){ state.t = seg.s + (v.currentTime||0); }
+        /* 快播完了就提前把下一段拉起来：缩时片段只有几秒，等到 ended 才开始
+           预加载必然赶不上，"接了但黑一帧"就是这么来的。 */
+        if(v && seg.e - state.t < 2) preloadNext();
       }else{
         state.t += dt * 8;
         if(state.t >= seg.e){
@@ -1654,31 +2200,113 @@ try{
   const r = +(localStorage.getItem("nvr.snapRate") || 0);
   if(r >= 1 && r <= 10) SNAP.interval = r;
 }catch(e){}
-const snapState = {};            // camId -> { at: 上次抓拍时间戳 }
+/* 每路快照的真实状态。字段含义：
+     at      : 最近一次**成功拿到图**的时间戳（倒计时从它算，失败不前推）
+     since   : 本轮"连续失败"从什么时候开始（成功一次就清空）
+     pend    : 已发出请求还没回（防止同一次刷新挂多个请求）
+     fails   : 连续失败次数
+     shownAt : 当前画面上这张图的实际拍摄时刻（服务端给的时间，没有则用 at）
+   以前 tickSnaps 是"到点就把 at 改成 now，然后发一个请求"——请求成不成功都
+   算刷新成功，于是断网时倒计时照常 10→0→10 循环，看起来一切正常。 */
+const snapState = {};            // camId -> { at, since, pend, fails, shownAt }
+function snapSt(camId){
+  let st = snapState[camId];
+  if(!st) st = snapState[camId] = { at:0, since:0, pend:false, fails:0, shownAt:0 };
+  return st;
+}
+const SNAP_FAIL_MS = 3000;       // 一次请求超过这个时间没结果就算超时（RTSP 拉不起来时不能干等）
 let snapAcc = 0;
 
 /* 真实快照：服务端 ffmpeg 每隔 SNAP.interval 秒抓一帧（设置页填了 RTSP 就有）。
-   图还没就绪（404）就留在示意画面上，来了自动切过去。 */
-function hookSnapImg(img, camId){
-  if(!img) return;
-  img.onload = ()=>{ const card = img.parentNode; if(card) card.classList.add("hasphoto"); };
-  img.onerror = ()=>{ const card = img.parentNode; if(card) card.classList.remove("hasphoto"); };
-  img.src = "/api/live/snapshot/" + encodeURIComponent(camId) + ".jpg?t=" + Date.now();
+   图还没就绪（404）就留在示意画面上，来了自动切过去。
+   注：老的 hookSnapImg / refreshSnapImg 已由 pullSnap 统一接管 ——
+   它们不关心加载结果，正是"断网也倒数"的根源。 */
+
+/* 真正"刷新一张快照"：把 img 换 src，然后**等它 load 成功**才算刷新成功。
+   失败/超时就把这一路标成失败态 —— 倒计时停在原地并显示"未更新"，
+   而不是继续 10→0 地假装在刷新。 */
+function pullSnap(camId, img, onDone){
+  const st = snapSt(camId);
+  if(st.pend) return;                        // 上一次还没回，别叠请求
+  if(!img){ onDone && onDone(false); return; }
+  st.pend = true;
+  const token = Date.now();
+  let settled = false;
+  const finish = ok => {
+    if(settled) return;
+    settled = true;
+    st.pend = false;
+    clearTimeout(timer);
+    if(ok){
+      st.at = token;
+      st.shownAt = token;
+      st.fails = 0;
+      st.since = 0;
+      img.parentNode && img.parentNode.classList.add("hasphoto");
+    }else{
+      st.fails += 1;
+      if(!st.since) st.since = token;        // 失败起点，用来区分"偶发一次"和"一直不通"
+      img.parentNode && img.parentNode.classList.remove("hasphoto");
+    }
+    onDone && onDone(ok);
+  };
+  const timer = setTimeout(()=> finish(false), SNAP_FAIL_MS);
+  img.onload = ()=>{ if(img.getAttribute("data-tok") === String(token)) finish(true); };
+  img.onerror = ()=>{ if(img.getAttribute("data-tok") === String(token)) finish(false); };
+  img.setAttribute("data-tok", String(token));
+  img.src = "/api/live/snapshot/" + encodeURIComponent(camId) + ".jpg?t=" + token;
 }
-function refreshSnapImg(img, camId, at){
-  if(img) img.src = "/api/live/snapshot/" + encodeURIComponent(camId) + ".jpg?t=" + at;
+
+/* ================= 与服务端对话的统一入口 =================
+   所有写操作都必须带 X-NVR-Request 头：服务端靠它区分"页面发起的操作"和
+   "别的网页偷偷发的请求"（浏览器跨站发自定义头会先做预检，而本服务不应答
+   CORS，于是写入类接口天然免疫 CSRF）。别在这里省掉头，否则一律 403。 */
+function apiPost(path, body){
+  return fetch(path, {
+    method: "POST", mode: "same-origin", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-NVR-Request": "1" },
+    body: JSON.stringify(body == null ? {} : body)
+  }).then(r => r.text().then(txt => {
+    /* 服务端已经保证错误也是 JSON（403/413/500 都带 {ok:false,error}）。
+       解析不出来说明中间层出了事（代理返回 HTML 错误页等），必须让调用方
+       知道"这次真的失败了"，而不是拿到 null 当成"成功但没有数据"。 */
+    let d = null;
+    try{ d = txt ? JSON.parse(txt) : null; }catch(e){ d = null; }
+    if(d === null){
+      throw new Error("HTTP " + r.status + " " + (txt || "").slice(0, 80));
+    }
+    if(!r.ok && d.error === undefined){ d.error = "HTTP " + r.status; }
+    return d;
+  }));
+}
+function apiGet(path){
+  return fetch(path + (path.indexOf("?") < 0 ? "?_t=" + Date.now() : ""),
+    { mode: "same-origin", cache: "no-store" }).then(r => r.json());
 }
 
 /* 把摄像头与通用设置推给后端：快照 worker、录制、衔接吃的都是这份配置。
    内容没变就不发（签名去重），变了静默 POST，失败也不打扰用户。 */
 let lastPushSig = "";
+let serverCamsLoaded = false;     /* 当前 CAMERAS 是否已经来自服务端（而不是演示骨架） */
+let pushPending = false;          /* 在拿到服务端通道表之前被拦下的推送请求 */
 function pushCfg(){
   if(typeof fetch !== "function") return;
+  /* 还没从服务端拿到过通道列表 → 此刻页面上的 CAMERAS 是演示骨架。
+     这时候推上去就是把 NAS 上的真实配置清空。等 syncFromServer 回来再说。 */
+  if(!serverCamsLoaded){ pushPending = true; return; }
+  pushPending = false;
   const cams = CAMERAS.map(c=>{
     const p = camParams[c.id] || {};
     return { id:c.id, name:c.name, url:p.main || "", sub_url:p.sub || "",
              enabled:p.enabled !== false,
              full_days:p.fullDays, clip_days:p.clipDays,
+             /* 每路缩时压制总开关与倍速：必须真的推上去，
+                link 调度靠 condense 决定这一路入不入队 */
+             condense: p.condense !== false,
+             clip_speed: p.clipSpeed || 1,
+             /* 单路分片长度：0 表示跟随通用设置。必须真的推上去 ——
+                它是 ffmpeg 命令行的物理参数，只存在 localStorage 等于没设。 */
+             segment_sec: p.segSec || 0,
              masks: normMasks(p.masks) };
   });
   const body = { cameras: cams,
@@ -1690,15 +2318,85 @@ function pushCfg(){
                  record_segment_sec: LK.segSec,
                  link_mode: LK.mode,
                  link_interval_h: LK.intervalH,
-                 concurrency: GS.conc, gpu: !!GS.gpu };
+                 concurrency: GS.conc,
+                 /* 必须是枚举值：以前推的是 !!GS.gpu 布尔，后端把 "auto" 顶成了
+                    true，于是"核显不可用 → 强制单路"的降级保护静默失效 */
+                 gpu: (GS.gpu === false ? "off" : "auto") };
   const sig = JSON.stringify(body);
   if(sig === lastPushSig) return;
   lastPushSig = sig;
-  try{
-    fetch("/api/config", { method:"POST", mode:"same-origin",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify(body) }).catch(()=>{});
-  }catch(e){}
+  apiPost("/api/config", body).then(d=>{
+    if(d && d.ok){
+      /* 服务端把配置收敛过（比如端口/并发被夹取），以它回来的为准重新对齐一次 */
+      lastPushedAt = Date.now();
+      applyServerCfg(d.config);
+    }else if(d && d.ok === false){
+      lastPushSig = "";            /* 失败允许下次重发，别把签名钉死 */
+    }
+  }).catch(()=>{ lastPushSig = ""; });
+}
+let lastPushedAt = 0;
+/* 服务端配置 → 前端状态。只认白名单字段，不整份覆盖（避免把 localStorage 的
+   本地预览状态冲掉），同时给「分片长度」这类数字一个统一的夹取口径。 */
+function applyServerCfg(c){
+  if(!c) return;
+  if(c.record_segment_sec){
+    const s = +c.record_segment_sec;
+    if(s && s !== LK.segSec) LK.segSec = s;
+  }
+  if(c.link_mode && c.link_mode !== LK.mode) LK.mode = c.link_mode;
+  if(c.link_interval_h){
+    const h = +c.link_interval_h;
+    if(h && h !== LK.intervalH) LK.intervalH = h;
+  }
+  if(c.record_dir) REC.dir = c.record_dir;
+  if(typeof c.record_enable === "boolean") REC.enabled = c.record_enable;
+  if(c.cleanup_at) REC.cleanupAt = c.cleanup_at;
+}
+
+/* 服务端通道列表 → 前端。这是"谁说了算"的关键：NAS 上的配置才是权威，
+   浏览器只是显示器。以前只认 localStorage，于是清缓存/换设备就回到演示数据。 */
+function applyServerCams(list){
+  if(!Array.isArray(list)) return false;
+  /* url 回来时是脱敏的（rtsp://***@ip），不能拿去覆盖本地明文地址；
+     明文只存在于本机 localStorage。所以按 id 匹配，保留本地 url，其余以服务端为准。 */
+  const prev = {};
+  CAMERAS.forEach((c,i)=>{
+    const p = camParams[c.id] || {};
+    prev[c.id] = { main: p.main || c.main || "", sub: p.sub || c.sub || "" };
+  });
+  CAMERAS.length = 0;
+  const keepParams = camParams;
+  list.forEach((c,i)=>{
+    if(!c || !c.id) return;
+    const name = c.name || ("摄像头 " + (i+1));
+    CAMERAS.push({ id:c.id, name,
+                   ch:c.ch || ("CH" + String(i+1).padStart(2,"0")),
+                   res:c.res || "1080p",
+                   online:!!c.online,
+                   main: prev[c.id] ? prev[c.id].main : "",
+                   sub: prev[c.id] ? prev[c.id].sub : "" });
+  });
+  /* 参数：本地已有的保留，新出现的给默认；服务端带的保留天数/掩码以服务端为准 */
+  const usedIds = {};
+  CAMERAS.forEach((c,i)=>{
+    const p = keepParams[c.id] || defaultCamParams(c, i);
+    const src = list.find(x=>x && x.id === c.id) || {};
+    if(src.full_days != null) p.fullDays = src.full_days;
+    if(src.clip_days != null) p.clipDays = src.clip_days;
+    if(src.condense != null) p.condense = !(src.condense === false || src.condense === "false");
+    if(src.clip_speed != null) p.clipSpeed = [1,2,4,8].indexOf(+src.clip_speed) >= 0 ? +src.clip_speed : 1;
+    if(src.segment_sec != null) p.segSec = +src.segment_sec || 0;
+    if(src.masks) p.masks = normMasks(src.masks);
+    if(src.enabled === false) p.enabled = false;
+    else if(src.enabled === true) p.enabled = true;
+    camParams[c.id] = p;
+    usedIds[c.id] = 1;
+  });
+  Object.keys(camParams).forEach(k=>{ if(!usedIds[k]) delete camParams[k]; });
+  if(!CAMERAS.length){ state.camId = null; }
+  else if(!CAMERAS.some(c=>c.id === state.camId)){ state.camId = CAMERAS[0].id; }
+  return true;
 }
 
 function clockStr(){
@@ -1707,7 +2405,10 @@ function clockStr(){
 }
 function snapStamp(at){
   const t = new Date(at);
-  return "2026-10-20 " + pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds());
+  if(isNaN(t.getTime())) return "—";
+  /* 以前这里硬编码 "2026-10-20 "，导致快照角标永远显示同一个日期 */
+  return t.getFullYear() + "-" + pad(t.getMonth()+1) + "-" + pad(t.getDate())
+    + " " + pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds());
 }
 function agoText(sec){
   if(sec < 1) return "刚刚";
@@ -1727,14 +2428,15 @@ function renderLive(){
     return;
   }
   CAMERAS.forEach((c,i)=>{
-    if(!snapState[c.id]) snapState[c.id] = { at: Date.now() - (2 + i*1.7)*1000 };
+    const st = snapSt(c.id);
     const on = c.online || !!(camParams[c.id] && camParams[c.id].main);
     const d = document.createElement("div");
     d.className = "livecard" + (on ? "" : " off");
     d.innerHTML =
       '<img class="snap-img" alt="">' +
       '<div class="nophoto"><span class="np-ico">◐</span><span data-np>等待第一帧…</span></div>' +
-      '<div class="lv-osd mono" data-stamp>' + snapStamp(snapState[c.id].at) + '</div>' +
+      /* 角标：还没成功过就留 --，不拿"现在"顶上去假装有图 */
+      '<div class="lv-osd mono" data-stamp>' + (st.shownAt ? snapStamp(st.shownAt) : "--") + '</div>' +
       '<div class="snap-cd"><i class="dot"></i><span data-cd>--</span></div>' +
       '<div class="lv-name">' + esc(c.name) + '</div>' +
       '<div class="snap-ago" data-ago><span data-ago-txt>-- 秒前</span></div>' +
@@ -1742,8 +2444,14 @@ function renderLive(){
     d.onclick = ()=> enterLive(i);
     wrap.appendChild(d);
     d._camIdx = i;
-    if(!snapState[c.id].since) snapState[c.id].since = Date.now();
-    hookSnapImg(d.querySelector(".snap-img"), c.id);
+    /* 首次拉图也走 pullSnap：成功才置 at，失败就进失败态（不会显示成"刚刚"） */
+    pullSnap(c.id, d.querySelector(".snap-img"), ok=>{
+      if(ok){
+        const s = d.querySelector("[data-stamp]");
+        if(s) s.textContent = snapStamp(snapSt(c.id).shownAt);
+      }
+      updateSnapLabels();
+    });
   });
   const hint = document.createElement("div");
   hint.className = "livehint";
@@ -1775,23 +2483,42 @@ function updateSnapLabels(){
   document.querySelectorAll("#liveWrap .livecard").forEach(card=>{
     const i = card._camIdx;
     const c = CAMERAS[i];
-    const st = snapState[c.id];
-    const age = (now - st.at)/1000;
+    if(!c) return;
+    const st = snapSt(c.id);
+    const hasPhoto = card.classList.contains("hasphoto");
+    /* age 是"距上次成功的时间"；一次都没成功过时 at=0，不能拿它算倒计时 */
+    const age = st.at ? (now - st.at)/1000 : Infinity;
     const left = Math.max(0, SNAP.interval - age);
+    const bad = !c.online || (st.fails > 0) || age > SNAP.interval * 2.2;
     const np = card.querySelector("[data-np]");
-    if(np && !card.classList.contains("hasphoto")){
-      np.textContent = (st.since && now - st.since > 25000)
-        ? "拉流失败 · 检查 RTSP 地址"
-        : "等待第一帧…";
+    if(np && !hasPhoto){
+      /* 三种真实状态，别再一律 "等待第一帧…" */
+      if(st.pend) np.textContent = "正在拉取…";
+      else if(st.since && now - st.since > 25000) np.textContent = "拉流失败 · 检查 RTSP 地址";
+      else if(st.fails > 0) np.textContent = "拉流失败 · 正在重试";
+      else np.textContent = "等待第一帧…";
     }
     const ago = card.querySelector("[data-ago-txt]");
     const cd = card.querySelector("[data-cd]");
     const box = card.querySelector("[data-ago]");
     const cdBox = card.querySelector(".snap-cd");
-    if(ago) ago.textContent = c.online ? agoText(age) : "离线";
-    if(cd) cd.textContent = c.online ? "-" + Math.ceil(left) + "s" : "—";
-    if(cdBox) cdBox.classList.toggle("bad", !c.online || age > SNAP.interval * 2.2);
-    if(box) box.classList.toggle("stale", c.online && age > SNAP.interval * 2.2);
+    if(ago){
+      if(st.fails > 0 && !hasPhoto) ago.textContent = "未拿到画面";
+      else if(!c.online) ago.textContent = "离线";
+      else if(!st.at) ago.textContent = "-- 秒前";
+      else ago.textContent = agoText(age);
+    }
+    if(cd){
+      /* 失败态优先于在线态：网断了 c.online 也是 false，但用户更该看到
+         "未更新"（图没刷新）而不是一个笼统的"—"。 */
+      if(st.fails > 0) cd.textContent = "未更新";
+      else if(st.pend) cd.textContent = "…";
+      else if(!c.online) cd.textContent = "—";
+      else if(!st.at) cd.textContent = "—";
+      else cd.textContent = "-" + Math.ceil(left) + "s";
+    }
+    if(cdBox) cdBox.classList.toggle("bad", bad);
+    if(box) box.classList.toggle("stale", bad);
   });
 }
 
@@ -1805,26 +2532,30 @@ function tickSnaps(dt){
   document.querySelectorAll("#liveWrap .livecard").forEach(card=>{
     const i = card._camIdx;
     const c = CAMERAS[i];
-    if(!c.online) return;
-    const st = snapState[c.id];
-    if(card.classList.contains("hasphoto") && (now - st.at)/1000 >= SNAP.interval){
-      st.at = now;
-      refreshSnapImg(card.querySelector(".snap-img"), c.id, now);
-      const s = card.querySelector("[data-stamp]");
-      if(s) s.textContent = snapStamp(st.at);
+    if(!c) return;
+    const st = snapSt(c.id);
+    /* 只看"距上次成功拿到图"过了多久。拉流失败时 at 不会前推，
+       于是这里每 tick 都会重试（每 0.4s 一次太密，pend 会挡住），
+       倒计时则老老实实停在 0 并显示未更新。 */
+    if(!st.pend && now - st.at >= SNAP.interval * 1000){
+      pullSnap(c.id, card.querySelector(".snap-img"), ok=>{
+        const s = card.querySelector("[data-stamp]");
+        if(ok && s) s.textContent = snapStamp(st.shownAt);
+      });
     }
   });
-  /* 实时播放层里的宫格/单路窗口也跟着换图 */
+  /* 实时层：只有"流没起来回落到快照"的瓦片才需要在这里续图。
+     暂停态整层冻结（不再拉图），这正是"暂停"该有的样子。 */
   const roomOn = document.getElementById("liveRoom").classList.contains("on");
-  if(roomOn){
+  if(roomOn && state.liveStream){
     document.querySelectorAll("#lrBody [data-camid]").forEach(tile=>{
+      if(tile.classList.contains("streaming")) return;   // 流播放中，别用快照覆盖
       const cid = tile.dataset.camid;
-      const st = snapState[cid];
-      if(!st || (now - st.at)/1000 < SNAP.interval) return;
-      if(state.liveView === "single" && !state.liveStream) return;   // 暂停 = 画面冻结
-      if(tile.classList.contains("streaming")) return;               // 流播放中，别用快照覆盖
-      st.at = now;
-      refreshSnapImg(tile.querySelector(".snap-img"), cid, now);
+      const st = snapSt(cid);
+      if(st.pend || now - st.at < SNAP.interval * 1000) return;
+      pullSnap(cid, tile.querySelector(".snap-img"), ok=>{
+        if(ok) tile.classList.add("hasphoto");
+      });
     });
   }
   updateSnapLabels();
@@ -1863,41 +2594,56 @@ function enterLive(idx){
   document.getElementById("liveRoom").classList.add("on");
   buildLiveRoom();
   updateResBar();
+  pushLayer("live");           // 压一层：左滑先退出实时层，而不是退出应用
 }
 function leaveLive(){
   state.liveView = "snap";
   state.livePaused = false;
-  state.liveStream = false;    // 离开实时层就断流，服务端会随即杀掉转发 ffmpeg
+  state.liveStream = false;
+  /* 主动断开 MJPEG：把 img 的 src 摘掉并清空容器，浏览器才会真的关连接，
+     服务端随即杀掉那几路转发 ffmpeg。只加 class 不管 url 的话，连接会挂着。 */
+  document.querySelectorAll("#lrBody .snap-img").forEach(img=>{
+    img.onload = img.onerror = null;
+    img.removeAttribute("src");
+  });
+  document.getElementById("lrBody").innerHTML = "";
   document.getElementById("liveRoom").classList.remove("on");
   renderLive();          // 退出时刷新一遍快照，年龄从头算
 }
 
-/* MJPEG 实时流：<img> 直接吃 multipart 流，暂停 = 换回静态快照并冻结 */
-function liveStreamUrl(cid){
-  return "/api/live/stream/" + encodeURIComponent(cid) + "?t=" + Date.now();
+/* MJPEG 实时流：<img> 直接吃 multipart 流。
+   分辨率与帧率由前端按场景给：宫格 4 帧 480 宽（4~6 路同时播也扛得住），
+   单画面 8 帧 960 宽。以前服务端把参数写死，宫格根本没走流、只拉快照，
+   于是"看起来是几秒前的画面，也不动"。 */
+const STREAM_Q = { single:"fps=8&w=960", grid:"fps=4&w=480" };
+function liveStreamUrl(cid, grid){
+  return "/api/live/stream/" + encodeURIComponent(cid)
+    + "?" + (grid ? STREAM_Q.grid : STREAM_Q.single) + "&t=" + Date.now();
 }
-function toggleLiveStream(cid){
+
+/* 给一块瓦片挂流。失败不装死：立刻说明原因并回落快照刷新。 */
+function mountLiveStream(tile, c, grid){
+  const img = tile.querySelector(".snap-img");
+  const np  = tile.querySelector("[data-np]");
+  if(!img) return;
+  tile.classList.add("streaming");
+  tile.classList.remove("hasphoto");
+  img.onload = ()=> tile.classList.add("hasphoto");
+  img.onerror = ()=>{
+    /* 子码流拉不起来：摄像头没配子码流、并发到顶、或 ffmpeg 拒收。
+       以前这里什么都不做 —— 覆盖层一直挂着，用户看到的就是"永远等待第一帧"。 */
+    tile.classList.remove("streaming", "hasphoto");
+    if(np) np.textContent = "实时流不可用 · 已回落快照";
+    pullSnap(c.id, img, ok=>{ if(ok) tile.classList.add("hasphoto"); });
+  };
+  img.src = liveStreamUrl(c.id, grid);
+}
+
+/* 暂停/播放：单画面与宫格一起管。暂停 = 把 img 换成一张静态快照并停止轮询。 */
+function toggleLiveStream(){
   state.liveStream = !state.liveStream;
-  const tile = document.querySelector('#lrBody [data-camid="' + cid + '"]');
-  if(tile){
-    const img = tile.querySelector(".snap-img");
-    const btn = tile.querySelector("[data-lrplay]");
-    if(img){
-      img.src = state.liveStream ? liveStreamUrl(cid)
-        : "/api/live/snapshot/" + encodeURIComponent(cid) + ".jpg?t=" + Date.now();
-    }
-    tile.classList.toggle("streaming", state.liveStream);
-    if(btn){
-      btn.classList.toggle("paused", !state.liveStream);
-      const t = btn.querySelector("span");
-      if(t) t.textContent = state.liveStream ? "暂停" : "播放";
-    }
-  }
-  const sub = document.getElementById("lrSub");
-  if(sub) sub.textContent = state.liveStream
-    ? "实时视频流 · 点暂停可省 CPU"
-    : "已暂停 · 点播放恢复实时";
-  toast("toast2", state.liveStream ? "已开始实时播放" : "已暂停实时播放");
+  buildLiveRoom();
+  toast("toast2", state.liveStream ? "已开始实时播放" : "已暂停 · 画面冻结");
 }
 
 function buildLiveRoom(){
@@ -1914,8 +2660,8 @@ function buildLiveRoom(){
 
   document.getElementById("lrGridTxt").textContent = grid ? "单路" : "宫格";
   document.getElementById("lrHint").textContent = grid
-    ? "点任意窗口放大 · 已铺满全部 " + total + " 路"
-    : "点画面或悬浮按钮暂停 / 继续";
+    ? "点任意窗口放大 · 全部 " + total + " 路同时在播"
+    : "点画面暂停 / 继续";
 
   /* 布局随摄像头数量自适应：1→1列，2~4→2列，5~9→3列 */
   const cols = grid ? Math.min(3, Math.ceil(Math.sqrt(total))) : 1;
@@ -1926,38 +2672,52 @@ function buildLiveRoom(){
   list.forEach(i=>{
     const c = CAMERAS[i];
     const tile = document.createElement("div");
-    tile.className = "lr-tile" + (grid && i === state.liveCam ? " cur" : "");
+    tile.className = "lr-tile" + (grid && i === state.liveCam ? " cur" : "")
+                   + (state.liveStream ? "" : " paused");
     tile.dataset.camid = c.id;
     tile.innerHTML = '<img class="snap-img" alt="">' +
       '<div class="nophoto"><span class="np-ico">◐</span><span data-np>等待第一帧…</span></div>' +
       '<div class="tf mono" data-tf>' + clockStr() + '</div>' +
       '<div class="tn">' + esc(c.name) + '</div>' +
-      (!grid ? '<div class="lr-float"><button data-lrplay class="' +
-        (state.liveStream ? "" : "paused") + '"><i></i><span>' +
-        (state.liveStream ? "暂停" : "播放") + '</span></button></div>' : "") +
+      /* 暂停态才出现一个居中的播放按钮；播放时画面上不叠任何控件 */
+      (state.liveStream ? "" :
+        '<div class="lr-pausebtn"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'
+        + '<span>已暂停</span></div>') +
       ((c.online || !!(camParams[c.id] && camParams[c.id].main)) ? "" : '<div class="off">离线</div>');
     tile.onclick = ()=>{
-      if(grid){ state.liveCam = i; state.liveView = "single"; state.liveStream = true; buildLiveRoom(); }
-      else { toggleLiveStream(c.id); }
+      /* 宫格播放中点一下 = 放大到单路；其余情况（含暂停态）点画面 = 播放/暂停 */
+      if(grid && state.liveStream){ state.liveCam = i; state.liveView = "single"; buildLiveRoom(); }
+      else { toggleLiveStream(); }
     };
-    const playBtn = tile.querySelector("[data-lrplay]");
-    if(playBtn) playBtn.onclick = e=>{ e.stopPropagation(); toggleLiveStream(c.id); };
     body.appendChild(tile);
-    const stTile = snapState[c.id] || (snapState[c.id] = { at: Date.now() });
-    if(!stTile.since) stTile.since = Date.now();
-    hookSnapImg(tile.querySelector(".snap-img"), c.id);
-    if(!grid && state.liveStream){
-      tile.classList.add("streaming");
-      tile.querySelector(".snap-img").src = liveStreamUrl(c.id);
+    /* 单画面和宫格都走实时流 —— 「宫格不播」正是上一版的老毛病 */
+    if(state.liveStream){
+      mountLiveStream(tile, c, grid);
+    }else{
+      pullSnap(c.id, tile.querySelector(".snap-img"), ok=>{
+        if(ok) tile.classList.add("hasphoto");
+      });
     }
   });
 
   const c = CAMERAS[state.liveCam];
   document.getElementById("lrName").textContent = grid ? "全部 " + total + " 路" : c.name;
-  document.getElementById("lrSub").textContent = grid
-    ? "全部 " + total + " 路 · 快照每 " + SNAP.interval + " 秒刷新"
-    : (state.liveStream ? "实时视频流 · 点暂停可省 CPU" : "快照 · 每 " + SNAP.interval + " 秒刷新");
+  document.getElementById("lrSub").textContent = state.liveStream
+    ? (grid ? "全部 " + total + " 路 · 实时" : "实时 · 子码流")
+    : "已暂停 · 画面冻结在最后一帧";
   document.getElementById("lrClock").textContent = clockStr();
+  syncLivePlayBtn();
+}
+
+/* 底部控制条上的播放/暂停按钮：与画面分离，不遮挡任何内容 */
+function syncLivePlayBtn(){
+  const b = document.getElementById("lrPlay");
+  if(!b) return;
+  b.classList.toggle("paused", !state.liveStream);
+  const t = b.querySelector("span");
+  if(t) t.textContent = state.liveStream ? "暂停" : "播放";
+  const i = b.querySelector("i");
+  if(i) i.className = state.liveStream ? "on" : "";
 }
 
 function updateResBar(){
@@ -1970,12 +2730,13 @@ function updateResBar(){
   if(keepEl) keepEl.textContent = CAMERAS.length ? ("全时 " + rng(fulls) + " / 缩时 " + rng(clips)) : "无摄像头";
   const dirEl = document.getElementById("resDir");
   if(dirEl) dirEl.textContent = REC.dir;
-  document.getElementById("resFree").textContent = REC.diskFreeGB.toFixed(1) + " GB";
-  document.getElementById("resTotal").textContent = REC.diskTotalGB.toFixed(1) + " GB";
-  document.getElementById("resGpu").textContent = GS.gpu ? "QSV" : "软件编码";
-  const room = document.getElementById("liveRoom").classList.contains("on");
-  document.getElementById("resCpu").textContent = room ? (state.liveView === "grid" ? "22%" : "9%") : "3%";
-  document.getElementById("resMem").textContent = room ? (state.liveView === "grid" ? "312.6" : "148.2") + " MB" : "96.4 MB";
+  const gb = v => (v == null || isNaN(v)) ? "—" : (+v).toFixed(1) + " GB";
+  document.getElementById("resFree").textContent = gb(REC.diskFreeGB);
+  document.getElementById("resTotal").textContent = gb(REC.diskTotalGB);
+  /* 资源条只留「存储 + 目录」。
+     CPU / 内存 / 核显原来靠 /proc 与 ffmpeg -encoders 探测，在 fnOS 的精简
+     运行环境里读数不可靠（进程 CPU 拿不到、核显在容器里看不到设备节点），
+     与其显示一串"探测中…"或"—"，不如把这一行去掉。 */
 }
 const LIVE_PAL = [
   { top:"#262c34", bot:"#3a4149", acc:"#4d5560", kind:"yard" },
@@ -2051,7 +2812,7 @@ function drawLiveScene(cv, idx){
      4) 专属参数默认只读，点「修改」才进编辑态；改动先进草稿，必须点「保存」
         才落盘 —— 参数密，避免滑杆被手滑碰一下就改了。
 */
-const SET = { open:null, editing:false, draft:null, adv:false, armed:null, genOpen:false };
+const SET = { open:null, editing:false, draft:null, adv:false, armed:null, genOpen:false, tlOpen:false };
 
 function esc(s){
   return String(s==null?"":s).replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
@@ -2094,14 +2855,106 @@ function recBudgetText(){
     clip += dayGB * 0.07 * p.clipDays;
   });
   const need = full + clip;
-  const ok = need <= REC.diskFreeGB;
+  const free = (REC.diskFreeGB == null || isNaN(REC.diskFreeGB)) ? null : +REC.diskFreeGB;
+  const ok = free == null ? true : need <= free;   // 还没读到磁盘就不下"空间不足"的结论
   return "合计占用 ≈ <b style=\"" + (ok ? "" : "color:var(--danger)") + "\">" + need.toFixed(0)
     + " GB</b>（全时 " + full.toFixed(0) + " + 缩时 " + clip.toFixed(0)
-    + "）· 剩余 " + REC.diskFreeGB.toFixed(0) + " GB"
+    + "）· 剩余 " + (free == null ? "—" : free.toFixed(0) + " GB")
     + (ok ? "" : "，<b style='color:var(--danger)'>空间不足：减全时天数或调低画质</b>");
 }
 
 /* ---------------- 公共参数 ---------------- */
+/* 每路录制进程的真实状态。用户报「一条录像都没有」时，这里直接给出答案：
+   进程在不在跑、最后一次 ffmpeg 到底报了什么错 —— 不用再去翻日志。 */
+function recCamsBlock(){
+  const rec = LK.rec;
+  if(!rec || !Array.isArray(rec.channels) || !rec.channels.length) return "";
+  const on = rec.channels.filter(c=>c.state === "recording").length;
+  if(rec.ffmpeg_missing)
+    return '<div class="srow"><div class="top"><span class="n">每路录制状态</span>'
+      + '<span class="v" style="color:var(--warn)">找不到 ffmpeg</span></div>'
+      + '<div class="h">录像和预览都依赖 ffmpeg。把静态 ffmpeg 放到安装目录的 app/bin/ 下，'
+      + '或在本机装好 ffmpeg（apt install ffmpeg），再重启应用。</div></div>';
+  // 失败时先说「下一步怎么办」（后端按错误分类给的中文建议），
+  // ffmpeg 的英文原文收进 details —— 原文对排查有用，但对用户是天书，
+  // 之前的界面把它当正文，用户只能看到一行 "Output file does not contain any stream"。
+  const rows = rec.channels.map(c=>{
+    const running = c.state === "recording";
+    const err = c.error ? String(c.error) : "";
+    const hint = c.hint ? String(c.hint) : "";
+    const dot = running ? "var(--live)" : (err ? "var(--warn)" : "var(--faint2)");
+    let tail;
+    if(running) tail = c.last_seg ? (" · 最新 " + c.last_seg) : " · 已连上，等第一个分片";
+    else if(hint) tail = " · " + hint;
+    else if(err) tail = " · " + err;
+    else tail = " · 进程未运行";
+    const more = (err && hint)
+      ? '<details class="recmore"><summary>ffmpeg 原文</summary><code>' + esc(err) + '</code></details>'
+      : "";
+    return '<div class="recrow"><i style="background:' + dot + '"></i>'
+      + '<b>' + esc(c.name) + '</b><span>' + esc(tail) + '</span>'
+      + '<button class="recprobe" data-probe="' + esc(c.id) + '">诊断</button></div>'
+      + more
+      + '<div class="probeout" id="probeout-' + esc(c.id) + '" style="display:none"></div>';
+  }).join("");
+  // 自动剔除过参数时如实说明，别让用户以为版本有 bug
+  const bad = (rec.bad_opts && rec.bad_opts.length)
+    ? '<div class="h">本机 ffmpeg 不支持的参数已自动跳过：'
+      + esc(rec.bad_opts.map(x=>"-" + String(x).replace(/^-/, "")).join("、")) + '</div>'
+    : "";
+  return '<div class="srow">'
+    + '<div class="top"><span class="n">每路录制状态</span>'
+    + '<span class="v">' + on + " / " + rec.channels.length + ' 在录</span></div>'
+    + rows + bad + '</div>';
+}
+
+function probeHtml(j){
+  if(!j || !j.ok)
+    return '<div class="h" style="color:var(--warn)">'
+      + esc((j && j.error) || "诊断失败") + '</div>';
+  const ok = !!j.trial_ok;
+  let h = '<div class="pv" style="color:' + (ok ? "var(--live)" : "var(--warn)") + '">'
+    + esc(j.verdict || "没有得出结论") + '</div>';
+  if(j.hint) h += '<div class="h">' + esc(j.hint) + '</div>';
+  const ss = Array.isArray(j.streams) ? j.streams : [];
+  if(ss.length){
+    h += '<div class="pstreams">' + ss.map(s=>{
+      const dim = (s.w && s.h) ? (s.w + "×" + s.h) : "";
+      const bits = [s.type, s.codec || "?", dim, s.fps].filter(Boolean);
+      return '<span class="ps">' + esc(bits.join(" · ")) + '</span>';
+    }).join("") + '</div>';
+  }else if(j.probe_ok){
+    h += '<div class="h">ffprobe 没读到任何流 —— 这条地址上没有可用的码流。</div>';
+  }
+  if(j.probe_err) h += '<div class="h">ffprobe：' + esc(j.probe_err) + '</div>';
+  if(Array.isArray(j.mapping) && j.mapping.length)
+    h += '<div class="h">Stream mapping：' + esc(j.mapping.join(" ／ ")) + '</div>';
+  h += '<div class="h">试录产出：' + (j.trial_files || 0) + ' 个分片 · '
+    + ((j.trial_bytes || 0) / 1024).toFixed(0) + ' KB</div>';
+  if(j.trial_err)
+    h += '<details class="recmore"><summary>试录日志</summary>'
+      + '<code>' + esc(j.trial_err) + '</code></details>';
+  return h;
+}
+
+async function runProbe(cid, btn){
+  const box = document.getElementById("probeout-" + cid);
+  if(!box) return;
+  box.style.display = "block";
+  box.innerHTML = '<div class="h">正在诊断：读流信息 + 试录 8 秒，约 10~20 秒…</div>';
+  if(btn) btn.disabled = true;
+  try{
+    const r = await fetch("/api/record/probe?id=" + encodeURIComponent(cid), {cache:"no-store"});
+    const j = await r.json();
+    box.innerHTML = probeHtml(j);
+  }catch(e){
+    box.innerHTML = '<div class="h" style="color:var(--warn)">诊断请求失败：'
+      + esc(String(e)) + '</div>';
+  }finally{
+    if(btn) btn.disabled = false;
+  }
+}
+
 function cardRec(){
   return '<div class="gcard">'
     + '<h3>录制 <span class="sub">所有摄像头共用</span></h3>'
@@ -2109,9 +2962,18 @@ function cardRec(){
       + '<span class="n">总开关</span>'
       + '<div class="sw ' + (REC.enabled?"on":"") + '" data-rec="enabled" style="margin-left:auto"></div>'
     + '</div>'
+    + recCamsBlock()
     + '<div class="fld2" style="margin-top:12px">'
-      + '<label>保存目录（按 摄像头名称 / 日期 / 时段 分目录，改后需重启应用）</label>'
-      + '<input type="text" class="mono" value="' + esc(REC.dir) + '" id="recDir">'
+      + '<label>保存目录（按 摄像头名称 / 日期 / 时段 分目录 · 不常修改，默认锁定）</label>'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-top:2px">'
+        + '<code class="mono" id="recDirShow" style="flex:1;font-size:12px;word-break:break-all">' + esc(REC.dir) + '</code>'
+        + '<button class="minibtn" id="btnDirEdit">修改</button>'
+      + '</div>'
+      + '<div id="dirEditBox" style="display:none;margin-top:8px">'
+        + '<input type="text" class="mono" value="' + esc(REC.dir) + '" id="recDir" placeholder="/vol1/@appshare/nvr-output">'
+        + '<button class="btnline" id="btnDirSave" style="margin-top:8px">检测并保存</button>'
+        + '<div class="hint" id="dirCheckOut" style="margin-top:6px">保存前会真实探测：目录是否存在（不存在会尝试创建）、应用是否有写权限。</div>'
+      + '</div>'
       + '<div class="hint" style="margin-top:6px">全时录像存 <code style="font-size:10.5px">' + esc(REC.dir) + '/&lt;摄像头&gt;/&lt;日期&gt;/</code>，缩时片段存 <code style="font-size:10.5px">' + esc(REC.dir) + '/_clip/&lt;摄像头&gt;/&lt;日期&gt;/</code></div>'
     + '</div>'
     + '<div class="fld2">'
@@ -2123,6 +2985,7 @@ function cardRec(){
     + '</div>'
     + '<div class="hint" style="margin-top:8px">按<b>日期整目录删</b>，不在录像时倒数计时。含 <code style="font-size:10.5px">.part</code> 或待压缩文件的目录会跳过并告警。</div>'
     + '<button class="btnline" id="btnCleanNow" style="margin-top:10px">立即预览清理（不删除）</button>'
+    + '<div class="hint" id="cleanPreview" style="margin-top:8px;display:none"></div>'
     + '<div class="cleanline" style="margin-top:9px"><i class="dot"></i><span>上次 ' + REC.lastClean.at.slice(5)
       + ' 删除 <b>' + REC.lastClean.dirs + ' 个日期目录 / ' + REC.lastClean.files + ' 个文件</b>，释放 ' + REC.lastClean.freed + ' GB</span></div>'
   + '</div>';
@@ -2153,6 +3016,16 @@ function cardLink(){
       + '<div class="h">分片越短，"录完"到"开压"的间隔越短；太碎又会让静止判定的上下文不够。5 分钟是平衡点。</div>'
     + '</div>'
     + '<div class="srow">'
+      + '<div class="top"><span class="n">同时处理</span><span class="v">' + GS.conc + ' 路</span></div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (GS.conc===1?"on":"") + '" data-conc="1">串行 · 1 路</button>'
+        + '<button class="chip ' + (GS.conc===2?"on":"") + '" data-conc="2">并行 · 2 路</button>'
+      + '</div>'
+      + '<div class="h">压制是 CPU 活，串行最稳；并行 2 路适合白天闲时。</div>'
+    + '</div>'
+    + '<div class="swrow"><span>只在夜间跑重编码</span><div class="sw ' + (GS.nightOnly?"on":"") + '" data-gs="nightOnly"></div></div>'
+    + '<div class="swrow"><span>低优先级 · 磁盘空闲才写</span><div class="sw ' + (GS.lowPrio?"on":"") + '" data-gs="lowPrio"></div></div>'
+    + '<div class="srow">'
       + '<div class="top"><span class="n">处理队列</span><span class="v" style="color:' + (LK.pending?"var(--primary)":"var(--keep)") + '">'
         + (LK.pending ? "处理中 · " + LK.pending + " 项" : "空闲") + '</span></div>'
       + '<div class="h">已压制 ' + LK.done + ' · 静默 ' + LK.silent + (LK.failed ? ' · <span style="color:var(--warn)">失败 ' + LK.failed + '</span>' : '') + (LK.lastItem ? ' · 最近 ' + LK.lastItem : '') + '</div>'
@@ -2162,39 +3035,6 @@ function cardLink(){
   + '</div>';
 }
 
-function cardGpu(){
-  const cpuPct = GS.gpu ? (GS.conc===2 ? 17 : 9) : (GS.conc===2 ? 178 : 96);
-  const memMB  = 78 + (GS.gpu ? 205 : 330) * GS.conc;
-  return '<div class="gcard">'
-    + '<h3>硬件与资源 <span class="sub">所有摄像头共用</span></h3>'
-    + '<div class="detect" style="margin:0 0 10px">'
-      + '<span class="k" style="background:' + (GS.gpu ? "var(--live)" : "var(--faint2)") + '"></span>'
-      + '<span>' + (GS.gpu
-          ? "核显可用 · <b>Intel UHD 730 / QSV</b>，解码与编码都不占 CPU"
-          : "已关闭 · 回落 <b>x265 软件编码</b>，单路吃满 1 个核，速度约 1/10") + '</span>'
-    + '</div>'
-    + '<div class="swrow"><span>解码 + 编码走核显</span><div class="sw ' + (GS.gpu?"on":"") + '" data-gs="gpu"></div></div>'
-    + '<div class="srow">'
-      + '<div class="top"><span class="n">同时处理</span><span class="v">' + GS.conc + ' 路</span></div>'
-      + '<div class="chips">'
-        + '<button class="chip ' + (GS.conc===1?"on":"") + '" data-conc="1">串行 · 1 路</button>'
-        + '<button class="chip ' + (GS.conc===2?"on":"") + '" data-conc="2">并行 · 2 路</button>'
-      + '</div>'
-      + '<div class="h">UHD 730 只有一个媒体引擎；2 路已接近线性，3 路以上开始抢磁盘。</div>'
-    + '</div>'
-    + '<div class="swrow"><span>只在夜间跑重编码</span><div class="sw ' + (GS.nightOnly?"on":"") + '" data-gs="nightOnly"></div></div>'
-    + '<div class="swrow"><span>低优先级 · 磁盘空闲才写</span><div class="sw ' + (GS.lowPrio?"on":"") + '" data-gs="lowPrio"></div></div>'
-    + '<div class="swrow"><span>缩略图合并成雪碧图</span><div class="sw ' + (GS.sprite?"on":"") + '" data-gs="sprite"></div></div>'
-    + '<div class="srow">'
-      + '<div class="top"><span class="n">当前占用</span><span class="v" style="color:var(--live)">' + (GS.conc===1?"待机":"处理中 · 2 路") + '</span></div>'
-      + '<div class="bars">'
-        + '<div class="bcell"><div class="k">CPU</div><div class="num">' + cpuPct + '%</div><div class="track"><i style="width:' + Math.min(100,cpuPct) + '%;background:' + (cpuPct>60?"#e0862c":"var(--primary)") + '"></i></div></div>'
-        + '<div class="bcell"><div class="k">内存</div><div class="num">' + memMB + ' MB</div><div class="track"><i style="width:' + Math.min(100,memMB/20) + '%"></i></div></div>'
-        + '<div class="bcell"><div class="k">缩略图</div><div class="num">' + (GS.sprite?0.4:2.9) + ' GB</div><div class="track"><i style="width:' + Math.min(100,(GS.sprite?0.4:2.9)*20) + '%"></i></div></div>'
-      + '</div>'
-    + '</div>'
-  + '</div>';
-}
 
 function cardLook(){
   return '<div class="gcard">'
@@ -2219,6 +3059,7 @@ function cardDiag(){
     +   '<button class="logbtn" id="btnLogCopy">复制日志</button>'
     +   '<button class="logbtn danger" id="btnLogClear">清除日志</button>'
     + '</div>'
+    + '<button class="btnline" id="btnDiag">导出诊断包</button>'
     + '<button class="btnline" id="btnRestart">重启服务（加载最新代码）</button>'
     + '<div class="h" style="margin-top:10px;line-height:1.6">局域网直连 <b>http://&lt;NAS 的 IP&gt;:' + REC.port + '</b>。服务监听 0.0.0.0，桌面入口与本机端口互不影响。</div>'
   + '</div>';
@@ -2260,7 +3101,8 @@ async function loadDiagEnv(){
 async function restartDiag(){
   const btn = document.getElementById("btnRestart");
   try{
-    const r = await fetch("/api/restart", { method:"POST", mode:"same-origin" });
+    const r = await fetch("/api/restart", { method:"POST", mode:"same-origin",
+      headers:{ "Content-Type":"application/json", "X-NVR-Request":"1" }, body:"{}" });
     const d = await r.json().catch(()=>null);
     if(r.ok && d && d.ok){
       if(btn){ btn.disabled = true; btn.textContent = "正在重启…"; }
@@ -2312,9 +3154,150 @@ async function copyDiagLog(){
   }
 }
 async function clearDiagLog(){
-  try{ await fetch("/api/log/clear", { method:"POST", mode:"same-origin" }); }catch(e){}
+  try{ await apiPost("/api/log/clear", {}); }catch(e){}
   await loadDiagLog();
   toast("toast2", "日志已清除");
+}
+
+/* ---------------- 清理：预览 → 二次确认 → 真删 ---------------- */
+/* 以前这个按钮只弹一句写死的"释放 41.2 GB"，什么都没发生。
+   现在真的走 /api/retention/cleanup：先 dry_run 出计划，用户看清要删什么，
+   再点一次"确认删除"才执行 —— 涉及 rmtree，必须两段。 */
+let cleanArm = 0;
+let cleanPlan = null;   /* 预览时拿到的 [{path, fp}]，确认删除时原样带回服务端 */
+async function previewCleanup(btn){
+  const box = document.getElementById("cleanPreview");
+  if(cleanArm && Date.now() - cleanArm < 15000){
+    cleanArm = 0;
+    if(btn){ btn.disabled = true; btn.textContent = "正在删除…"; }
+    try{
+      /* 只删刚才预览里列出来的那些目录（带指纹）。中间要是又录出新的一天，
+         不会被顺手删掉 —— 用户确认的是他看过的那份清单。 */
+      const plan = cleanPlan || [];
+      const d = await apiPost("/api/retention/cleanup",
+                              { dry_run: false, paths: plan });
+      cleanPlan = null; cleanArm = 0;
+      if(!d){ toast("toast2", "删除失败：服务端无响应"); return; }
+      if(d.ok === false && d.error){ toast("toast2", "删除失败：" + d.error); return; }
+      const nd = (d.deleted||[]).length, nf = (d.failed||[]).length;
+      const ns = (d.skipped||[]).length;
+      const mb = d.freed_mb != null ? d.freed_mb : Math.round((d.freed_bytes||0)/1048576*10)/10;
+      toast("toast2", "已删除 " + nd + " 个目录 / " + (d.files||0)
+            + " 个文件，释放 " + mb + " MB"
+            + (ns ? "；" + ns + " 个因内容已变化被跳过" : "")
+            + (nf ? "；" + nf + " 个失败（见日志）" : ""));
+      if(box){
+        box.style.display = "block";
+        box.innerHTML = nd
+          ? "已删除 <b>" + nd + " 个目录 / " + (d.files||0) + " 个文件</b>，释放 <b>"
+            + mb + " MB</b>　（" + esc(d.at || "") + "）"
+          : "<b>本次没有删除任何目录</b>"
+            + (ns ? "；" + ns + " 个目录在预览后内容有变化，已跳过 —— 请重新预览"
+                  + "　<b>再点一次按钮重新预览</b>" : "");
+      }
+      await loadRetention();
+      loadDiagLog();
+    }catch(e){
+      toast("toast2", "删除失败：" + e);
+    }finally{
+      if(btn){ btn.disabled = false; btn.textContent = "立即预览清理（不删除）"; }
+    }
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = "正在统计…"; }
+  try{
+    const d = await apiPost("/api/retention/cleanup", { dry_run: true });
+    const p = (d && d.preview) || {};
+    /* 记住这份清单，第二次点击时原样带回服务端 */
+    cleanPlan = (d && Array.isArray(d.items) ? d.items : [])
+      .map(it => ({ path: it.path, fp: it.fp }))
+      .filter(it => it.path && it.fp);
+    if(box){
+      box.style.display = "block";
+      box.innerHTML = "将删除 <b>" + (p.delete_count||0) + " 个日期目录 / "
+        + (p.files||0) + " 个文件</b>，释放 <b>" + (p.freed_mb||0) + " MB</b>"
+        + (p.protected_count ? "；<b style='color:var(--warn)'>" + p.protected_count
+            + " 个目录因正在写入/待压缩被跳过</b>" : "")
+        + "<br>目录：" + esc((d && d.record_dir) || REC.dir)
+        + (cleanPlan.length ? "　<b>再点一次按钮确认删除</b>" : "　（没有可删的目录）");
+    }
+    if(cleanPlan.length){
+      cleanArm = Date.now();
+      if(btn) btn.textContent = "确认删除这 " + cleanPlan.length + " 个目录";
+      toast("toast2", "预览完成 · 再点一次才真正删除");
+      setTimeout(()=>{
+        if(cleanArm && Date.now() - cleanArm >= 14900){
+          cleanArm = 0; cleanPlan = null;
+          if(document.getElementById("btnCleanNow")){
+            document.getElementById("btnCleanNow").textContent = "立即预览清理（不删除）";
+          }
+        }
+      }, 15200);
+    }else{
+      toast("toast2", "预览完成：没有过期目录需要删除");
+    }
+  }catch(e){
+    toast("toast2", "预览失败：" + e);
+  }finally{
+    if(btn) btn.disabled = false;
+    if(btn && !cleanArm) btn.textContent = "立即预览清理（不删除）";
+  }
+}
+
+async function loadRetention(){
+  try{
+    const d = await apiGet("/api/retention");
+    if(!d || d.ok === false) return;
+    if(d.last && d.last.at){
+      REC.lastClean = {
+        at: d.last.at, dirs: d.last.deleted_dirs || 0,
+        files: d.last.files || 0,
+        freed: Math.round((d.last.freed_mb || 0) / 1024 * 10) / 10
+      };
+    }
+  }catch(e){}
+}
+
+/* ---------------- 诊断导出：真的下载一份 ---------------- */
+function exportDiag(btn){
+  if(btn){ btn.disabled = true; btn.textContent = "正在导出…"; }
+  try{
+    const a = document.createElement("a");
+    a.href = "/api/log/export?_t=" + Date.now();
+    a.download = "";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{ a.remove(); }, 0);
+    toast("toast2", "诊断包已开始下载（凭据已脱敏）");
+  }catch(e){
+    toast("toast2", "导出失败：" + e);
+  }finally{
+    setTimeout(()=>{ if(btn){ btn.disabled = false; btn.textContent = "导出诊断包"; } }, 800);
+  }
+}
+
+/* ---------------- 扫描：列出真实的磁盘占用 ---------------- */
+async function runScan(btn){
+  if(btn) btn.disabled = true;
+  toast("toast2", "正在扫描录像目录…");
+  try{
+    const d = await apiPost("/api/scan", {});
+    if(!d || !d.ok){ toast("toast2", "扫描失败：服务端无响应"); return; }
+    const rows = d.channels || [];
+    const empty = rows.filter(r => !r.files).map(r => r.name);
+    const msg = "扫描完成：" + rows.reduce((a,r)=>a+(r.files||0),0) + " 个分片 / "
+      + (Math.round((d.total && d.total.bytes || 0)/1048576/102.4)/10) + " GB"
+      + (empty.length ? "；无数据：" + empty.join("、") : "");
+    toast("toast2", msg);
+    loadDiagLog();
+    fetchRecordings();
+    renderCamTabs();
+  }catch(e){
+    toast("toast2", "扫描失败：" + e);
+  }finally{
+    if(btn) btn.disabled = false;
+  }
 }
 
 /* ---------------- 摄像头列表 ---------------- */
@@ -2380,8 +3363,15 @@ function renderCamRead(c, p){
     + '<div class="sub">'
       + '<h4>保留周期</h4>'
       + roRow("全时录像", p.fullDays + " 天")
-      + roRow("缩时片段", p.clipDays + " 天")
       + roRow("该路状态", p.enabled ? "启用" : "已停用", p.enabled ? "" : "dim")
+    + '</div>'
+    + '<div class="sub">'
+      + '<h4>缩时压制 <em>' + (p.condense !== false ? "已开启" : "已关闭") + '</em></h4>'
+      + roRow("功能开关", p.condense !== false ? "开启" : "关闭 · 只录全时")
+      + (p.condense !== false
+        ? roRow("缩时片段保留", p.clipDays + " 天")
+          + roRow("输出倍速", (p.clipSpeed || 1) + "×")
+        : "")
     + '</div>'
     + '<div class="sub">'
       + '<h4>事件判定 <em>灵敏度 ' + p.sensitivity + '%</em></h4>'
@@ -2430,30 +3420,68 @@ function renderCamEdit(c, p){
         + '<input type="text" class="mono" value="' + esc(p.sub) + '" data-k="sub" placeholder="rtsp://192.168.2.108:554/stream2"></div>'
       + '<div class="hint" style="margin-top:2px;font-size:10.5px">需要认证就把用户名密码写进地址：<code style="font-size:10px">rtsp://user:pass@ip:554/...</code></div>'
     + '</div>'
-    /* 保留 + 启用：紧跟在码流地址下面，先定“存多久”再调画面 */
     + '<div class="sub">'
-      + '<h4>保留周期</h4>'
+      + '<h4>录制分片 <em>' + (p.segSec ? segLabel(p.segSec) : "跟随通用设置 " + segLabel(LK.segSec)) + '</em></h4>'
+      + '<div class="chips" style="margin-top:0">'
+        + [0,60,120,300,600,900].map(v=>
+            '<button class="chip ' + ((p.segSec||0)===v?"on":"") + '" data-camseg="' + v + '">'
+            + (v ? segLabel(v) : "跟随") + '</button>').join("")
+      + '</div>'
+      + '<div class="h">分片长度写进 ffmpeg 命令行，改了会<b>优雅重启这一路录制</b>（当前分片先写完 moov 再切），不会丢数据。'
+        + '越短越"实时"（压制更快看到），但碎片也越多；5 分钟是通用平衡点。</div>'
+    + '</div>'
+
+    /* 保留 + 启用：全时保留周期在这里；缩时保留在下面的缩时压制菜单里 */
+    + '<div class="sub">'
+      + '<h4>保留周期 <em>全时录像</em></h4>'
       + '<div class="srow" style="padding-top:0;border-top:none">'
-        + '<div class="top"><span class="n">全时录像</span><span class="v" data-out="fullDays">' + p.fullDays + ' 天</span></div>'
+        + '<div class="top"><span class="n">全时录像保留</span><span class="v" data-out="fullDays">' + p.fullDays + ' 天</span></div>'
         + '<div class="stepper"><button data-ret="fullDays" data-d="-1">−</button><span class="val">' + p.fullDays + ' 天</span><button data-ret="fullDays" data-d="1">+</button></div>'
       + '</div>'
-      + '<div class="srow">'
-        + '<div class="top"><span class="n">缩时片段</span><span class="v" data-out="clipDays">' + p.clipDays + ' 天</span></div>'
-        + '<div class="stepper"><button data-ret="clipDays" data-d="-1">−</button><span class="val">' + p.clipDays + ' 天</span><button data-ret="clipDays" data-d="1">+</button></div>'
-      + '</div>'
+      + '<div class="h">全时录像体积大（一路约 20~30 GB/天），保留天数建议按可用空间估；缩时片段的保留天数在下方「缩时压制」里单独设置。</div>'
       + '<div class="swrow" style="margin-top:4px"><span>该摄像头启用</span><div class="sw ' + (p.enabled?"on":"") + '" data-en="1"></div></div>'
     + '</div>'
 
-    /* 事件判定 */
+    /* 缩时压制：每路总开关 + 折叠菜单。
+       关掉总开关这一路只录全时，下面的判定/画质/倍速参数全部失效；
+       菜单折叠只影响显示，参数仍按已保存的值生效。 */
     + '<div class="sub">'
-      + '<h4>事件判定 <em>越低越保守</em></h4>'
-      + rangeRow("灵敏度", "sensitivity", p.sensitivity, 5, 95, 1, "只留明显动作，树影/雨雪不易误报")
-      + rangeRow("最短保留", "minKeep", p.minKeep, 2, 60, 1, "短于这个时长的碎片并入相邻片段")
-      + rangeRow("静默合并", "mergeGap", p.mergeGap, 0, 120, 1, "两段之间空白短于此值就拼成一段")
+      + '<h4 style="display:flex;align-items:center;gap:8px;cursor:pointer" data-tltoggle="1">'
+        + '<span>缩时压制</span>'
+        + '<em>' + (p.condense !== false ? "已开启" : "已关闭 · 只录全时") + '</em>'
+        + '<span style="margin-left:auto;font-size:11px;color:var(--faint);font-weight:400">'
+          + (SET.tlOpen ? "收起 ⌃" : "展开 ⌄") + '</span>'
+      + '</h4>'
+      + '<div class="swrow" style="padding-top:0;border-top:none"><span>缩时压制总开关 <span class="h" style="display:inline">关掉后全时照录，只是不再产出缩时片段</span></span>'
+        + '<div class="sw ' + (p.condense !== false ? "on":"") + '" data-cond="1"></div></div>'
     + '</div>'
+    + (SET.tlOpen ? (
+      '<div class="' + (p.condense !== false ? "" : "dim") + '">'
+      + '<div class="sub">'
+        + '<h4>缩时片段 <em>保留与倍速</em></h4>'
+        + '<div class="srow" style="padding-top:0;border-top:none">'
+          + '<div class="top"><span class="n">缩时片段保留</span><span class="v" data-out="clipDays">' + p.clipDays + ' 天</span></div>'
+          + '<div class="stepper"><button data-ret="clipDays" data-d="-1">−</button><span class="val">' + p.clipDays + ' 天</span><button data-ret="clipDays" data-d="1">+</button></div>'
+        + '</div>'
+        + '<div class="srow">'
+          + '<div class="top"><span class="n">输出倍速</span><span class="v">' + (p.clipSpeed||1) + '×</span></div>'
+          + '<div class="chips">'
+            + [1,2,4,8].map(v=>'<button class="chip ' + ((p.clipSpeed||1)===v?"on":"") + '" data-speed="' + v + '">' + v + '×</button>').join("")
+          + '</div>'
+          + '<div class="h">2× = 有车经过的 10 秒事件压成 5 秒，时间缩短一半、体积也约按比例缩小。倍数大于 1 时导出要从流复制切到重编码，CPU 占用会明显上升；NAS 空闲时建议先用 2× 观察。</div>'
+        + '</div>'
+      + '</div>'
 
-    /* 输出压缩 */
-    + '<div class="sub">'
+      /* 事件判定 */
+      + '<div class="sub">'
+        + '<h4>事件判定 <em>越低越保守</em></h4>'
+        + rangeRow("灵敏度", "sensitivity", p.sensitivity, 5, 95, 1, "只留明显动作，树影/雨雪不易误报")
+        + rangeRow("最短保留", "minKeep", p.minKeep, 2, 60, 1, "短于这个时长的碎片并入相邻片段")
+        + rangeRow("静默合并", "mergeGap", p.mergeGap, 0, 120, 1, "两段之间空白短于此值就拼成一段")
+      + '</div>'
+
+      /* 输出压缩 */
+      + '<div class="sub">'
       + '<h4>输出压缩 <em id="outSub">约 ' + mb.toFixed(1) + ' Mbps · ' + gb.toFixed(1) + ' GB/天</em></h4>'
       + '<div class="chips" style="margin-top:0">'
         + '<button class="chip ' + (p.mode==="fast"?"on":"") + '" data-mode2="fast">快速 · 流复制</button>'
@@ -2476,16 +3504,14 @@ function renderCamEdit(c, p){
     /* 画面区域：上下两组 16×9 方块预选，各自独立菜单 */
     + '<div class="sub">'
       + '<h4>检测忽略区 <em id="igCnt">已选 ' + p.masks.ignore.length + ' 格</em></h4>'
-      + '<div class="mtip" style="margin-top:0"><b style="color:var(--warn)">忽略区</b>：区域内变化不算事件，画面照常保留。适合树影、马路。<b>按住拖动多选，点一下已选的格子取消。</b></div>'
+      + '<div class="mtip" style="margin-top:0"><b style="color:var(--warn)">忽略区</b>：这块区域里的画面变化<b>不算事件</b>，不会触发片段切出；录像本身完整保留。适合树影、马路、晃动的广告牌。<b>按住拖动多选，点一下已选的格子取消。</b></div>'
       + '<div class="maskstage"><img class="mimg" id="maskImg-ig" alt=""><canvas id="maskCv-ig"></canvas></div>'
-    + '</div>'
-    + '<div class="sub">'
-      + '<h4>输出遮蔽区 <em id="rdCnt">已选 ' + p.masks.redact.length + ' 格</em></h4>'
-      + '<div class="mtip" style="margin-top:0"><b style="color:var(--danger)">遮蔽区</b>：导出画面里打成黑块，谁都看不到，也不会触发事件。<b>按住拖动多选，点一下已选的格子取消。</b></div>'
-      + '<div class="maskstage"><img class="mimg" id="maskImg-rd" alt=""><canvas id="maskCv-rd"></canvas></div>'
       + '<div class="mlist" id="mlist"></div>'
     + '</div>'
-
+    + '</div>'
+    + (p.condense !== false ? ''
+        : '<div class="hint" style="margin:2px 2px 0">缩时压制总开关已关闭：以上判定 / 压制 / 忽略区参数暂不生效，开启后恢复。</div>')
+    ) : '')
 
     + '<div class="editbar">'
       + '<button class="no" data-cancel="1">取消</button>'
@@ -2569,21 +3595,18 @@ function maskArr(kind){
   return p.masks[kind] || (p.masks[kind] = []);
 }
 function maskCount(m){
-  m = normMasks(m);
-  return m.ignore.length + m.redact.length;
+  return normMasks(m).ignore.length;
 }
 function maskCountLine(m){
   m = normMasks(m);
-  if(!m.ignore.length && !m.redact.length)
-    return '<span style="font-size:11.5px;color:var(--faint2)">还没有区域</span>';
-  const seg = [];
-  if(m.ignore.length) seg.push('<span class="mitem"><i style="background:#e0a33a"></i>忽略区 ' + m.ignore.length + ' 格</span>');
-  if(m.redact.length) seg.push('<span class="mitem"><i style="background:var(--danger)"></i>遮蔽区 ' + m.redact.length + ' 格</span>');
-  return '<div class="mlist">' + seg.join("") + '</div>';
+  if(!m.ignore.length)
+    return '<span style="font-size:11.5px;color:var(--faint2)">还没有忽略区</span>';
+  return '<div class="mlist"><span class="mitem"><i style="background:#e0a33a"></i>忽略区 '
+    + m.ignore.length + ' 格</span></div>';
 }
 
 function drawMaskScene(){
-  ["maskCv", "maskCv-ig", "maskCv-rd"].forEach(drawGridCv);
+  ["maskCv", "maskCv-ig"].forEach(drawGridCv);
 }
 
 function drawGridCv(id){
@@ -2597,7 +3620,7 @@ function drawGridCv(id){
   if(cv.width !== cw || cv.height !== ch){ cv.width = cw; cv.height = ch; }
   const c = cv.getContext("2d");
   c.setTransform(dpr,0,0,dpr,0,0);
-  const kind = id === "maskCv" ? "both" : (id === "maskCv-ig" ? "ignore" : "redact");
+  const kind = id === "maskCv" ? "both" : "ignore";
 
   /* 底图：有快照就让画布透明叠在上面；没有就画示意场景占位 */
   const img = document.getElementById(id.replace("Cv", "Img"));
@@ -2623,15 +3646,12 @@ function drawGridCv(id){
       if(stroke){ c.strokeStyle = stroke; c.lineWidth = 1; c.strokeRect(col*cellW+.5, row*cellH+.5, cellW-1, cellH-1); }
     });
   };
-  if(kind === "both" || kind === "ignore")
-    fillCells("ignore", "rgba(240,180,40,.42)", "rgba(240,180,40,.9)");
-  if(kind === "both" || kind === "redact")
-    fillCells("redact", "rgba(12,14,18,.94)", "rgba(220,70,70,.85)");
+  fillCells("ignore", "rgba(240,180,40,.42)", "rgba(240,180,40,.9)");
 
   /* 拖动中的预览 */
   if(gdrag && gdrag.kind === kind){
     const cells = rectCells(gdrag.c0, gdrag.r0, gdrag.c1, gdrag.r1);
-    c.fillStyle = gdrag.kind === "redact" ? "rgba(220,70,70,.30)" : "rgba(240,180,40,.34)";
+    c.fillStyle = "rgba(240,180,40,.34)";
     cells.forEach(idx=>{
       const col = idx % GRID_COLS, row = (idx - col) / GRID_COLS;
       c.fillRect(col*cellW, row*cellH, cellW, cellH);
@@ -2668,26 +3688,24 @@ function cellAt(cv, e){
 
 function renderMasks(){
   const box = document.getElementById("mlist");
-  if(!box) return;
-  const ig = maskArr("ignore"), rd = maskArr("redact");
-  const item = (label, color, n, kind)=> n
-    ? '<span class="mitem"><i style="background:' + color + '"></i>' + label + ' ' + n + ' 格'
-      + '<span class="x" data-clrmask="' + kind + '">清空</span></span>'
-    : '<span class="mitem"><i style="background:' + color + '"></i>' + label + ' 0 格</span>';
-  box.innerHTML = item("忽略区", "#e0a33a", ig.length, "ignore")
-                + item("遮蔽区", "var(--danger)", rd.length, "redact");
-  box.querySelectorAll("[data-clrmask]").forEach(el=>{
-    el.onclick = ()=>{ maskArr(el.dataset.clrmask).length = 0; renderMasks(); drawMaskScene(); };
-  });
-  const igN = document.getElementById("igCnt"), rdN = document.getElementById("rdCnt");
+  const ig = maskArr("ignore");
+  if(box){
+    box.innerHTML = ig.length
+      ? '<span class="mitem"><i style="background:#e0a33a"></i>忽略区 ' + ig.length + ' 格'
+        + '<span class="x" data-clrmask="ignore">清空</span></span>'
+      : '<span class="mitem"><i style="background:#e0a33a"></i>忽略区 0 格</span>';
+    box.querySelectorAll("[data-clrmask]").forEach(el=>{
+      el.onclick = ()=>{ maskArr(el.dataset.clrmask).length = 0; renderMasks(); drawMaskScene(); };
+    });
+  }
+  const igN = document.getElementById("igCnt");
   if(igN) igN.textContent = "已选 " + ig.length + " 格";
-  if(rdN) rdN.textContent = "已选 " + rd.length + " 格";
 }
 
 /* 关键：每次重绘设置页都会换掉 canvas 元素，所以绑定必须跟着渲染走，
    不能只在启动时绑一次 —— 这正是之前"画不出任何区域"的原因。 */
 function bindMaskCanvas(){
-  [["maskCv-ig","ignore"],["maskCv-rd","redact"]].forEach(([id, kind])=>{
+  [["maskCv-ig","ignore"]].forEach(([id, kind])=>{
     const cv = document.getElementById(id);
     if(!cv) return;
 
@@ -2824,7 +3842,7 @@ function genSummary(){
     + " · 目录 " + REC.dir
     + " · " + (LK.mode === "live" ? "即刻压制" : "每 " + LK.intervalH + " 小时压制")
     + " · 分片 " + Math.round(LK.segSec/60) + " 分钟"
-    + " · " + (GS.gpu ? "核显" : "软编") + " " + GS.conc + " 路"
+    + " · " + GS.conc + " 路"
     + " · 每天 " + REC.cleanupAt + " 清理";
 }
 
@@ -2832,10 +3850,10 @@ function renderGenZone(){
   let h = '<div class="zone gen">'
     + '<div class="zonehead" data-gentoggle="1">'
     + '<span class="zi">⚙</span>'
-    + '<div><b>通用设置</b><div class="zs">所有摄像头共用 · 录制 / 压制 / 硬件 / 外观 / 诊断</div></div>'
+    + '<div><b>通用设置</b><div class="zs">所有摄像头共用 · 录制 / 压制 / 外观 / 诊断</div></div>'
     + '<span class="chev">' + (SET.genOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>';
   if(SET.genOpen){
-    h += cardRec() + cardLink() + cardGpu() + cardLook() + cardDiag()
+    h += cardRec() + cardLink() + cardLook() + cardDiag()
       + '<div class="editbar"><button class="ok" data-gensave="1">保存通用设置</button></div>';
   }else{
     h += '<div class="gcard genfold"><div class="genline">' + genSummary() + '</div>'
@@ -2897,16 +3915,54 @@ function bindSettings(body){
   body.querySelectorAll("[data-cleanat]").forEach(el=>{
     el.onclick = ()=>{ REC.cleanupAt = el.dataset.cleanat; renderCamTabs(); };
   });
+  /* 保存目录：默认锁定，点「修改」展开编辑框。
+     「检测并保存」先让后端真实探测（存在性 + 写权限），通过才落配置 ——
+     以前直接改文本框就把值推上去了，目录写不进要等录像失败才发现。 */
+  const de = body.querySelector("#btnDirEdit");
+  if(de) de.onclick = ()=>{
+    const box = body.querySelector("#dirEditBox");
+    if(!box) return;
+    const show = box.style.display === "none";
+    box.style.display = show ? "" : "none";
+    de.textContent = show ? "收起" : "修改";
+  };
   const rd = body.querySelector("#recDir");
-  if(rd) rd.onchange = ()=>{
-    REC.dir = rd.value.trim() || REC.dir;
-    toast("toast2", "目录已记录 · 重启应用后生效");
-    renderCamTabs();
+  const ds = body.querySelector("#btnDirSave");
+  if(ds) ds.onclick = async ()=>{
+    const out = body.querySelector("#dirCheckOut");
+    const p = ((rd && rd.value) || "").trim();
+    if(!p){ if(out) out.textContent = "请先填写路径"; return; }
+    ds.disabled = true; ds.textContent = "正在检测…";
+    if(out) out.textContent = "正在检测目录是否存在、是否可写…";
+    try{
+      const d = await apiPost("/api/dir/check", { path: p, create: true });
+      if(d && d.ok){
+        REC.dir = d.path || p;
+        saveCfgSoon();
+        if(out) out.innerHTML = '<span style="color:var(--keep)">✓ ' + esc(REC.dir)
+          + (d.created ? "（目录已自动创建）" : "") + ' · 可写，已保存</span>';
+        toast("toast2", "保存目录已更新 · 录制立即写入新目录");
+        setTimeout(()=>{ try{ renderCamTabs(); updateResBar(); }catch(e){} }, 600);
+      }else{
+        if(out) out.innerHTML = '<span style="color:var(--danger)">✗ '
+          + esc((d && d.error) || "检测失败") + '</span>';
+      }
+    }catch(e){
+      if(out) out.innerHTML = '<span style="color:var(--danger)">✗ 检测请求失败：'
+        + esc(String(e)) + '</span>';
+    }finally{
+      ds.disabled = false; ds.textContent = "检测并保存";
+    }
   };
   const cn = body.querySelector("#btnCleanNow");
-  if(cn) cn.onclick = ()=> toast("toast2", "预览：将删除 6 个日期目录 / 1247 个文件，释放 41.2 GB（未执行）");
+  if(cn) cn.onclick = ()=> previewCleanup(cn);
+  // 每路「诊断」：真跑一次 ffprobe + 8 秒试录，把"是摄像头的问题还是
+  // ffmpeg 的问题"当场定死。之前只显示一行 ffmpeg 英文原文，用户没法判断。
+  body.querySelectorAll("[data-probe]").forEach(el=>{
+    el.onclick = ()=> runProbe(el.dataset.probe, el);
+  });
   const dg = body.querySelector("#btnDiag");
-  if(dg) dg.onclick = ()=> toast("toast2", "诊断日志已导出（凭据已脱敏）");
+  if(dg) dg.onclick = ()=> exportDiag(dg);
 
   /* 诊断日志：直接看 / 复制 / 清除 */
   const lr = body.querySelector("#btnLogRefresh");
@@ -2945,9 +4001,7 @@ function bindSettings(body){
   const lkRun = body.querySelector("#btnLinkRun");
   if(lkRun) lkRun.onclick = ()=>{
     lkRun.disabled = true; lkRun.textContent = "正在触发…";
-    fetch("/api/link/run", { method:"POST", mode:"same-origin",
-      headers:{ "Content-Type":"application/json" }, body:"{}" })
-      .then(r=>r.json()).then(d=>{
+    apiPost("/api/link/run", {}).then(d=>{
         if(d && d.ok && d.link) applyLink(d.link);
         const n = (d && d.link && d.link.pending) || 0;
         toast("toast2", n ? "已入队，待处理 " + n + " 项" : "本轮没有新的已封口分片");
@@ -3024,6 +4078,15 @@ function bindSettings(body){
   if(nm) nm.oninput = ()=>{ const c = curCam(); if(c) c.name = nm.value; };
 
   /* 编辑态：快照型按钮（点击后重绘） */
+  body.querySelectorAll("[data-camseg]").forEach(el=>{
+    el.onclick = ()=>{
+      draftSet("segSec", +el.dataset.camseg);
+      renderCamTabs();
+      const v = +el.dataset.camseg;
+      toast("toast2", v ? "分片改为 " + segLabel(v) + " · 保存后重启这一路录制"
+                        : "改为跟随通用设置 " + segLabel(LK.segSec));
+    };
+  });
   body.querySelectorAll("[data-mode2]").forEach(el=>{
     el.onclick = ()=>{ draftSet("mode", el.dataset.mode2); renderCamTabs(); };
   });
@@ -3035,6 +4098,22 @@ function bindSettings(body){
   });
   body.querySelectorAll("[data-en]").forEach(el=>{
     el.onclick = ()=>{ draftSet("enabled", !draftGet("enabled")); renderCamTabs(); };
+  });
+  /* 缩时压制：折叠菜单 / 每路总开关 / 输出倍速（草稿态，点保存才落盘） */
+  body.querySelectorAll("[data-tltoggle]").forEach(el=>{
+    el.onclick = ()=>{ SET.tlOpen = !SET.tlOpen; renderCamTabs(); };
+  });
+  body.querySelectorAll("[data-cond]").forEach(el=>{
+    el.onclick = ()=>{
+      draftSet("condense", !draftGet("condense"));
+      renderCamTabs();
+    };
+  });
+  body.querySelectorAll("[data-speed]").forEach(el=>{
+    el.onclick = ()=>{
+      draftSet("clipSpeed", +el.dataset.speed || 1);
+      renderCamTabs();
+    };
   });
   /* 通用设置：展开 / 收起 / 保存并折叠 */
   body.querySelectorAll("[data-gentoggle]").forEach(el=>{
@@ -3089,7 +4168,7 @@ function saveCfg(){
       gen: {
         enabled: REC.enabled, dir: REC.dir, cleanupAt: REC.cleanupAt,
         linkMode: LK.mode, intervalH: LK.intervalH, segSec: LK.segSec,
-        gpu: GS.gpu, conc: GS.conc, nightOnly: GS.nightOnly, lowPrio: GS.lowPrio, sprite: GS.sprite
+        gpu: GS.gpu, conc: GS.conc, nightOnly: GS.nightOnly, lowPrio: GS.lowPrio
       }
     }));
   }catch(e){}
@@ -3141,7 +4220,7 @@ function loadCfg(){
   if(g.linkMode) LK.mode = g.linkMode;
   if(g.intervalH) LK.intervalH = g.intervalH;
   if(g.segSec) LK.segSec = g.segSec;
-  ["gpu","conc","nightOnly","lowPrio","sprite"].forEach(k=>{ if(g[k] !== undefined) GS[k] = g[k]; });
+  ["gpu","conc","nightOnly","lowPrio"].forEach(k=>{ if(g[k] !== undefined) GS[k] = g[k]; });
 
   if(!CAMERAS.length){ state.camId = null; }
   else if(!CAMERAS.some(c=>c.id === state.camId)){ state.camId = CAMERAS[0].id; }
@@ -3211,12 +4290,15 @@ function cancelCamDrag(){
 }
 
 /* ================= 回放页只认磁盘上的真实文件 ================= */
-/* 按 state.rec 缓存重算当前摄像头的日期列表（切摄像头时立即可用，不等网络） */
+/* 按 state.rec 缓存重算当前摄像头的日期列表（切摄像头时立即可用，不等网络）
+   以前固定 slice(-7)：保留期设成 30 天也只看得到 7 天，用户会以为"录像丢了"。
+   日期条本来就是横向滚动的，给全量更符合预期。 */
 function recalcDayList(){
   const rec = state.rec || {};
   const src = state.pmode === "clip" ? rec.clips : rec.cameras;
   const days = (src && src[state.camId]) || {};
-  state.dayList = Object.keys(days).sort().slice(-7);
+  const all = Object.keys(days).sort().reverse();     /* 最近的在前 */
+  state.dayList = all.length ? all : [];
   if(state.dayIdx >= state.dayList.length) state.dayIdx = Math.max(0, state.dayList.length-1);
 }
 let recRetry = 0;
@@ -3235,23 +4317,55 @@ function fetchRecordings(){
   });
 }
 
-/* 某天真实分片 → 回放片段（文件名 HH-MM-SS 就是起始时刻） */
+/* 某天真实分片 → 回放片段。
+   两种模式的时间轴语义完全不同：
+     全时录像  文件名 HH-MM-SS 就是起始时刻，时长 = 下一片的起点（末片用 segment_sec）。
+               这是「时间轴定位」，用户要能对着钟点找到 14:23 发生了什么。
+     缩时片段  文件是压缩成品：一个文件覆盖源录像 5 分钟，播放只有十几秒。
+               播放坐标（s/e）仍按真实播放时长从 0 累加，播放器靠它推进；
+               但**展示坐标**（src/srcEnd）取自文件名里的源时刻 —— 0.9.17 之前
+               把播放坐标直接画在钟点轴上，列表里全是 00:00:00 附近、点某个
+               钟点又提示无视频，就是这么来的。热力条 / 列表 / 播放器 OSD
+               一律用 src，播放进度才用 s/e。 */
 function realSegs(camId, day, kind){
   const rec = state.rec || {};
-  const src = kind === "clip" ? rec.clips : rec.cameras;
+  const isClip = kind === "clip";
+  const src = isClip ? rec.clips : rec.cameras;
   const days = src && src[camId];
   const files = days && days[day];
   if(!Array.isArray(files) || !files.length) return null;
+  const segLen = Math.max(10, Math.min(3600, +(rec.segment_sec || LK.segSec || 300)));
   const toS = n=>{ const q = n.slice(0,8).split("-"); return (+q[0])*3600 + (+q[1])*60 + (+q[2]); };
+  const url = n=> "/api/record/file?kind=" + (isClip ? "clip" : "full")
+                + "&cam=" + encodeURIComponent(camId)
+                + "&day=" + day + "&name=" + encodeURIComponent(n);
+
+  if(isClip){
+    let acc = 0;
+    return files.map((f,i)=>{
+      const dur = Math.max(0.2, +f.d || 0);
+      const st = toS(f.n);                    // 源时刻：分片文件名就是起点钟点
+      const next = i+1 < files.length ? toS(files[i+1].n) : Math.min(86400, st + segLen);
+      const en = Math.max(st + 1, next);      // 覆盖到下一片开始（末片按分片长度兜底）
+      const seg = { s: acc, e: acc + dur, src: st, srcEnd: en, dur,
+                    level:.5, reason:"缩时片段", hits:0,
+                    bytes:f.b || 0, file:url(f.n), clip:true, name:f.n };
+      acc += dur;
+      return seg;
+    });
+  }
   return files.map((f,i)=>{
     const s = toS(f.n);
-    const e = i+1 < files.length ? Math.max(s+1, toS(files[i+1].n)) : Math.min(86400, s+300);
-    return { s, e, level:.5, reason:"已录像", hits:0, bytes:f.b || 0,
-             file:"/api/record/file?kind=" + (kind === "clip" ? "clip" : "full")
-                + "&cam=" + encodeURIComponent(camId)
-                + "&day=" + day + "&name=" + encodeURIComponent(f.n) };
+    const e = i+1 < files.length
+      ? Math.max(s+1, toS(files[i+1].n))
+      : Math.min(86400, s + segLen);
+    return { s, e, level:.5, reason:"已录像", hits:0, bytes:f.b || 0, file:url(f.n) };
   });
 }
+
+/* 展示坐标：缩时片段用源时刻（src），全时用自身（s）。热力条/列表/概览统一走这里 */
+function segA(seg){ return seg.src != null ? seg.src : seg.s; }
+function segB(seg){ return seg.srcEnd != null ? seg.srcEnd : seg.e; }
 function curDay(){
   return (state.dayList && state.dayList[state.dayIdx]) || DAYS[state.dayIdx];
 }
@@ -3358,10 +4472,11 @@ function loadDay(){
   }
   recalcDayList();
   const real = realSegs(state.camId, curDay(), "full");
-  state.activity = real || [];          // 磁盘上没有就是没有，绝不拿演示数据充数
-  state.segs = state.pmode === "clip"
-    ? (realSegs(state.camId, curDay(), "clip") || [])   // 缩时模式吃 _clip 成品清单
-    : (real || []);
+  /* 热力条吃「当前模式」的数据：缩时模式下按源时刻展示哪些时段有成片，
+     点格子才能正确过滤出那个时段的缩时片段（以前固定吃全时清单）。 */
+  const clips = state.pmode === "clip" ? (realSegs(state.camId, curDay(), "clip") || []) : null;
+  state.activity = clips || real || [];   // 磁盘上没有就是没有，绝不拿演示数据充数
+  state.segs = clips || (real || []);
   renderDates(); renderOverview(); renderHeat(); renderClips();
   applyPlaybackVisibility();
 }
@@ -3379,19 +4494,28 @@ document.querySelectorAll("[data-pmode]").forEach(el=>{
 });
 
 loadCfg();          /* 先把上次保存的摄像头与参数读回来，再渲染 */
-syncFromServer();   /* 分片长度/衔接节奏/快照间隔以服务端为准，避免两边各说各话 */
-syncLink();         /* 处理队列的真实 pending/done/failed 以服务端为准 */
-fetchRecordings();  /* 回放页只要磁盘上真实存在的录像，有就点亮 */
-pollLive();         /* 立刻同步一次服务端快照状态（否则 localStorage 里的旧 online 会压住真实状态） */
-renderDates();
-renderCamTabs();
-renderLive();
-loadDay();
-layout();
-setTimeout(()=>{ renderCamTabs(); renderLive(); }, 60);
-requestAnimationFrame(loop);
+/* 启动顺序：localStorage 只是缓存，服务端的通道列表才是权威。
+   必须先 syncFromServer 再渲染，否则会先闪一帧演示数据、并且可能把它推上去。 */
+Promise.resolve(syncFromServer()).catch(()=>{}).then(()=>{
+  renderDates();
+  renderCamTabs();
+  renderLive();
+  loadDay();
+  layout();
+  syncLink();         /* 处理队列的真实 pending/done/failed 以服务端为准 */
+  fetchRecordings();  /* 回放页只要磁盘上真实存在的录像，有就点亮 */
+  pollLive();         /* 立刻同步一次服务端快照状态（否则 localStorage 里的旧 online 会压住真实状态） */
+  refreshRes();       /* CPU / 内存 / 核显的真实值，来自 /api/status */
+  /* 资源占用是会变的：开着页面就每 15 秒刷一次（只在这一页可见时） */
+  setInterval(()=>{
+    const onLive = document.querySelector(".page.on");
+    if(onLive && onLive.id === "page-live") refreshRes();
+  }, 15000);
+  setTimeout(()=>{ renderCamTabs(); renderLive(); }, 60);
+  requestAnimationFrame(loop);
+});
 
-document.getElementById("btnScan").onclick = ()=> toast("toast2", "正在扫描 NVR 目录…");
+document.getElementById("btnScan").onclick = ()=> runScan(document.getElementById("btnScan"));
 
 /* ================= 齿轮：快照刷新频率（1~10 秒） =================
    原来这个齿轮是"跳到设置页"的快捷方式，但预览页最常调的其实就是
@@ -3440,26 +4564,50 @@ document.addEventListener("click", ()=>{
    recorder 实际按 5 分钟切，两边各说各话。 */
 function syncFromServer(){
   if(typeof fetch !== "function") return;
-  fetch("/api/config?_t=" + Date.now(), { cache:"no-store", mode:"same-origin" })
-    .then(r=>r.json()).then(d=>{
-      const c = (d && (d.config || d)) || null;
-      if(!c) return;
-      let dirty = false;
-      if(c.record_segment_sec){ const s = +c.record_segment_sec; if(s && s !== LK.segSec){ LK.segSec = s; dirty = true; } }
-      if(c.link_mode && c.link_mode !== LK.mode){ LK.mode = c.link_mode; dirty = true; }
-      if(c.link_interval_h){ const h = +c.link_interval_h; if(h && h !== LK.intervalH){ LK.intervalH = h; dirty = true; } }
-      if(c.snapshot_interval){
-        const n = Math.max(1, Math.min(10, +c.snapshot_interval || 10));
-        if(n !== SNAP.interval){
-          SNAP.interval = n;
-          try{ localStorage.setItem("nvr.snapRate", String(n)); }catch(e){}
-          updateLiveHeader(); renderLive();
-        }
+  return apiGet("/api/config").then(d=>{
+    const c = (d && (d.config || d)) || null;
+    if(!c || d.ok === false) return;
+    let dirty = false;
+    const before = JSON.stringify([LK.segSec, LK.mode, LK.intervalH, REC.dir, REC.enabled]);
+    applyServerCfg(c);
+    /* 通道列表以服务端为准：NAS 上已经配好的机位，不能因为清了浏览器缓存就消失 */
+    if(Array.isArray(c.cameras) && applyServerCams(c.cameras)){
+      serverCamsLoaded = true;
+      dirty = true;
+    }else{
+      /* 服务端也没有通道（全新安装）→ 用演示骨架，并允许推送一次
+         （这样用户直接在页面上填地址就能开始录，不用先跑安装向导） */
+      serverCamsLoaded = true;
+    }
+    if(c.snapshot_interval){
+      const n = Math.max(1, Math.min(10, +c.snapshot_interval || 10));
+      if(n !== SNAP.interval){
+        SNAP.interval = n;
+        try{ localStorage.setItem("nvr.snapRate", String(n)); }catch(e){}
+        updateLiveHeader(); renderLive();
       }
-      if(c.record_dir && !REC.dir){ REC.dir = c.record_dir; dirty = true; }
-      if(dirty){ saveCfg(); try{ renderCamTabs(); }catch(e){} }
-    }).catch(()=>{});
+    }
+    if(c.updated_at && c.updated_at !== serverCfgStamp){
+      serverCfgStamp = c.updated_at;
+      dirty = true;
+    }
+    if(JSON.stringify([LK.segSec, LK.mode, LK.intervalH, REC.dir, REC.enabled]) !== before) dirty = true;
+    if(dirty){
+      saveCfg();
+      try{ renderCamTabs(); renderLive(); renderCamPick(); }catch(e){}
+      try{ fetchRecordings(); }catch(e){}
+    }
+    /* 进页面时如果在 syncFromServer 回来之前就点过「保存」，那次 pushCfg 会被
+       serverCamsLoaded 守卫吞掉（否则会拿演示骨架覆盖真配置）。这里补推一次，
+       用户的修改才不会白改 —— applyServerCams 保留了本地已存在的 camParams，
+       所以补推的就是用户刚才改的那份。 */
+    if(pushPending){
+      pushPending = false;
+      pushCfg();
+    }
+  }).catch(()=>{});
 }
+let serverCfgStamp = null;
 /* ================= 明暗主题 =================
    auto    : 跟随系统 prefers-color-scheme（飞牛桌面明暗）
    light   : 固定浅色

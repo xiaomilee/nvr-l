@@ -34,9 +34,14 @@ import tarfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXCLUDE_DIRS = {"__pycache__", ".DS_Store", "build_stage"}
 EXCLUDE_SUFFIX = (".pyc", ".pyo", ".DS_Store", "Thumbs.db")
-# wizard/ 是否进包。默认不进：0.3.1（无 wizard）可以安装，0.4.x（有 wizard）在
-# 真机上报「应用数据包不完整」。对照实验时置 NVR_PKG_WIZARD=1 打开。
-WITH_WIZARD = os.environ.get("NVR_PKG_WIZARD") == "1"
+# wizard/ 是否进包。**0.9.19 起默认进包**。官方包结构
+# （developer.fnnas.com/docs/core-concepts/framework/）明确列出包根
+# wizard/{install,upgrade,uninstall,config}，社区大量 fpk（vaultwarden、miniBill 等）
+# 都带 wizard 正常安装。当年「带 wizard 报应用数据包不完整」的真实原因是旧打包器
+# 自己的成员名缺陷（./ 前缀那一版），不是 fnOS 不认 wizard —— 但当时据此把 wizard
+# 关掉后忘了回头复核，导致**从 0.4.x 到 0.9.18 的安装向导（含端口选择）从未真正
+# 出现过**。对照实验可置 NVR_PKG_WIZARD=0 关掉。
+WITH_WIZARD = os.environ.get("NVR_PKG_WIZARD", "1") != "0"
 
 # 固定时间戳：同样的输入永远得到同样的包，checksum 才能跨机器复现
 FIXED_MTIME = 1700000000
@@ -170,8 +175,7 @@ def main():
 
     # ---------- 3. 组装包根 ----------
     shutil.copytree(os.path.join(ROOT, "cmd"), os.path.join(stage, "cmd"))
-    # wizard/ 默认不进包：0.3.1（不带 wizard）能装，0.4.x（带 wizard）报「应用数据包不完整」。
-    # 需要时可以 NVR_PKG_WIZARD=1 打开做对照实验。
+    # wizard/ 0.9.19 起默认进包（见 WITH_WIZARD 处的考证）；NVR_PKG_WIZARD=0 可关
     if WITH_WIZARD:
         shutil.copytree(os.path.join(ROOT, "wizard"), os.path.join(stage, "wizard"))
     shutil.copytree(os.path.join(ROOT, "config"), os.path.join(stage, "config"))

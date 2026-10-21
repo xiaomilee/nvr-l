@@ -42,15 +42,21 @@ def _fingerprint(profile):
         return "na"
 
 
-def item_key(src, root, cam_id, profile):
-    """幂等键：相对路径 + 大小 + mtime + 参数指纹。"""
+def item_key(src, root, cam_id, profile, ignore=None):
+    """幂等键：相对路径 + 大小 + mtime + 参数指纹 + 忽略区。
+
+    忽略区必须进指纹：用户画完忽略区，同一批分片的判定结果本该不同。
+    不进指纹的话它们已经在 done 集合里，会被永久跳过 —— 表现就是
+    "忽略了树影，但历史片段一点没变"，用户只能以为功能没生效。
+    """
     try:
         st = os.stat(src)
         size, mtime = st.st_size, int(st.st_mtime)
     except OSError:
         return None
     rel = os.path.relpath(src, os.path.join(root, cam_id)).replace("\\", "/")
-    raw = "%s|%d|%d|%s" % (rel, size, mtime, _fingerprint(profile))
+    ig = ",".join(str(int(x)) for x in sorted(set(ignore or [])))
+    raw = "%s|%d|%d|%s|%s" % (rel, size, mtime, _fingerprint(profile), ig)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -82,6 +88,7 @@ class Link:
 
         self.q = queue.Queue()
         self.pending = collections.deque()      # 镜像 q 的内容，仅用于统计与展示
+        self.pending_keys = set()               # 与 pending 同步的键集合，去重用 O(1) 而不是线性扫
         self.done = set()
         self.failed = {}                        # key -> 错误摘要
         self.stats = {"done": 0, "silent": 0, "partial": 0, "failed": 0,
@@ -103,12 +110,57 @@ class Link:
 
         self._load()
 
+    def cam_of(self, cam_id):
+        for c in self.cams:
+            if c.get("id") == cam_id:
+                return c
+        return {}
+
+    def clip_speed_of(self, cam_id):
+        """这一路的缩时倍速。只认白名单 1/2/4/8，其它一律回落 1。
+
+        倍速走重编码，CPU 是真代价；让任意整数进来（比如 3、7）只会让
+        用户误以为"倍数越怪省得越多"，实际收益和 2/4 没区别。
+        """
+        try:
+            v = int(float((self.cam_of(cam_id) or {}).get("clip_speed") or 1))
+        except (TypeError, ValueError):
+            return 1
+        return v if v in (1, 2, 4, 8) else 1
+
     def set_cameras(self, cams):
         """列表变化（增删/改地址）时更新；新出现的摄像头补一个默认画质档。"""
         self.cams = [c for c in (cams or []) if c.get("enabled", True)]
         for c in self.cams:
             if c["id"] not in self.profiles:
                 self.profiles[c["id"]] = params.new_profile(c.get("name") or c["id"])
+
+    def ignore_cells(self, cam_id):
+        """这一路的检测忽略区格号（16×9）。没有就返回空列表。
+
+        以前 masks 只存在配置里、从来没进过判定，于是"设置页画了忽略区、
+        树影照样天天触发"。判定要用它，就必须在消费侧现取最新值 ——
+        用户改完不重启也应该下一个分片就生效。
+        """
+        for c in self.cams:
+            if c.get("id") == cam_id:
+                m = c.get("masks") or {}
+                return [int(x) for x in (m.get("ignore") or [])
+                        if isinstance(x, int) or str(x).isdigit()]
+        # 通道可能已被停用/改名但仍留有历史分片：退回配置里那份
+        for c in (self.cfg.get("cameras") or []):
+            if isinstance(c, dict) and c.get("id") == cam_id:
+                m = c.get("masks") or {}
+                return [int(x) for x in (m.get("ignore") or [])
+                        if isinstance(x, int) or str(x).isdigit()]
+        return []
+
+    def set_profiles(self, profiles):
+        """设置页改了画质参数：整份替换，指纹变了下一个分片就会按新参数重跑。"""
+        if isinstance(profiles, dict):
+            for cid, p in profiles.items():
+                if isinstance(p, dict):
+                    self.profiles[cid] = p
 
     # ------------------------------------------------------------ 持久化
 
@@ -202,6 +254,9 @@ class Link:
         out = []
         for c in self.cams:
             cid = c["id"]
+            # 每路的缩时压制总开关：关了就不入队（已生成的片段照常回放/清理）
+            if c.get("condense") is False:
+                continue
             segs = []
             # 新目录（摄像头名称）+ 旧 id 目录都要扫：升级前的存量分片也要缩时
             for d in dict.fromkeys([c.get("dir_name") or cid, cid]):
@@ -219,11 +274,14 @@ class Link:
                 self.log("缩时等待：%s 已有 %d 个分片，正在写的分片封口后才处理"
                          % (c.get("name") or cid, len(segs)))
             profile = self.profiles.get(cid)
+            ignore = self.ignore_cells(cid)
             for p in ready:
-                k = item_key(p, self.root, cid, profile)
+                k = item_key(p, self.root, cid, profile, ignore)
                 if not k or k in self.done or k in self.failed:
                     continue
-                if any(it["key"] == k for it in self.pending):
+                # pending 最多 link_max_queue(默认 200) 个，以前用 any() 线性扫，
+                # 队列满时每 2 秒就是 200×200 次比较；换成集合后是 O(1)
+                if k in self.pending_keys:
                     continue
                 rel = os.path.relpath(p, self.root)
                 out.append({"key": k, "path": p, "cam": cid,
@@ -264,12 +322,15 @@ class Link:
         if not items:
             return
         cap = self.max_queue - self.q.qsize()
+        n = 0
         for it in items[:max(0, cap)]:
             self.q.put(it)
             with self._lock:
                 self.pending.append(it)
-        self.log("%s入队 %d 项%s" % ("批量" if batch else "即时", min(len(items), cap),
-                                     ("（积压 %d）" % (len(items) - cap)) if len(items) > cap else ""))
+                self.pending_keys.add(it["key"])
+            n += 1
+        self.log("%s入队 %d 项%s" % ("批量" if batch else "即时", n,
+                                     ("（积压 %d）" % (len(items) - n)) if len(items) > n else ""))
 
     def trigger(self):
         """手动「立即处理」：不看模式，马上入队一轮。"""
@@ -286,6 +347,11 @@ class Link:
         src = it["path"]
         if not os.path.isfile(src):
             return {"ok": False, "reason": "missing"}
+        if not self.ffprobe:
+            # 没有 ffprobe 就判不了"有没有变化"，此时宁可什么都不做，
+            # 也不能把整段当静止丢掉（那等于删录像）。
+            return {"ok": False, "reason": "no-ffprobe",
+                    "error": "缺少 ffprobe，无法分析画面变化"}
         profile = self.profiles.get(it["cam"]) or params.new_profile(it["name"])
         a = params.resolve(profile, "auto")
 
@@ -294,7 +360,7 @@ class Link:
         except OSError:
             size_in = 0
 
-        res = condense.analyze(self.ffprobe, src, a)
+        res = condense.analyze(self.ffprobe, src, a, ignore=self.ignore_cells(it["cam"]))
         if res["error"]:
             return {"ok": False, "reason": "analyze", "error": res["error"]}
 
@@ -306,7 +372,8 @@ class Link:
 
         out = condense.clip_path(self.root, it.get("dir") or it["cam"], src)
         w = condense.write_one(self.ffmpeg, src, out, res["windows"],
-                               os.path.join(self.var_dir, "tmp", it["key"]))
+                               os.path.join(self.var_dir, "tmp", it["key"]),
+                               speed=self.clip_speed_of(it["cam"]))
         if not w["ok"]:
             return {"ok": False, "reason": "export", "error": w.get("error"), "detail": res}
         try:
@@ -334,6 +401,7 @@ class Link:
                     self.pending.remove(it)
                 except ValueError:
                     pass
+                self.pending_keys.discard(it["key"])
             if r["ok"]:
                 self._mark_done(it["key"])
                 if r.get("silent"):
@@ -350,6 +418,10 @@ class Link:
             else:
                 self.failed[it["key"]] = (r.get("error") or r.get("reason") or "?")[:200]
                 self.stats["failed"] += 1
+                # 失败表无限增长会一直占内存（而且这些 key 永远不会再被处理）。
+                # 只留最近 500 条：界面本来也只展示最后 5 条。
+                if len(self.failed) > 500:
+                    self.failed = dict(list(self.failed.items())[-200:])
             self.last_item = {
                 "cam": it["cam"], "name": it["name"],
                 "file": os.path.basename(it["path"]),

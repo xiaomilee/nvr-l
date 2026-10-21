@@ -26,6 +26,41 @@ def _even(n):
     return n if n % 2 == 0 else n + 1
 
 
+# ---------------------------------------------------------------- 实时预览流
+
+def live_stream_cmd(ffmpeg, url, fps=8, width=960, transport="tcp"):
+    """MJPEG 实时预览：RTSP → mpjpeg 管道，给浏览器 <img> 直接吃。
+
+    三条是硬要求，缺一条就会表现成"画面永远停在等待第一帧"：
+
+    - **-an**：mpjpeg 只装视频流。子码流一旦带 G.711/G.726 音轨，ffmpeg 在
+      写文件头阶段就直接失败退出，浏览器收到的是空响应。
+    - **fps / width 必须可调**：宫格要 4 路以上同时播，若沿用单画面的
+      8 帧 960 宽，一台弱 CPU 的 NAS 立刻被四份解码 + 编码拖住。前端按场景给。
+    - **-fflags nobuffer**：不加的话 ffmpeg 默认预读缓冲，移动物体要晚 2~3 秒
+      才出现，看起来就像"卡在几秒前的画面"。
+    """
+    try:
+        fps = int(fps)
+    except (TypeError, ValueError):
+        fps = 8
+    fps = max(1, min(15, fps))
+    try:
+        width = int(width)
+    except (TypeError, ValueError):
+        width = 960
+    width = max(0, min(1920, width))
+    vf = "fps=%d" % fps
+    if width:
+        vf += ",scale=%d:-2" % _even(width)
+    return ([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
+             "-fflags", "nobuffer", "-flags", "low_delay",
+             "-rtsp_transport", transport,
+             "-i", url,
+             "-an", "-vf", vf, "-c:v", "mjpeg", "-q:v", "6",
+             "-f", "mpjpeg", "-boundary_tag", "nvrframe", "pipe:1"])
+
+
 # ---------------------------------------------------------------- 分析
 
 def analysis_cmd(ffmpeg, src, a, hw="qsv", channel="luma", aspect=16 / 9.0):
@@ -71,7 +106,7 @@ def analysis_cmd(ffmpeg, src, a, hw="qsv", channel="luma", aspect=16 / 9.0):
     return cmd
 
 
-def prescan_cmd(ffprobe, src):
+def prescan_cmd(ffprobe, src, vf=None):
     """包大小预筛：包里字节数天然反映画面变化量，**不解码**。
 
     `packet=` 是容器层信息，不走解码器 —— 比 `frame=` 快一个数量级，
@@ -80,17 +115,29 @@ def prescan_cmd(ffprobe, src):
 
     输出用 `compact=p=0:nk=0`（`size=1234|pts_time=0.000000`）：
     带字段名，解析不必赌 ffprobe 的字段顺序。
+
+    vf：检测忽略区的 crop 链。给了就只统计**区域之外**那句话是错的 ——
+    crop 出来的是区域**内部**，那是我们要丢掉的，所以调用方算的是
+    「整帧 − 忽略区」= 全帧曲线减去各区域曲线之和（见 condense.analyze）。
     """
-    return [ffprobe, "-v", "error", "-select_streams", "v:0",
+    cmd = [ffprobe]
+    if vf:
+        cmd += ["-vf", vf]
+    cmd += ["-v", "error", "-select_streams", "v:0",
             "-show_entries", "packet=size,pts_time",
             "-of", "compact=p=0:nk=0", src]
+    return cmd
 
 
-def prescan_frame_cmd(ffprobe, src):
+def prescan_frame_cmd(ffprobe, src, vf=None):
     """兜底：老版本 ffprobe 不认 `packet=` 时退回 `frame=` 包大小。"""
-    return [ffprobe, "-v", "error", "-select_streams", "v:0",
+    cmd = [ffprobe]
+    if vf:
+        cmd += ["-vf", vf]
+    cmd += ["-v", "error", "-select_streams", "v:0",
             "-show_entries", "frame=pkt_size,pts_time",
             "-of", "compact=p=0:nk=0", src]
+    return cmd
 
 
 def probe_cmd(ffprobe, src):
@@ -99,10 +146,14 @@ def probe_cmd(ffprobe, src):
 
 
 def redact_filter(cells, cols=16, rows=9):
-    """遮蔽区格号 → drawbox 滤镜串（相对坐标，iw/ih 自适应实际分辨率）。
+    """遮蔽区格号 → drawbox 滤镜串（保留给导出/测试用）。
 
-    格号 = row*cols + col（行在上，与前端 16×9 网格一致）。每个格画一个
-    黑色实心框（t=fill）。返回空串表示没有遮蔽区，调用方应不加 -vf。
+    **录像与快照链路已不再调用它**。"输出遮蔽区"这个功能整体移除了：
+    在录制阶段打黑块必须放弃 -c copy 改走重编码，每路常驻一个编码器，
+    CPU 直接翻倍；而它真正要解决的问题（某块区域别算成事件）属于
+    「检测忽略区」，在判定阶段处理即可，与写盘无关。
+
+    仍留着这个函数是因为：手动导出、离线排查时仍可能想给一段画面打码。
     """
     cells = [c for c in (cells or []) if isinstance(c, int)]
     if not cells:
@@ -126,13 +177,36 @@ def encode_cmd(ffmpeg, src, out, enc, hw="qsv", night=False, ss=None, to=None):
     mode="fast"：`-c copy`，速度约 8 倍实时、无损，但边界只能落关键帧
                  （GOP 2s 时误差可达 2~4s）。**画质参数在这种模式下全部失效。**
     mode="fine"：重编码，帧级精确。QSV 用 -global_quality（ICQ）不是 -crf。
+    enc["speed"]>1：输出整体加速 N 倍（2 就是时间缩短一半）。流复制改不了
+                 时间戳，所以倍速必须走重编码：setpts 压时间轴 + fps 限帧，
+                 体积也大约按 1/N 缩小。fine 模式同样把 setpts 插到滤镜链最前。
     """
     mode = enc.get("mode", "fine")
+    try:
+        speed = float(enc.get("speed") or 1.0)
+    except (TypeError, ValueError):
+        speed = 1.0
+    if speed < 1.0:
+        speed = 1.0
     cmd = _head(ffmpeg)
     if ss is not None:
         cmd += ["-ss", _num(ss)]
     if to is not None:
         cmd += ["-to", _num(to)]
+
+    if speed > 1.0 and mode == "fast":
+        # 倍速 + 流复制是矛盾的：copy 连时间戳都不碰。这里退到软件重编码
+        #（libx264 veryfast：任何一台 NAS 都编得动，画质对监控画面足够）。
+        # 帧率封顶 spdup_fps（默认 15）：2 倍速的 25fps 源会变成 50fps，
+        # 不封顶的话文件反而更大，倍速就白做了。
+        fps_cap = max(5, min(60, int(enc.get("spdup_fps") or 15)))
+        filt = "setpts=PTS/%s,fps=%d" % (_num(speed), fps_cap)
+        cmd += ["-i", src, "-vf", filt, "-map", "0:v:0", "-an",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "26"]
+        if enc.get("faststart", True):
+            cmd += ["-movflags", "+faststart"]
+        cmd += ["-y", out]
+        return cmd
 
     if mode == "fast":
         cmd += ["-i", src, "-c", "copy", "-avoid_negative_ts", "make_zero"]
@@ -144,6 +218,10 @@ def encode_cmd(ffmpeg, src, out, enc, hw="qsv", night=False, ss=None, to=None):
     prof = enc.get("night" if night else "day", {})
     codec = enc.get("codec", "hevc")
     filt = _encode_filter(prof)
+    if speed > 1.0:
+        # fine 模式：setpts 放在 fps 之前 —— setpts 把时间轴压短，
+        # _encode_filter 的 fps 封顶负责把"倍速后变密的帧"限回去。
+        filt = "setpts=PTS/%s,%s" % (_num(speed), filt)
     cmd += ["-i", src]
     if hw == "qsv":
         # 编码支路允许一次下载：滤镜（去噪/缩放）在系统内存做，再交给 QSV 编码

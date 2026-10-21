@@ -27,11 +27,11 @@ class TestClamp(unittest.TestCase):
         self.assertEqual(runtime.clamp_port(70000), runtime.PORT_LIMITS[1])
 
     def test_garbage_falls_back(self):
-        self.assertEqual(runtime.clamp_port("abc"), 18081)
-        self.assertEqual(runtime.clamp_port(None), 18081)
+        self.assertEqual(runtime.clamp_port("abc"), 18080)
+        self.assertEqual(runtime.clamp_port(None), 18080)
 
     def test_default_config_has_port(self):
-        self.assertEqual(runtime.DEFAULTS["service_port"], 18081)
+        self.assertEqual(runtime.DEFAULTS["service_port"], 18080)
 
 
 class TestPick(unittest.TestCase):
@@ -50,15 +50,34 @@ class TestPick(unittest.TestCase):
         self.socks.append(s)
         return s.getsockname()[1]
 
+    def _free_in_range(self):
+        """在业务端口范围内找一个空闲端口。
+
+        不能直接用 bind(0) 拿系统临时端口：Linux 的 ephemeral range 是
+        32768-60999、Windows 是 49152-65535，后者会超出 PORT_LIMITS 上限
+        65000，clamp_port 会把它夹回去，断言就随机失败。
+        """
+        lo, hi = runtime.PORT_LIMITS
+        for p in range(hi - 500, hi - 1):
+            if p >= lo and runtime.port_free(p):
+                return p
+        self.skipTest("端口范围内没有空闲端口")
+
     def test_free_port_kept(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(("0.0.0.0", 0))
-        port = s.getsockname()[1]
-        s.close()
+        port = self._free_in_range()
         self.assertEqual(runtime.pick_port(port), port)
 
     def test_occupied_port_shifts_up(self):
-        busy = self._occupy()
+        busy = self._free_in_range()
+        # 自己占住这个端口，确保它确实"被占用"且在 [lo, hi-200] 内
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.bind(("0.0.0.0", busy))
+            s.listen(1)
+        except OSError:
+            s.close()
+            self.skipTest("端口 %d 已被抢占" % busy)
+        self.socks.append(s)
         got = runtime.pick_port(busy)
         self.assertNotEqual(got, busy)
         self.assertGreater(got, busy)
