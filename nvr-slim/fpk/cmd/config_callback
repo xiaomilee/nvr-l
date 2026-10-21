@@ -1,0 +1,64 @@
+#!/bin/bash
+# 配置向导提交后：把参数写回 config.json
+# 只写允许的键，向导没提交的项保持原值
+set -u
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+APP_DIR="${TRIM_APPDEST:-$ROOT/app}"
+VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
+TMPLOG="${TRIM_TEMP_LOGFILE:-}"
+
+fail() {
+  printf '%s\n' "$1" >&2
+  [ -n "$TMPLOG" ] && printf '%s\n' "$1" >>"$TMPLOG"
+  exit 1
+}
+
+PY=""
+for c in "${NVR_PYTHON:-}" python3 python; do
+  [ -n "$c" ] || continue
+  if command -v "$c" >/dev/null 2>&1; then PY="$(command -v "$c")"; break; fi
+done
+[ -n "$PY" ] || fail "系统未找到 python3"
+
+ARGS=()
+[ -n "${wizard_scan_mode:-}" ] && ARGS+=(--set "scan_mode=$wizard_scan_mode")
+[ -n "${wizard_process_mode:-}" ] && ARGS+=(--set "process_mode=$wizard_process_mode")
+[ -n "${wizard_concurrency:-}" ] && ARGS+=(--set "concurrency=$wizard_concurrency")
+[ -n "${wizard_low_priority:-}" ] && ARGS+=(--set "low_priority=$wizard_low_priority")
+# 录制与压制衔接：这三项改了就要立刻生效，不能等到下次装
+[ -n "${wizard_record_dir:-}" ] && ARGS+=(--set "record_dir=$wizard_record_dir")
+[ -n "${wizard_link_mode:-}" ] && ARGS+=(--set "link_mode=$wizard_link_mode")
+[ -n "${wizard_link_interval_h:-}" ] && ARGS+=(--set "link_interval_h=$wizard_link_interval_h")
+[ -n "${wizard_record_segment_sec:-}" ] && ARGS+=(--set "record_segment_sec=$wizard_record_segment_sec")
+
+if [ "${#ARGS[@]}" -gt 0 ]; then
+  "$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" set "${ARGS[@]}" \
+    >/dev/null 2>&1 || fail "写入配置失败"
+fi
+
+# 端口改动：配置 + 桌面入口一起改，两边必须是同一个数字，否则图标会指向空端口
+PORT_IN="${wizard_port:-${port:-}}"
+if [ -n "$PORT_IN" ]; then
+  OLD_PORT="$("$PY" -c 'import json,sys
+try: print(json.load(open(sys.argv[1]))["service_port"])
+except Exception: print("")' "$VAR_DIR/config.json" 2>/dev/null)"
+  "$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
+    setport --port "$PORT_IN" >/dev/null 2>&1 || fail "端口 $PORT_IN 写入失败"
+  if [ "$OLD_PORT" != "$PORT_IN" ]; then
+    # 旧进程还占着旧端口，必须停掉；下次启动会读到新端口
+    if [ -f "$VAR_DIR/app.pid" ]; then
+      _pid="$(tr -d '[:space:]' <"$VAR_DIR/app.pid" 2>/dev/null)"
+      if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then
+        kill -TERM "$_pid" 2>/dev/null || true
+        sleep 1
+      fi
+      rm -f "$VAR_DIR/app.pid"
+    fi
+    echo "端口已从 ${OLD_PORT:-?} 改为 $PORT_IN，请重启应用使其生效" >&2
+    [ -n "$TMPLOG" ] && echo "端口改为 $PORT_IN，需重启应用" >>"$TMPLOG"
+  fi
+fi
+
+exit 0

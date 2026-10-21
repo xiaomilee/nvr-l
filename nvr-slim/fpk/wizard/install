@@ -1,0 +1,150 @@
+[
+  {
+    "stepTitle": "服务端口",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_port",
+        "label": "Web 服务端口",
+        "initValue": "18081",
+        "rules": [
+          {
+            "required": true,
+            "message": "必须填写端口"
+          },
+          {
+            "pattern": "^[0-9]+$",
+            "message": "只能填数字"
+          }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "应用在这个端口上提供界面，手机 / 电脑直接访问 <b>http://NAS的IP:端口</b> 就是它。<br>如果安装或启动时提示<b>端口被占用</b>，把这里改成 <b>18082</b>、<b>18090</b> 之类的空闲端口重装一次即可 —— 桌面图标会自动跟着新端口走。建议选 1024~65000 之间的端口。"
+      },
+      {
+        "type": "tips",
+        "helpText": "装完想再改端口，进 <b>应用设置</b> 改这一项并重启应用；已经在录的摄像头配置和数据不会受影响。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "选择录制目录",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "本应用会<b>自己</b>从摄像头拉主码流落到这个目录（转封装、不解码，一路约 3% 单核）。目录下自动按「摄像头 / 日期」分文件夹，缩时片段放在 <b>_clip</b> 子目录，两类数据各有各的保留天数。"
+      },
+      {
+        "type": "text",
+        "field": "wizard_record_dir",
+        "label": "录制根目录",
+        "initValue": "/vol1/@appshare/nvr-output",
+        "rules": [
+          {
+            "required": true,
+            "message": "必须填写录制目录"
+          }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "默认放在共享目录里，装完能直接在文件管理 / SMB 里翻看缩时片段。装在 vol2、vol3 的话把 <b>vol1</b> 改掉；也可以填任意目录，但那个目录要允许应用写入，否则录不进去。"
+      },
+      {
+        "type": "tips",
+        "helpText": "建议选容量大、7×24 连续写入的盘（监控盘最合适）。不要把目录设成休眠盘，唤醒一次的开销比省下的电大得多。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "录制与压制怎么衔接",
+    "items": [
+      {
+        "type": "radio",
+        "field": "wizard_link_mode",
+        "label": "录完之后什么时候压",
+        "options": [
+          {
+            "label": "即刻压制 · 分片一写完就处理",
+            "value": "live"
+          },
+          {
+            "label": "定时压制 · 每隔几小时批量处理",
+            "value": "scheduled"
+          }
+        ],
+        "initValue": "live"
+      },
+      {
+        "type": "tips",
+        "helpText": "<b>即刻压制</b>：数据刚写完还在内存里，判定时几乎不额外读盘，也不跟录像抢磁头；镜头刚发生的事一分钟内就能在回放里看到缩时版本。<br><b>定时压制</b>：攒够几个小时再批量做一次，白天磁盘和 CPU 完全不动，代价是数据已经凉了，处理时要真读一遍盘。"
+      },
+      {
+        "type": "select",
+        "field": "wizard_link_interval_h",
+        "label": "定时模式的间隔（选「即刻压制」时忽略）",
+        "options": [
+          {
+            "label": "每 1 小时",
+            "value": "1"
+          },
+          {
+            "label": "每 3 小时",
+            "value": "3"
+          },
+          {
+            "label": "每 6 小时",
+            "value": "6"
+          },
+          {
+            "label": "每 12 小时",
+            "value": "12"
+          },
+          {
+            "label": "每 24 小时（每天一次）",
+            "value": "24"
+          }
+        ],
+        "initValue": "6"
+      },
+      {
+        "type": "select",
+        "field": "wizard_record_segment_sec",
+        "label": "分片长度",
+        "options": [
+          {
+            "label": "1 分钟（最跟手，文件最碎）",
+            "value": "60"
+          },
+          {
+            "label": "3 分钟",
+            "value": "180"
+          },
+          {
+            "label": "5 分钟（推荐）",
+            "value": "300"
+          },
+          {
+            "label": "10 分钟",
+            "value": "600"
+          }
+        ],
+        "initValue": "300"
+      }
+    ]
+  },
+  {
+    "stepTitle": "完成",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "装完后打开应用，在 <b>设置 → 摄像机连接</b> 里填每一路的主码流 RTSP 地址 —— 不填的那一路不会录制。其余参数（灵敏度、压缩、屏蔽区）都在应用内改，不需要重装。"
+      },
+      {
+        "type": "tips",
+        "helpText": "首次启动会自动检测核显。<b>核显不可用也能装</b>，只是会回落到软件编码并锁成单路处理。"
+      }
+    ]
+  }
+]

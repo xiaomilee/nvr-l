@@ -1,0 +1,48 @@
+#!/bin/bash
+# 升级后：补齐新版默认配置项，保留用户已有设置
+set -u
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+APP_DIR="${TRIM_APPDEST:-$ROOT/app}"
+VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
+TMPLOG="${TRIM_TEMP_LOGFILE:-}"
+
+fail() {
+  printf '%s\n' "$1" >&2
+  [ -n "$TMPLOG" ] && printf '%s\n' "$1" >>"$TMPLOG"
+  exit 1
+}
+
+PY=""
+for c in "${NVR_PYTHON:-}" python3 python; do
+  [ -n "$c" ] || continue
+  if command -v "$c" >/dev/null 2>&1; then PY="$(command -v "$c")"; break; fi
+done
+[ -n "$PY" ] || fail "系统未找到 python3"
+
+"$PY" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" migrate >/dev/null 2>&1 \
+  || fail "配置迁移失败，可回滚到 $VAR_DIR/backup 下的备份"
+
+mkdir -p "$VAR_DIR/slots" "$VAR_DIR/log" "$VAR_DIR/rec" 2>/dev/null
+
+# 升级会整目录替换 app，但数据目录通常不动；只有属主被改过才修（幂等且不慢）
+APP_USER="nvr"
+if [ -f "$ROOT/config/privilege" ]; then
+  _u="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$ROOT/config/privilege" 2>/dev/null | head -1)"
+  [ -n "$_u" ] && APP_USER="$_u"
+fi
+if [ -d "$VAR_DIR" ] && [ "$(stat -c %U "$VAR_DIR" 2>/dev/null || echo '')" != "$APP_USER" ]; then
+  chown -R "$APP_USER:$APP_USER" "$VAR_DIR" 2>/dev/null || true
+  chmod 700 "$VAR_DIR" 2>/dev/null || true
+fi
+
+# 升级替换了 app 代码。若 upgrade_init 的 stop 没把旧进程杀干净（数据目录 env 不一致时
+# PID 文件会落空），这里兜底重启一次，确保后台跑的是新代码。否则会出现
+# 「新前端 + 旧后端」的错位：日志接口 404 回退成网页、健康检查不返回版本号，
+# 用户看到的就是「服务端版本 v?」「无法读取日志：text/html」。
+"$SELF_DIR/main" stop >/dev/null 2>&1
+"$SELF_DIR/main" start >/dev/null 2>&1 || true
+
+exit 0

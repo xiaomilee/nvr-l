@@ -1,0 +1,88 @@
+#!/bin/bash
+# 安装前检查：只验证「能不能装」，不改任何业务数据
+#
+# 重要：本脚本在安装流程最前面执行，此时
+#   1) /vol{x}/@appdata/ 属 root，应用专用用户尚未就绪
+#   2) 数据目录一般还没被创建
+# 因此这里**绝不能 mkdir 数据目录**。早期版本正是在这里 mkdir，失败后误报
+# "数据目录不可写：/vol1/@appdata/xxx"，而真正原因只是权限不足。
+# 目录由系统创建并按 config/privilege 授权，本脚本只做「已存在则能否写」的探测。
+set -u
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
+TMPLOG="${TRIM_TEMP_LOGFILE:-}"
+
+fail() {
+  printf '%s\n' "$1" >&2
+  [ -n "$TMPLOG" ] && printf '%s\n' "$1" >>"$TMPLOG"
+  exit 1
+}
+
+# 应用名与运行用户：优先环境变量，其次 manifest / privilege，最后兜底
+APP_NAME="${TRIM_APPNAME:-}"
+[ -n "$APP_NAME" ] || APP_NAME="$(sed -n 's/^appname[[:space:]]*=[[:space:]]*//p' \
+  "$ROOT/manifest" 2>/dev/null | head -1 | tr -d ' \r')"
+[ -n "$APP_NAME" ] || APP_NAME="nvr"
+APP_USER="$APP_NAME"
+if [ -f "$ROOT/config/privilege" ]; then
+  _u="$(sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$ROOT/config/privilege" 2>/dev/null | head -1)"
+  [ -n "$_u" ] && APP_USER="$_u"
+fi
+
+PY=""
+for c in "${NVR_PYTHON:-}" python3 python; do
+  [ -n "$c" ] || continue
+  if command -v "$c" >/dev/null 2>&1; then PY="$(command -v "$c")"; break; fi
+done
+[ -n "$PY" ] || fail "系统未找到 python3，无法运行服务（飞牛默认自带，若缺失请先修复系统环境）"
+
+# ------------------------------------------------------------ 端口检查
+# 端口由安装向导第 1 步指定（字段 port → 变量 wizard_port）。
+# 这里只做"能不能用"的判定：占了就让用户回上一步改数字，比装完打不开好排查得多。
+WANT="${wizard_port:-${wizard_app_port:-${TRIM_SERVICE_PORT:-18081}}}"
+case "$WANT" in
+  ''|*[!0-9]*) fail "服务端口必须是纯数字：$WANT" ;;
+esac
+if [ "$WANT" -lt 1024 ] || [ "$WANT" -gt 65000 ]; then
+  fail "服务端口应在 1024~65000 之间，当前填的是 $WANT"
+fi
+
+if ! "$PY" - "$WANT" <<'PYEOF'
+import socket, sys
+p = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("0.0.0.0", p))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+sys.exit(0)
+PYEOF
+then
+  HOLD=""
+  command -v ss >/dev/null 2>&1 && \
+    HOLD="$(ss -lntp 2>/dev/null | awk -v p=":$WANT" '$4 ~ p {print $4" "$6; exit}')"
+  # 端口被占不再阻断安装：启动时 nvr_slim.py 会自动向上找空闲端口（最多 +40），
+  # 成功启动后 pinport 会把 ui/config 两处一起改到真实端口，图标自动对齐。
+  # 装不上比端口顺延难查得多，所以这里只留警告。
+  echo "warn: 端口 $WANT 已被占用${HOLD:+（$HOLD）}，应用启动时会自动改用下一个空闲端口" >&2
+  [ -n "$TMPLOG" ] && echo "端口 $WANT 被占用，启动时自动顺延（图标会跟着更新）" >>"$TMPLOG"
+fi
+
+# 只在目录已存在时探测；不存在就交给系统建，不能据此判失败
+if [ -e "$VAR_DIR" ]; then
+  [ -d "$VAR_DIR" ] || fail "数据目录不是目录：$VAR_DIR"
+  probe="$VAR_DIR/.write-probe.$$"
+  if ! ( : >"$probe" ) 2>/dev/null; then
+    cur="$(stat -c %U "$VAR_DIR" 2>/dev/null || echo unknown)"
+    fail "数据目录不可写：$VAR_DIR（当前属主 $cur，应为 $APP_USER）。在飞牛终端以管理员执行：chown -R $APP_USER:$APP_USER \"$VAR_DIR\" && chmod 700 \"$VAR_DIR\" && setfacl -b \"$VAR_DIR\" 2>/dev/null; 然后重新安装"
+  fi
+  rm -f "$probe" 2>/dev/null
+fi
+
+exit 0

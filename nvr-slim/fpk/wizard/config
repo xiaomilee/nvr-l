@@ -1,0 +1,151 @@
+[
+  {
+    "stepTitle": "服务端口",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_port",
+        "label": "Web 服务端口",
+        "initValue": "18081",
+        "rules": [
+          {
+            "required": true,
+            "message": "必须填写端口"
+          },
+          {
+            "pattern": "^[0-9]+$",
+            "message": "只能填数字"
+          }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "提示<b>端口被占用</b>时改这里（例如 18081、18090），保存后应用会自动重启，桌面图标会指向新端口。建议 1024~65000。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "录制与压制衔接",
+    "items": [
+      {
+        "type": "radio",
+        "field": "wizard_link_mode",
+        "label": "录完之后什么时候压",
+        "options": [
+          {
+            "label": "即刻压制 · 分片一写完就处理",
+            "value": "live"
+          },
+          {
+            "label": "定时压制 · 每隔几小时批量处理",
+            "value": "scheduled"
+          }
+        ],
+        "initValue": "live"
+      },
+      {
+        "type": "select",
+        "field": "wizard_link_interval_h",
+        "label": "定时模式的间隔（选即刻压制时忽略）",
+        "options": [
+          {
+            "label": "每 1 小时",
+            "value": "1"
+          },
+          {
+            "label": "每 3 小时",
+            "value": "3"
+          },
+          {
+            "label": "每 6 小时",
+            "value": "6"
+          },
+          {
+            "label": "每 12 小时",
+            "value": "12"
+          },
+          {
+            "label": "每 24 小时（每天一次）",
+            "value": "24"
+          }
+        ],
+        "initValue": "6"
+      },
+      {
+        "type": "select",
+        "field": "wizard_record_segment_sec",
+        "label": "分片长度",
+        "options": [
+          {
+            "label": "1 分钟",
+            "value": "60"
+          },
+          {
+            "label": "3 分钟",
+            "value": "180"
+          },
+          {
+            "label": "5 分钟（推荐）",
+            "value": "300"
+          },
+          {
+            "label": "10 分钟",
+            "value": "600"
+          }
+        ],
+        "initValue": "300"
+      },
+      {
+        "type": "tips",
+        "helpText": "改分片长度只影响之后录制的片段，已录好的不动。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "执行与画质",
+    "items": [
+      {
+        "type": "select",
+        "field": "wizard_process_mode",
+        "label": "处理模式",
+        "options": [
+          {
+            "label": "快速 · 流复制（不重编码，画质零损失）",
+            "value": "fast"
+          },
+          {
+            "label": "精细 · 重编码（可降帧降分辨率）",
+            "value": "fine"
+          }
+        ],
+        "initValue": "fast"
+      },
+      {
+        "type": "select",
+        "field": "wizard_concurrency",
+        "label": "同时处理路数",
+        "options": [
+          {
+            "label": "2 路（推荐）",
+            "value": "2"
+          },
+          {
+            "label": "1 路（8G 内存以下）",
+            "value": "1"
+          },
+          {
+            "label": "3 路（仅机械盘以上）",
+            "value": "3"
+          }
+        ],
+        "initValue": "2"
+      },
+      {
+        "type": "switch",
+        "field": "wizard_low_priority",
+        "label": "低优先级，录制写盘时让路",
+        "initValue": "true"
+      }
+    ]
+  }
+]

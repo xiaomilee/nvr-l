@@ -1,0 +1,226 @@
+#!/bin/bash
+# NVR 生命周期核心：start / stop / status
+# fnOS 约定：status 返回 0 = 运行中，3 = 未运行，其它 = 异常
+set -u
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+APP_DIR="${TRIM_APPDEST:-$ROOT/app}"
+VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
+PORT="${TRIM_SERVICE_PORT:-18081}"
+# 用户可能在向导/应用设置里改过端口，配置里的值优先于 manifest 的静态声明
+if [ -f "$VAR_DIR/config.json" ]; then
+  _cp="$(sed -n 's/.*"service_port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+    "$VAR_DIR/config.json" 2>/dev/null | head -1)"
+  [ -n "$_cp" ] && PORT="$_cp"
+fi
+PID_FILE="$VAR_DIR/app.pid"
+LOG_DIR="$VAR_DIR/log"
+LOG_FILE="$LOG_DIR/app.log"
+TMPLOG="${TRIM_TEMP_LOGFILE:-}"
+
+fail() {
+  printf '%s\n' "$1" >&2
+  [ -n "$TMPLOG" ] && printf '%s\n' "$1" >>"$TMPLOG"
+  exit 1
+}
+
+find_python() {
+  local c
+  for c in "${NVR_PYTHON:-}" python3 python; do
+    [ -n "$c" ] || continue
+    if command -v "$c" >/dev/null 2>&1; then
+      command -v "$c"
+      return 0
+    fi
+  done
+  return 1
+}
+
+pid_alive() {
+  local pid="$1"
+  [ -n "$pid" ] || return 1
+  if kill -0 "$pid" 2>/dev/null; then return 0; fi
+  # Git Bash / 部分精简系统上 kill 对非子进程无效，用 tasklist 兜底
+  if command -v tasklist >/dev/null 2>&1; then
+    tasklist //FI "PID eq $pid" 2>/dev/null | grep -q "$pid" && return 0
+  fi
+  return 1
+}
+
+kill_pid() {
+  local pid="$1" sig="${2:-TERM}"
+  kill "-$sig" "$pid" 2>/dev/null && return 0
+  if command -v taskkill >/dev/null 2>&1; then
+    taskkill //PID "$pid" //F >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+read_pid() {
+  [ -f "$PID_FILE" ] || return 1
+  tr -d '[:space:]' <"$PID_FILE"
+}
+
+find_server_pids() {
+  # PID 文件丢失/对不上时的兜底：按进程命令行扫出本应用的 nvr_slim.py 进程。
+  # 匹配 nvr_slim.py 且命令行带本应用目录（app/var/root 之一），避免误杀别的实例。
+  local p c d
+  for p in /proc/[0-9]*/cmdline; do
+    [ -r "$p" ] || continue
+    c="$(tr '\0' ' ' <"$p" 2>/dev/null)"
+    case "$c" in
+      *nvr_slim.py*)
+        case "$c" in
+          *"$APP_DIR"*|*"$VAR_DIR"*|*"$ROOT"*)
+            d="${p%/cmdline}"; d="${d#/proc/}"
+            echo "$d"
+            ;;
+        esac
+        ;;
+    esac
+  done
+}
+
+wait_health() {
+  local py="$1" timeout="${2:-30}"
+  "$py" - "$PORT" "$timeout" "$VAR_DIR/port.txt" <<'PYEOF'
+import os, sys, time, urllib.request
+port, deadline, pfile = int(sys.argv[1]), time.time() + int(sys.argv[2]), sys.argv[3]
+# 服务可能在端口被占时顺延，真实端口写在 port.txt 里；等它出现（最多 5 秒）
+probe_until = min(deadline, time.time() + 5)
+while not os.path.isfile(pfile) and time.time() < probe_until:
+    time.sleep(0.1)
+if os.path.isfile(pfile):
+    try:
+        v = open(pfile, encoding="utf-8").read().strip()
+        if v.isdigit():
+            port = int(v)
+    except OSError:
+        pass
+while time.time() < deadline:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port, timeout=1) as r:
+            if r.status == 200:
+                sys.exit(0)
+    except Exception:
+        time.sleep(0.3)
+sys.exit(1)
+PYEOF
+}
+
+start() {
+  local py pid
+  py="$(find_python)" || fail "未找到 python3，请检查系统环境"
+  [ -f "$APP_DIR/server/nvr_slim.py" ] || fail "程序文件缺失：$APP_DIR/server/nvr_slim.py"
+
+  mkdir -p "$VAR_DIR" "$LOG_DIR" "$VAR_DIR/slots" 2>/dev/null
+  # 写探针前置：目录属主/ACL 异常时，这里报错比后面"写日志失败/服务起不来"好排查得多
+  probe="$VAR_DIR/.write-probe.$$"
+  if ! ( : >"$probe" ) 2>/dev/null; then
+    fail "数据目录不可写：$VAR_DIR（属主 $(stat -c %U "$VAR_DIR" 2>/dev/null || echo unknown)）。在终端执行 chown -R <应用用户>:<应用用户> \"$VAR_DIR\" && chmod 700 \"$VAR_DIR\" 后重试"
+  fi
+  rm -f "$probe" 2>/dev/null
+
+  if pid="$(read_pid)" && pid_alive "$pid"; then
+    exit 0
+  fi
+  rm -f "$PID_FILE"
+
+  # 打包带的静态 ffmpeg/ffprobe 在个别解包场景会丢执行位，启动前兜一次
+  for _b in "$APP_DIR/bin/ffmpeg" "$APP_DIR/bin/ffprobe"; do
+    [ -f "$_b" ] && chmod +x "$_b" 2>/dev/null || true
+  done
+
+  # 日志单文件滚动，避免长期运行把数据分区写满
+  if [ -f "$LOG_FILE" ] && [ "$(wc -c <"$LOG_FILE" 2>/dev/null || echo 0)" -gt 2097152 ]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+  fi
+
+  {
+    echo "---- $(date '+%Y-%m-%d %H:%M:%S') start v$(grep -m1 '^version=' "$ROOT/manifest" 2>/dev/null | cut -d= -f2) ----"
+  } >>"$LOG_FILE" 2>/dev/null
+
+  ( cd "$APP_DIR/server" && nohup "$py" nvr_slim.py \
+      --port "$PORT" --host "${TRIM_LISTEN_HOST:-0.0.0.0}" --var "$VAR_DIR" --app "$APP_DIR" --ui "$APP_DIR/ui" \
+      >>"$LOG_FILE" 2>&1 & echo $! >"$PID_FILE" )
+
+  pid="$(read_pid)"
+  [ -n "$pid" ] || fail "服务未能启动（未取得进程号），详见 $LOG_FILE"
+
+  if ! wait_health "$py" 30; then
+    kill_pid "$pid" KILL >/dev/null 2>&1
+    rm -f "$PID_FILE"
+    fail "服务启动超时（端口 $PORT）。最近的日志：$(tail -n 8 "$LOG_FILE" 2>/dev/null | tr '\n' ' ')"
+  fi
+
+  # 实际监听端口可能不等于 manifest 默认值（被占用时顺延）。桌面图标的端口
+  # 若还没跟上，这里补一次：启动阶段应用目录通常已归属应用用户，比安装期更可能写得进去。
+  # 写不进去也不影响服务运行，只是图标仍指向默认端口。
+  actual="$(tr -dc '0-9' <"$VAR_DIR/port.txt" 2>/dev/null)"
+  if [ -n "$actual" ]; then
+    "$py" "$APP_DIR/server/runtime.py" --var "$VAR_DIR" --app "$APP_DIR" \
+      pinport --port "$actual" >>"$LOG_FILE" 2>&1 || true
+    [ "$actual" = "$PORT" ] || echo "note: 端口顺延 $PORT -> $actual" >>"$LOG_FILE" 2>/dev/null
+  fi
+  exit 0
+}
+
+stop() {
+  local pid i killed
+  pid="$(read_pid)" || true
+  if [ -z "$pid" ] || ! pid_alive "$pid"; then
+    # PID 文件丢失或进程号对不上（升级时数据目录 env 可能不一致）：按命令行扫描兜底，
+    # 确保残留的旧服务进程被彻底结束，否则会出现「新前端 + 旧后端」的错位。
+    killed=0
+    for pid in $(find_server_pids); do
+      [ -n "$pid" ] || continue
+      kill_pid "$pid" TERM 2>/dev/null && killed=1
+    done
+    [ "$killed" = 1 ] && sleep 0.6
+    for pid in $(find_server_pids); do
+      [ -n "$pid" ] || continue
+      kill_pid "$pid" KILL 2>/dev/null
+    done
+    rm -f "$PID_FILE"
+    exit 0
+  fi
+  kill_pid "$pid" TERM
+  i=0
+  while [ "$i" -lt 40 ]; do
+    pid_alive "$pid" || break
+    sleep 0.25
+    i=$((i + 1))
+  done
+  if pid_alive "$pid"; then
+    kill_pid "$pid" KILL
+    sleep 0.5
+  fi
+  if pid_alive "$pid"; then
+    fail "无法停止进程 $pid"
+  fi
+  rm -f "$PID_FILE"
+  exit 0
+}
+
+restart() {
+  stop
+  start
+}
+
+status() {
+  local pid
+  if pid="$(read_pid)" && pid_alive "$pid"; then
+    exit 0
+  fi
+  rm -f "$PID_FILE"
+  exit 3
+}
+
+case "${1:-}" in
+  start)   start ;;
+  stop)    stop ;;
+  restart) restart ;;
+  status)  status ;;
+  *)       echo "usage: $0 {start|stop|restart|status}" >&2; exit 1 ;;
+esac

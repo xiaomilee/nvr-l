@@ -1,0 +1,22 @@
+#!/bin/bash
+# 升级前：先停服务，再备份配置与队列，出问题能退回去
+set -u
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SELF_DIR/.." && pwd)"
+VAR_DIR="${TRIM_PKGVAR:-$ROOT/var}"
+TS="$(date '+%Y%m%d-%H%M%S')"
+BAK="$VAR_DIR/backup/$TS"
+
+"$SELF_DIR/main" stop >/dev/null 2>&1
+mkdir -p "$BAK" 2>/dev/null
+for f in config.json queue.json nvr.db; do
+  [ -f "$VAR_DIR/$f" ] && cp -f "$VAR_DIR/$f" "$BAK/" 2>/dev/null
+done
+
+# 备份目录只留最近 3 份，别把数据分区撑大
+ls -1dt "$VAR_DIR/backup"/*/ 2>/dev/null | tail -n +4 | while read -r d; do
+  rm -rf "$d" 2>/dev/null
+done
+
+exit 0

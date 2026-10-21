@@ -1,0 +1,3533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<script>/* 先于首帧定明暗，避免深色系统闪白 */
+(function(){try{var m=localStorage.getItem("nvr.theme")||"auto";
+var d=m==="dark"||(m==="auto"&&matchMedia("(prefers-color-scheme: dark)").matches);
+if(d)document.documentElement.dataset.theme="dark";}catch(e){}})();</script>
+<title>NVR-L</title>
+<style>
+:root{
+  --bg:#f4f5f7; --surface:#fff; --line:#e8eaef; --line2:#f1f3f7;
+  --text:#1b1e24; --muted:#6a7280; --faint:#9aa1ac;
+  --primary:#2f6bff; --primary-soft:#ecf1ff;
+  --keep:#1f9d63; --keep-soft:#e8f7ef;
+  --warn:#c47c00; --warn-soft:#fdf3e0;
+  --danger:#d43b3b;
+  --text2:#4d5563; --faint2:#b0b6c0;
+  --fill:#eef1f5; --track:#e3e7ee; --sw-off:#dfe3ea; --hover:#fbfcfd;
+  --primary-soft2:#e0e9ff; --primary-line:#c8d8ff; --warn-fg:#8a5a00;
+  --stage:#e9ebf0; --dot:#2b3a55; --live:#22b573;
+  --pw:390px; --ph:844px;
+}
+/* 深色：跟随系统（html[data-theme=dark]，由 head 内联脚本与下方 THEME 引擎控制） */
+html[data-theme="dark"]{
+  --bg:#14161b; --surface:#1c1f26; --line:#2a2e37; --line2:#23262e;
+  --text:#e9ebef; --muted:#98a0ac; --faint:#7b828e;
+  --text2:#b6bdc9; --faint2:#59606c;
+  --primary:#5c8dff; --primary-soft:#1e2942;
+  --keep:#35c98c; --keep-soft:#12301f;
+  --warn:#e2a53c; --warn-soft:#332812;
+  --danger:#ff7070;
+  --fill:#242833; --track:#2c313c; --sw-off:#3b4250; --hover:#232830;
+  --primary-soft2:#263352; --primary-line:#35476e; --warn-fg:#e6c07c;
+  --stage:#0a0c10; --dot:#8fa0bd; --live:#2fd08b;
+}
+html[data-theme="dark"] .card{box-shadow:0 1px 2px rgba(0,0,0,.45)}
+html[data-theme="dark"] .toast{background:rgba(8,10,14,.94)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{margin:0;background:var(--stage);color:var(--text);
+  font:15px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  display:grid;place-items:center;overflow:hidden}
+.mono{font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
+.faint{color:var(--faint)}
+
+/* ---------- 手机外框（桌面演示用） ---------- */
+.phone{
+  position:relative;width:var(--pw);height:var(--ph);background:var(--surface);
+  border-radius:40px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 0 0 10px #12151a, 0 0 0 12px #2a2f38, 0 24px 60px rgba(15,20,35,.35);
+  transition:width .22s ease, height .22s ease;
+}
+body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-radius:0;box-shadow:none}
+
+
+.screen{flex:1;position:relative;overflow:hidden;background:var(--surface)}
+
+/* ---------- 页面 ---------- */
+.page{position:absolute;inset:0;display:none;flex-direction:column;background:var(--bg)}
+.page.on{display:flex}
+
+.hdr{flex:0 0 auto;background:var(--surface);border-bottom:1px solid var(--line);padding:6px 16px 10px}
+.hdr-row{display:flex;align-items:center;gap:8px}
+.camsel{display:flex;align-items:center;gap:6px;font-size:19px;font-weight:600;letter-spacing:-.2px;
+  cursor:pointer;position:relative}
+.camsel svg{width:15px;height:15px;stroke:var(--faint);fill:none;stroke-width:2.4;stroke-linecap:round;margin-top:3px;
+  transition:transform .16s}
+.camsel.open svg{transform:rotate(180deg)}
+
+/* 回放页摄像头下拉 */
+.campick{position:absolute;left:12px;right:12px;top:58px;z-index:30;display:none;
+  background:var(--surface);border:1px solid var(--line);border-radius:15px;padding:6px;
+  box-shadow:0 14px 36px rgba(10,14,22,.26)}
+.campick.on{display:block}
+.campick .cp{display:flex;align-items:center;gap:9px;padding:10px;border-radius:10px;font-size:13.5px}
+.campick .cp:active{background:var(--hover)}
+.campick .cp.on{background:var(--fill);color:var(--primary);font-weight:600}
+.campick .cp .dt{width:7px;height:7px;border-radius:50%;background:var(--keep);flex:none}
+.campick .cp .dt.off{background:var(--faint2)}
+.campick .cp .ch{margin-left:auto;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.campick .cp .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.campick .cempty{padding:16px 10px;text-align:center;font-size:12px;color:var(--faint)}
+.hdr-sub{font-size:12.5px;color:var(--faint);margin-top:1px}
+.iconbtn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:var(--text2);margin-left:auto}
+.iconbtn:active{background:var(--line2)}
+.iconbtn svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+/* 齿轮 = 快照刷新频率调节（1~10 秒），浮在预览页右上角 */
+.ratepop{position:absolute;right:12px;top:56px;z-index:24;display:none;width:238px;
+  background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 11px 11px;
+  box-shadow:0 12px 28px rgba(10,15,25,.22)}
+.ratepop.on{display:block}
+.ratepop .rt{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.ratepop .rt b{font-size:12.5px;font-weight:600}
+.ratepop .rt span{font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.ratepop .rg{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.ratepop .rg button{height:30px;border-radius:8px;font-size:12px;color:var(--text2);
+  background:var(--line2);font-variant-numeric:tabular-nums}
+.ratepop .rg button.on{background:var(--keep);color:#06240f;font-weight:600}
+.ratepop .rh{margin-top:8px;font-size:10.5px;color:var(--faint);line-height:1.5}
+
+.playempty{display:none;margin:60px 24px;text-align:center;color:var(--muted);font-size:13px;line-height:1.9}
+.playempty b{color:var(--text)}
+
+/* 日期横滑 */
+.dates{display:flex;gap:7px;overflow-x:auto;padding:10px 16px 12px;background:var(--surface);
+  scrollbar-width:none;border-bottom:1px solid var(--line)}
+.dates::-webkit-scrollbar{display:none}
+.dchip{flex:0 0 auto;min-width:56px;height:54px;border-radius:13px;background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
+  border:1px solid transparent;transition:.15s}
+.dchip .w{font-size:11px;color:var(--faint)}
+.dchip .d{font-size:15px;font-weight:600;letter-spacing:-.3px}
+.dchip .k{font-size:10px;color:var(--faint2)}
+.dchip.on{background:var(--primary);border-color:var(--primary)}
+.dchip.on .w,.dchip.on .d,.dchip.on .k{color:#fff}
+.dchip.on .k{opacity:.75}
+
+/* 概览 */
+.overview{display:flex;gap:0;background:var(--surface);padding:0 16px 12px}
+.ov{flex:1;padding:8px 0 0}
+.ov .l{font-size:11.5px;color:var(--faint)}
+.ov .v{font-size:16px;font-weight:600;letter-spacing:-.3px;margin-top:1px}
+.ov .v.g{color:var(--keep)}
+
+/* 热力条 */
+.heatwrap{background:var(--surface);padding:2px 16px 14px;border-bottom:1px solid var(--line)}
+.heat{display:flex;gap:3px;height:30px}
+.hcell{flex:1;border-radius:5px;background:var(--fill);position:relative;transition:.12s}
+.hcell.on{box-shadow:0 0 0 2px var(--primary);z-index:1}
+.heatlbl{display:flex;justify-content:space-between;font-size:10.5px;color:var(--faint2);margin-top:5px}
+.heatcap{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-bottom:8px}
+.heatcap b{color:var(--text2);font-weight:600;font-size:12px}
+.heatcap .sp{margin-left:auto}
+
+/* 片段列表 */
+.listhead{display:flex;align-items:center;padding:13px 16px 7px;font-size:12.5px;color:var(--muted)}
+.listhead b{color:var(--text);font-weight:600;font-size:13px}
+.listhead .sp{margin-left:auto;font-size:12px}
+.clips{flex:1;overflow-y:auto;padding:0 16px 16px;-webkit-overflow-scrolling:touch}
+.card{display:flex;gap:11px;align-items:center;background:var(--surface);border-radius:14px;
+  padding:9px;margin-bottom:9px;box-shadow:0 1px 2px rgba(20,26,40,.045)}
+.card:active{background:var(--hover)}
+.thumb{width:96px;height:54px;border-radius:9px;background:#22262c;flex:0 0 96px;display:block}
+.cbody{min-width:0;flex:1}
+.ct{font-size:14px;font-weight:600;letter-spacing:-.2px}
+.cm{font-size:11.5px;color:var(--faint);margin-top:2px;display:flex;gap:7px;align-items:center}
+.tag{display:inline-flex;align-items:center;height:19px;padding:0 6px;border-radius:5px;
+  font-size:10.5px;background:var(--fill);color:var(--text2)}
+.tag.g{background:var(--keep-soft);color:var(--keep)}
+.tag.b{background:var(--primary-soft);color:var(--primary)}
+.chev{width:16px;height:16px;stroke:var(--faint2);fill:none;stroke-width:2.2;stroke-linecap:round;flex:0 0 16px}
+
+/* ---------- 播放器 ---------- */
+.player{position:absolute;inset:0;background:#000;z-index:30;display:none;flex-direction:column;color:#fff}
+.player.on{display:flex}
+.p-top{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:14px 14px 8px;
+  background:linear-gradient(rgba(0,0,0,.6),transparent);position:relative;z-index:2}
+.p-top .ttl{font-size:14px;font-weight:500}
+.p-top .sub{font-size:11.5px;color:rgba(255,255,255,.6);margin-top:1px}
+.p-close,.p-more{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:#fff;
+  background:rgba(255,255,255,.12)}
+.p-close svg,.p-more svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+.p-more{margin-left:auto}
+
+.stage{flex:1;position:relative;display:grid;place-items:center;overflow:hidden;min-height:0}
+.stage canvas{width:100%;display:block;background:#111}
+.osd{position:absolute;left:12px;top:10px;font-size:11px;color:#e9ecf1;text-shadow:0 1px 3px #000;opacity:.92}
+.osd .rec{display:inline-flex;align-items:center;gap:4px;margin-left:7px;color:#ff6b6b}
+.osd .rec i{width:5px;height:5px;border-radius:50%;background:#ff4d4d;display:block}
+.qchip{position:absolute;right:10px;top:9px;height:22px;padding:0 8px;border-radius:11px;
+  background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.18);font-size:10.5px;
+  color:#dfe4ec;display:flex;align-items:center;gap:5px}
+.pcenter{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.pcenter .ring{width:62px;height:62px;border-radius:50%;background:rgba(0,0,0,.42);
+  border:1.5px solid rgba(255,255,255,.7);display:grid;place-items:center;transition:.2s;opacity:0}
+.pcenter .ring.show{opacity:1}
+.pcenter svg{width:24px;height:24px;fill:#fff;margin-left:3px}
+
+.p-ctrl{flex:0 0 auto;padding:10px 16px calc(14px + env(safe-area-inset-bottom));background:#000;position:relative;z-index:2}
+.p-times{display:flex;justify-content:space-between;font-size:11.5px;color:rgba(255,255,255,.66);margin-bottom:7px}
+.p-bar{height:26px;display:flex;align-items:center;position:relative;margin:0 -2px}
+.p-track{position:relative;height:4px;width:100%;border-radius:3px;background:rgba(255,255,255,.18)}
+.p-fill{position:absolute;left:0;top:0;height:100%;border-radius:3px;background:#fff}
+.p-knob{position:absolute;top:50%;width:13px;height:13px;border-radius:50%;background:#fff;
+  transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.p-marks{position:absolute;inset:0;pointer-events:none}
+.p-marks i{position:absolute;top:50%;width:2px;height:8px;background:rgba(255,255,255,.45);
+  transform:translate(-50%,-50%);border-radius:1px}
+.p-btns{display:flex;align-items:center;justify-content:center;gap:22px;margin-top:8px}
+.pb{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:#fff}
+.pb:active{background:rgba(255,255,255,.1)}
+.pb svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.pb .txt{font-size:10px;font-weight:600;letter-spacing:-.3px}
+.pb.play{width:56px;height:56px;background:rgba(255,255,255,.16)}
+.pb.play svg{width:26px;height:26px;fill:#fff;stroke:none}
+.p-swipe{text-align:center;font-size:10.5px;color:rgba(255,255,255,.34);margin-top:10px}
+
+/* 横屏 */
+.phone.land{--pw:844px;--ph:390px}
+.phone.land .tabbar{display:none}
+.phone.land .p-top{position:absolute;top:0;left:0;right:0;background:linear-gradient(rgba(0,0,0,.55),transparent);padding:10px 14px}
+.phone.land .p-ctrl{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.7) 42%)}
+.phone.land .stage{position:absolute;inset:0}
+.phone.land .p-swipe{display:none}
+
+/* ---------- 底部 tab ---------- */
+.tabbar{flex:0 0 auto;height:58px;background:var(--surface);border-top:1px solid var(--line);
+  display:flex;align-items:center;padding-bottom:env(safe-area-inset-bottom)}
+.tb{flex:1;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
+  color:var(--faint);font-size:10.5px}
+.tb svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.tb.on{color:var(--primary)}
+
+/* ---------- 摄像头页 ---------- */
+.camwrap{flex:1;overflow-y:auto;padding:0 16px 20px}
+.camtabs{display:flex;gap:7px;overflow-x:auto;padding:12px 0 12px;scrollbar-width:none}
+.camtabs::-webkit-scrollbar{display:none}
+.ctab{flex:0 0 auto;height:32px;padding:0 13px;border-radius:16px;background:var(--surface);
+  border:1px solid var(--line);font-size:13px;color:var(--text2);display:flex;align-items:center;gap:6px}
+.ctab.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.ctab .dot{width:5px;height:5px;border-radius:50%;background:var(--live)}
+.ctab.on .dot{background:#bff0d5}
+
+.mcard{background:var(--surface);border-radius:14px;padding:14px;margin-bottom:11px}
+.mcard h3{font-size:13px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;gap:6px}
+.mcard h3 .sub{font-weight:400;color:var(--faint);font-size:11.5px;margin-left:auto}
+
+.srow{padding:10px 0;border-top:1px solid var(--line2)}
+.srow:first-of-type{border-top:none;padding-top:0}
+.srow .top{display:flex;align-items:baseline;gap:8px}
+.srow .n{font-size:13.5px}
+.srow .v{margin-left:auto;font-size:13px;font-weight:600;color:var(--primary)}
+.srow .h{font-size:11px;color:var(--faint);margin-top:1px}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent;margin:4px 0 0}
+input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:3px;background:var(--track)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;
+  background:#fff;border:2.5px solid var(--primary);margin-top:-9px;box-shadow:0 1px 4px rgba(20,30,60,.2)}
+
+.seg2{display:flex;background:var(--bg);border-radius:10px;padding:3px;margin-top:8px}
+.seg2 button{flex:1;height:32px;border-radius:8px;font-size:12.5px;color:var(--text2)}
+.seg2 button.on{background:var(--surface);color:var(--text);font-weight:500;box-shadow:0 1px 3px rgba(20,30,60,.09)}
+
+.note{font-size:11.5px;line-height:1.55;background:#fdf3e0;color:var(--warn-fg);border-radius:9px;
+  padding:8px 10px;margin:2px 0 10px}
+.dim{opacity:.4;pointer-events:none}
+.sw{width:40px;height:23px;border-radius:12px;background:var(--sw-off);position:relative;flex:0 0 40px;margin-left:auto;transition:.15s}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:19px;height:19px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:.15s}
+.sw.on{background:var(--primary)}
+.sw.on::after{left:19px}
+.detect{display:flex;align-items:center;gap:7px;background:var(--bg);border-radius:9px;padding:8px 10px;
+  font-size:11.5px;color:var(--text2);margin:2px 0 10px}
+.detect .k{width:6px;height:6px;border-radius:50%;background:var(--dot);display:block;flex:0 0 6px}
+.detect b{font-weight:600}
+.est{font-size:11.5px;color:var(--faint);margin-top:9px;display:flex;justify-content:space-between}
+.est b{color:var(--text2);font-weight:600}
+
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{height:31px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:var(--surface);
+  font-size:12.5px;color:var(--text2)}
+.chip.on{background:var(--primary-soft);border-color:var(--primary-line);color:var(--primary);font-weight:500}
+.swrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line2);font-size:12.5px;color:var(--text2)}
+.swrow:first-of-type{border-top:none;padding-top:2px}
+.swrow .sw{margin-left:auto;flex:0 0 40px}
+.btnline{width:100%;height:37px;border-radius:10px;background:var(--primary-soft);color:var(--primary);
+  font-size:13px;font-weight:500;margin-top:10px}
+.btnline:active{background:var(--primary-soft2)}
+.logbox{background:#0e1013;color:#d5dbe4;border-radius:10px;padding:10px 12px;margin-top:10px;
+  height:190px;overflow-y:auto;font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;
+  font-size:11px;line-height:1.6}
+.logbox pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-all}
+.logbox .empty{color:var(--faint)}
+.diagenv{margin-top:10px;padding:9px 11px;border-radius:10px;background:var(--primary-soft);
+  font-size:12px;line-height:1.7;color:var(--text2);word-break:break-all}
+.diagenv .ok{color:#1a9c4c}
+.diagenv .bad{color:#d9552b}
+.diagenv .empty{color:var(--faint)}
+.logbtns{display:flex;gap:8px;margin-top:9px}
+.logbtn{flex:1;height:34px;border-radius:9px;background:var(--bg);border:1px solid var(--line);
+  font-size:12.5px;color:var(--text2)}
+.logbtn:active{opacity:.65}
+.logbtn.danger{color:var(--warn-fg);background:#fdf3e0;border-color:transparent}
+.diagwarn{margin-top:10px;padding:10px 11px;border-radius:10px;background:#fdf3e0;
+  border:1px solid #f0d9a8;color:#8a5a12;font-size:12px;line-height:1.6}
+.diagwarn b{color:#7a4a08}
+.hint{font-size:11px;color:var(--faint);line-height:1.55;margin:-2px 0 10px}
+.bars{display:flex;gap:7px;margin-top:9px}
+.bcell{flex:1;background:var(--bg);border-radius:9px;padding:8px 9px}
+.bcell .k{font-size:10.5px;color:var(--faint)}
+.bcell .num{font-size:13.5px;font-weight:600;margin-top:1px;font-variant-numeric:tabular-nums}
+.bcell .track{height:3px;border-radius:2px;background:var(--track);margin-top:6px;overflow:hidden}
+.bcell .track i{display:block;height:100%;border-radius:2px;background:var(--primary)}
+
+.maskstage{position:relative;border-radius:10px;overflow:hidden;background:#0e1013;aspect-ratio:16/9;margin-top:10px}
+.maskstage canvas{width:100%;height:100%;display:block;touch-action:none}
+.mtip{font-size:11px;color:var(--faint);margin-top:8px;line-height:1.55}
+.mlist{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+.mitem{display:flex;align-items:center;gap:6px;height:26px;padding:0 9px;border-radius:7px;
+  background:var(--bg);font-size:11.5px;color:var(--text2)}
+.mitem i{width:7px;height:7px;border-radius:2px;display:block}
+.mitem .x{color:var(--faint2);font-size:14px;line-height:1;padding-left:2px}
+
+/* ---------- 直播页 ---------- */
+/* 卡片和底部资源栏放在同一个滚动容器里：资源栏跟着手指走，不再常驻底部。
+   注意不能给 #page-live 本身加滚动 —— 实时播放层是它的 absolute 子元素，
+   父容器一旦滚动，播放层会跟着一起滚出屏幕。 */
+.livescroll{flex:1;display:flex;flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.livescroll .livewrap{flex:0 0 auto;overflow:visible;padding:12px 14px 4px}
+.livescroll .resbar{border-radius:0}
+.livewrap{flex:1;overflow-y:auto;padding:12px 14px 8px;-webkit-overflow-scrolling:touch}
+.livecard{position:relative;border-radius:14px;overflow:hidden;margin-bottom:12px;background:#0e1013;box-shadow:0 1px 3px rgba(15,20,35,.14)}
+.livecard{aspect-ratio:16/9}
+.livecard canvas{display:none}
+.livecard .snap-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;z-index:1}
+.livecard.hasphoto .snap-img{display:block}
+.livecard .nophoto{position:absolute;inset:0;z-index:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:6px;background:var(--stage);
+  color:var(--faint);font-size:11.5px;text-align:center;padding:0 14px}
+.livecard .nophoto .np-ico{width:26px;height:26px;border-radius:50%;border:2px dashed var(--line2);
+  display:grid;place-items:center;font-size:12px;color:var(--faint2)}
+.livecard.hasphoto .nophoto{display:none}
+.livecard .lv-osd,.livecard .snap-cd,.livecard .snap-ago{visibility:hidden}
+.livecard.hasphoto .lv-osd,.livecard.hasphoto .snap-cd,.livecard.hasphoto .snap-ago{visibility:visible}
+#stageVideo{display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+  background:#000;z-index:1}
+.livecard .lv-osd{position:absolute;left:10px;top:8px;font-size:10.5px;color:#e9ecf1;text-shadow:0 1px 3px #000;line-height:1.5}
+.livecard .lv-osd .mono{opacity:.92}
+.livecard .lv-name{position:absolute;left:10px;bottom:9px;background:rgba(0,0,0,.5);border-radius:6px;
+  padding:2px 8px;font-size:11.5px;color:#fff;display:flex;align-items:center;gap:6px}
+.livecard .lv-badge{position:absolute;right:10px;bottom:9px;display:flex;align-items:center;gap:5px;
+  background:rgba(34,181,115,.92);border-radius:6px;padding:2.5px 8px;font-size:11px;color:#fff;font-weight:500}
+.livecard .lv-badge i{width:5px;height:5px;border-radius:50%;background:#fff;display:block}
+.livecard.off .lv-badge{background:rgba(120,127,138,.85)}
+.livecard .lv-tip{position:absolute;inset:0;display:grid;place-items:center;font-size:12.5px;color:#8b93a1}
+/* 快照图有 z-index:1，所有悬浮层必须压在图上面，否则会被图盖住看不见 */
+.livecard .lv-osd,.livecard .snap-ago,.livecard .lv-name,.livecard .lv-badge,.livecard .lv-tip{z-index:4}
+
+/* 快照墙：年龄 + 倒计时 */
+.snap-ago{position:absolute;right:10px;bottom:9px;height:21px;padding:0 8px;border-radius:6px;
+  background:rgba(0,0,0,.52);color:#dfe4ec;font-size:10.5px;display:flex;align-items:center;gap:5px;
+  font-variant-numeric:tabular-nums}
+.snap-ago b{font-weight:600}
+.snap-ago.stale{background:rgba(196,124,0,.9);color:#fff}
+.snap-cd{position:absolute;right:10px;top:8px;height:20px;padding:0 8px 0 6px;border-radius:10px;
+  background:rgba(0,0,0,.42);color:#e6ebf2;font-size:10.5px;display:flex;align-items:center;gap:5px;
+  font-variant-numeric:tabular-nums;z-index:4}
+.snap-cd .dot{width:7px;height:7px;border-radius:50%;background:#34d399;display:block;
+  box-shadow:0 0 5px rgba(52,211,153,.8)}
+.snap-cd.bad .dot{background:#ff5a5f;box-shadow:0 0 5px rgba(255,90,95,.85)}
+.snap-play{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.snap-play .p{width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,.45);
+  border:1.4px solid rgba(255,255,255,.65);display:grid;place-items:center}
+.snap-play svg{width:19px;height:19px;fill:#fff;margin-left:2px}
+.livehint{font-size:11px;color:var(--faint);text-align:center;padding:0 0 10px}
+
+/* 实时播放层 */
+.liveroom{position:absolute;inset:0;background:#000;z-index:26;display:none;flex-direction:column;color:#fff}
+.liveroom.on{display:flex}
+.lr-top{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:10px 12px 8px;background:#0b0d10}
+.lr-top .bk{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.1)}
+.lr-top .bk svg{width:17px;height:17px;stroke:#fff;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.lr-title{min-width:0;flex:1}
+.lr-title .n{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lr-title .s{font-size:10.5px;color:rgba(255,255,255,.5);margin-top:1px;display:flex;align-items:center;gap:5px}
+.lr-title .s i{width:5px;height:5px;border-radius:50%;background:#34d399;display:block}
+.lr-btn{height:30px;padding:0 11px;border-radius:8px;background:rgba(255,255,255,.12);font-size:12px;
+  display:flex;align-items:center;gap:5px;color:#e8ecf3}
+.lr-btn svg{width:13px;height:13px;fill:currentColor}
+.lr-body{flex:1;min-height:0;display:grid;gap:2px;background:#000;align-content:center;padding:2px}
+.lr-tile{position:relative;background:#0e1013;overflow:hidden;border-radius:2px}
+.lr-tile{aspect-ratio:16/9}
+.lr-tile .nophoto{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:5px;background:var(--stage);color:var(--faint);font-size:11px}
+.lr-tile.hasphoto .nophoto{display:none}
+.lr-tile .snap-img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;z-index:1}
+.lr-tile .tf,.lr-tile .tn{z-index:2}
+.lr-tile canvas{width:100%;display:block}
+.lr-tile .tn{position:absolute;left:6px;bottom:5px;font-size:10px;color:#fff;text-shadow:0 1px 2px #000;
+  background:rgba(0,0,0,.4);padding:1px 6px;border-radius:4px;max-width:78%;overflow:hidden;
+  white-space:nowrap;text-overflow:ellipsis}
+.lr-tile .tf{position:absolute;right:6px;top:5px;font-size:9.5px;color:#cfd6e0;text-shadow:0 1px 2px #000;
+  font-variant-numeric:tabular-nums}
+.lr-tile.cur{box-shadow:inset 0 0 0 2px #2f6bff}
+.lr-tile .off{position:absolute;inset:0;display:grid;place-items:center;color:#8b93a1;font-size:11px}
+.lr-ctrl{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:9px 14px calc(11px + env(safe-area-inset-bottom));
+  background:#0b0d10;font-size:11px;color:rgba(255,255,255,.55)}
+.lr-ctrl .live{display:flex;align-items:center;gap:5px;background:rgba(34,181,115,.2);color:#5ee1a1;
+  border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:500}
+.lr-ctrl .live i{width:5px;height:5px;border-radius:50%;background:#34d399;display:block}
+.lr-ctrl .sp{margin-left:auto}
+/* 悬浮在实时画面上方的播放/暂停（HomeKit 风格：居中胶囊，半透明） */
+.lr-float{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:6;display:flex;gap:8px}
+.lr-float button{height:30px;padding:0 14px;border-radius:15px;border:none;cursor:pointer;
+  background:rgba(0,0,0,.5);color:#fff;font-size:12px;display:flex;align-items:center;gap:6px;
+  backdrop-filter:blur(4px)}
+.lr-float button i{width:7px;height:7px;border-radius:50%;background:#34d399;display:block}
+.lr-float button.paused i{background:#8b93a1;box-shadow:none}
+.lr-tile .nophoto{z-index:3}
+
+.resbar{flex:0 0 auto;background:var(--surface);border-top:1px solid var(--line);padding:9px 16px calc(9px + env(safe-area-inset-bottom))}
+.resbar .r{display:flex;gap:6px;font-size:12px;color:var(--text2);margin-top:2px;align-items:baseline}
+.resbar .r b{font-weight:600;font-variant-numeric:tabular-nums}
+.resbar .k{color:var(--faint);flex:0 0 auto}
+.modebar{background:var(--surface);padding:10px 16px 12px;border-bottom:1px solid var(--line)}
+.modebar .seg2{margin-top:0}
+
+/* ---------- 设置页表单 ---------- */
+.fld{margin:2px 0 10px}
+.fld label{display:block;font-size:11.5px;color:var(--faint);margin-bottom:5px}
+.fld input[type=text],.fld input[type=password],.fld input[type=number]{width:100%;height:38px;border:1px solid var(--line);
+  border-radius:10px;padding:0 11px;font:13.5px/1 -apple-system,"Microsoft YaHei",sans-serif;color:var(--text);
+  background:var(--bg);outline:none}
+.fld input:focus{border-color:var(--primary);background:#fff}
+.fld .half{display:flex;gap:8px}
+.fld .half>div{flex:1}
+.fld select{width:100%;height:38px;border:1px solid var(--line);border-radius:10px;padding:0 8px;
+  font:13px/1 -apple-system,"Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg);outline:none}
+.rtspbox{background:var(--bg);border:1px dashed var(--line);border-radius:10px;padding:9px 11px;margin-top:8px}
+.rtspbox label{font-size:11px;color:var(--faint)}
+.rtspbox code{display:block;font:11.5px/1.5 "Cascadia Mono",Consolas,monospace;color:var(--text2);margin-top:2px;
+  word-break:break-all}
+.camrow{display:flex;align-items:center;gap:9px;background:var(--surface);border-radius:12px;
+  padding:11px 12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(20,26,40,.045)}
+.camrow .st{width:7px;height:7px;border-radius:50%;background:var(--live);flex:0 0 7px}
+.camrow .st.gray{background:var(--faint2)}
+.camrow .cn{font-size:13.5px;font-weight:600}
+.camrow .ci{font-size:11px;color:var(--faint);margin-top:1px}
+.camrow .tags{margin-left:auto;display:flex;gap:5px}
+.pillbtn{height:31px;padding:0 13px;border-radius:9px;background:var(--primary-soft);color:var(--primary);
+  font-size:12.5px;font-weight:500}
+.pillbtn.red{background:#fdecec;color:var(--danger)}
+.pillbtn.gray{background:var(--bg);color:var(--text2);font-weight:400}
+.dirrow{display:flex;gap:8px;align-items:center}
+.dirrow input{flex:1}
+.dirrow .pillbtn{flex:0 0 auto;height:38px}
+
+/* 保留周期步进器 */
+.retrow{display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line2)}
+.retrow:first-of-type{border-top:none;padding-top:2px}
+.retrow .rn{font-size:12.5px;min-width:0;flex:1}
+.retrow .rn i{display:block;font-style:normal;font-size:10.5px;color:var(--faint);margin-top:1px}
+.stepper{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.stepper button{width:26px;height:28px;display:grid;place-items:center;color:var(--text2);font-size:15px;
+  background:var(--bg)}
+.stepper button:active{background:#e9edf4}
+.stepper .val{min-width:52px;text-align:center;font-size:12.5px;font-variant-numeric:tabular-nums;
+  background:var(--surface);line-height:28px;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.retrow .gb{width:52px;text-align:right;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.cleanline{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text2);background:var(--bg);
+  border-radius:9px;padding:8px 10px;margin-top:9px;line-height:1.5}
+.cleanline b{font-weight:600}
+.cleanline .dot{width:6px;height:6px;border-radius:50%;background:var(--live);flex:0 0 6px}
+
+/* ---------- 任务页 ---------- */
+.taskwrap{flex:1;overflow-y:auto;padding:12px 16px 20px}
+.tk{background:var(--surface);border-radius:12px;padding:12px;margin-bottom:9px}
+.tk .l1{display:flex;align-items:center;gap:8px}
+.tk .name{font-size:12.5px;font-family:"Cascadia Mono",Consolas,monospace}
+.tk .l2{display:flex;align-items:center;font-size:11.5px;color:var(--faint);margin-top:5px;gap:8px}
+.pbar{height:3px;border-radius:2px;background:var(--fill);margin-top:8px;overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--primary);border-radius:2px}
+
+/* 遮罩提示 */
+.toast{position:absolute;left:50%;bottom:96px;transform:translate(-50%,10px);background:rgba(24,28,36,.92);
+  color:#fff;font-size:12.5px;padding:9px 14px;border-radius:10px;opacity:0;transition:.22s;pointer-events:none;z-index:50}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+/* ================= 设置页：公共 / 每路 分区 ================= */
+.sechead{display:flex;align-items:center;gap:9px;padding:16px 2px 9px}
+.sechead b{font-size:12px;letter-spacing:.6px;color:var(--muted);font-weight:600;text-transform:none}
+.sechead .ln{flex:1;height:1px;background:var(--line)}
+.sechead .cnt{font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+
+/* 公共卡：普通白卡 */
+.gcard{background:var(--surface);border-radius:14px;padding:14px;margin-bottom:11px}
+.gcard h3{font-size:13px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;gap:6px}
+.gcard h3 .sub{font-weight:400;color:var(--faint);font-size:11.5px;margin-left:auto}
+.gcard .divline{height:1px;background:var(--line2);margin:11px 0}
+
+/* 摄像头行 */
+.camrow{display:flex;align-items:center;gap:10px;padding:10px 11px;border-radius:13px;
+  background:var(--surface);border:1px solid var(--line);margin-bottom:8px}
+.camrow.open{border-color:var(--primary-line);background:var(--primary-soft);
+  border-radius:13px 13px 0 0;margin-bottom:0}
+.camrow .avatar{flex:0 0 32px;width:32px;height:32px;border-radius:9px;background:var(--fill);
+  display:grid;place-items:center;color:var(--muted)}
+.camrow.open .avatar{background:var(--surface);color:var(--primary)}
+.camrow .avatar svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round}
+.camrow .meta{flex:1;min-width:0}
+.camrow .meta .t{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.camrow .meta .s{font-size:11.5px;color:var(--faint);margin-top:2px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.camrow .meta .s .sep{color:var(--line);}
+.camrow .acts{display:flex;gap:6px;align-items:center}
+.camrow .dragh{flex:0 0 20px;width:20px;height:34px;display:grid;place-items:center;
+  color:var(--faint2);cursor:grab;touch-action:none;margin-left:-3px}
+.camrow .dragh:active{cursor:grabbing;color:var(--primary)}
+.camrow .dragh svg{width:14px;height:14px;fill:currentColor}
+.camrow.dragging{position:relative;z-index:9;background:var(--surface);
+  box-shadow:0 12px 28px rgba(10,14,22,.24);border-color:var(--primary-line)}
+.camrow.dragging .dragh{color:var(--primary)}
+.minibtn{height:27px;padding:0 9px;border-radius:8px;border:1px solid var(--line);
+  background:var(--surface);font-size:11.5px;color:var(--text2);white-space:nowrap}
+.camrow.open .minibtn{background:var(--surface)}
+.minibtn.danger{color:var(--danger);border-color:color-mix(in srgb, var(--danger) 32%, transparent)}
+.minibtn.armed{background:var(--danger);color:#fff;border-color:var(--danger)}
+
+/* 每路专属参数：染底 + 左侧色条，与公共卡明显区分 */
+.ccard{background:var(--primary-soft);border:1px solid var(--primary-line);border-top:none;
+  border-radius:0 0 13px 13px;padding:0 10px 10px;margin-bottom:11px;
+  box-shadow:inset 3px 0 0 var(--primary)}
+.ccard .tag{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--primary);
+  padding:8px 2px 9px;font-weight:600}
+.ccard .tag i{width:6px;height:6px;border-radius:50%;background:var(--primary);display:block}
+.ccard .tag .ro-flag{margin-left:auto;font-weight:400;color:var(--faint);font-size:10.5px}
+.ccard .sub{background:var(--surface);border-radius:11px;padding:11px 12px;margin-bottom:8px}
+.ccard .sub:last-child{margin-bottom:0}
+.ccard .sub h4{margin:0 0 9px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px}
+.ccard .sub h4 em{font-style:normal;font-weight:400;color:var(--faint);font-size:11px;margin-left:auto}
+
+/* 只读摘要行 */
+.ro{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line2);font-size:12.5px}
+.ro:first-child{border-top:none;padding-top:0}
+.ro:last-child{padding-bottom:0}
+.ro .k{color:var(--muted);flex:0 0 auto}
+.ro .v{margin-left:auto;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;
+  max-width:64%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ro .v.dim{font-weight:400;color:var(--faint2)}
+.ro .v.url{font-family:"Cascadia Mono",Consolas,monospace;font-size:10.5px;font-weight:400;color:var(--text2)}
+
+/* 编辑条：吸底，三键 */
+.editbar{position:sticky;bottom:4px;z-index:9;display:flex;gap:7px;padding:8px;margin-top:4px;
+  border-radius:12px;background:var(--surface);border:1px solid var(--line);
+  box-shadow:0 8px 24px rgba(20,32,60,.16)}
+.editbar button{flex:1;height:35px;border-radius:9px;font-size:12.5px;font-weight:600}
+.editbar .ok{background:var(--primary);color:#fff;flex:1.35}
+.editbar .rst{background:var(--warn-soft);color:var(--warn-fg)}
+.editbar .no{background:var(--fill);color:var(--text2)}
+
+/* 编辑态控件：输入框组 */
+.fld2{display:flex;flex-direction:column;gap:5px;margin-bottom:9px}
+.fld2:last-child{margin-bottom:0}
+.fld2 label{font-size:11.5px;color:var(--faint)}
+.fld2 input{width:100%;height:36px;border:1px solid var(--line);border-radius:9px;padding:0 10px;
+  background:var(--bg);color:var(--text);font-size:12px;outline:none}
+.fld2 input.mono{font-family:"Cascadia Mono",Consolas,monospace;font-size:11px}
+.fld2 input:focus{border-color:var(--primary);background:var(--surface)}
+
+/* 画布：编辑态可画，只读态禁手 */
+.maskstage{position:relative;border-radius:10px;overflow:hidden;background:#0e1013;
+  aspect-ratio:16/9;margin-top:9px}
+.maskstage canvas{width:100%;height:100%;display:block;touch-action:none;position:relative;z-index:2}
+.maskstage .mimg{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+  display:none;z-index:1;background:#0e1013}
+.maskstage .mimg.on{display:block}
+.maskstage.locked::after{content:"点「修改」后可编辑区域";position:absolute;inset:auto 0 0 0;z-index:3;
+  padding:5px 9px;font-size:10.5px;color:#fff;background:rgba(10,12,16,.62);text-align:center}
+.mtip{margin-top:8px;font-size:11px;color:var(--muted);line-height:1.5;padding:7px 9px;
+  border-radius:8px;background:var(--fill)}
+.mlist{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;min-height:0}
+.mitem{display:flex;align-items:center;gap:6px;height:25px;padding:0 8px;border-radius:7px;
+  background:var(--fill);font-size:11.5px;color:var(--text2)}
+.mitem i{width:7px;height:7px;border-radius:2px;display:block}
+.mitem .x{color:var(--primary);font-size:11px;line-height:1;padding-left:3px;cursor:pointer;font-weight:600}
+
+/* 通用 / 摄像头 两个分区，明显区分 */
+.zone{margin-top:4px}
+.zonehead{display:flex;align-items:center;gap:10px;padding:15px 2px 10px;user-select:none}
+.zonehead[data-gentoggle]{cursor:pointer}
+.zonehead .zi{width:27px;height:27px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+  font-size:13.5px;color:#fff;flex:none}
+.zone.gen .zi{background:var(--primary)}
+.zone.cam .zi{background:var(--keep)}
+.zonehead b{font-size:14.5px;display:block;line-height:1.2}
+.zonehead .zs{font-size:10.5px;color:var(--faint);margin-top:1px}
+.zonehead .chev{margin-left:auto;font-size:11px;color:var(--muted);white-space:nowrap}
+.zonehead .cnt{font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.zone.cam{border-top:1px dashed var(--line);margin-top:10px;padding-top:2px}
+.genfold{display:flex;align-items:center;gap:10px;padding:11px 14px}
+.genfold .genline{flex:1;font-size:11.5px;color:var(--muted);line-height:1.6;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.empty{text-align:center;padding:26px 10px;color:var(--faint);font-size:12.5px;line-height:1.7}
+</style>
+</head>
+<body>
+
+<div class="phone" id="phone">
+
+  <div class="screen" id="screen">
+
+    <!-- ============ 直播 ============ -->
+    <section class="page on" id="page-live">
+      <div class="hdr">
+        <div class="hdr-row">
+          <div>
+            <div class="camsel" style="font-size:17px">实时预览</div>
+            <div class="hdr-sub"><span id="liveOnline" style="color:var(--keep)">● 4 台在线</span> · <span id="liveMode">快照 · 10 秒刷新</span></div>
+          </div>
+          <button class="iconbtn" id="btnGoSet">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2l.4 2.7h4l.4-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></svg>
+          </button>
+          <button class="iconbtn" id="btnLiveFull" title="全屏横屏">
+            <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M21 16v3a2 2 0 01-2 2h-3M8 21H5a2 2 0 01-2-2v-3"/></svg>
+          </button>
+        </div>
+      </div>
+      <!-- 快照刷新频率（齿轮）：1~10 秒 -->
+      <div class="ratepop" id="ratePop">
+        <div class="rt"><b>快照刷新间隔</b><span id="rateNow">10 秒</span></div>
+        <div class="rg" id="rateGrid"></div>
+        <div class="rh">越短越跟得上，但每次刷新都是一次拉流；2~5 秒最划算。</div>
+      </div>
+      <div class="livescroll">
+        <div class="livewrap" id="liveWrap"></div>
+        <div class="resbar">
+          <div class="r"><span class="k">存储</span><span>剩余 <b id="resFree">336.0 GB</b> / 共 <b id="resTotal">473.9 GB</b>（保留 <b id="resKeep">4 天</b>，循环覆盖）</span></div>
+          <div class="r"><span class="k">资源</span><span>CPU <b id="resCpu">6%</b> · 内存 <b id="resMem">96.4 MB</b> · 核显 <b id="resGpu">QSV</b></span></div>
+          <div class="r"><span class="k">目录</span><span class="mono" id="resDir" style="font-size:11.5px">/vol2/1000/NVR</span></div>
+        </div>
+      </div>
+
+      <!-- 实时播放层：单路 / 宫格 -->
+      <div class="liveroom" id="liveRoom">
+        <div class="lr-top">
+          <button class="bk" id="lrBack">
+            <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+          </button>
+          <div class="lr-title">
+            <div class="n" id="lrName">车库入口</div>
+            <div class="s"><i></i><span id="lrSub">子码流 · 0.6 Mbps · 延迟约 1.2 秒</span></div>
+          </div>
+          <button class="lr-btn" id="lrGrid">
+            <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
+            <span id="lrGridTxt">宫格</span>
+          </button>
+          <button class="lr-btn" id="lrFull" title="全屏横屏">
+            <svg viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M21 16v3a2 2 0 01-2 2h-3M8 21H5a2 2 0 01-2-2v-3"/></svg>
+          </button>
+        </div>
+        <div class="lr-body" id="lrBody"></div>
+        <div class="lr-ctrl">
+          <span class="live"><i></i>实时</span>
+          <span class="mono" id="lrClock">18:01:23</span>
+          <span class="sp" id="lrHint">点画面暂停 / 继续</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 回放 ============ -->
+    <section class="page" id="page-list">
+      <div class="hdr">
+        <div class="hdr-row">
+          <div>
+            <div class="camsel" id="camSel"><span id="camSelName">车库入口</span>
+              <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+            </div>
+            <div class="hdr-sub" id="hdrSub">CH01 · 已处理 3 / 4 路</div>
+          </div>
+          <button class="iconbtn" id="btnScan">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="campick" id="camPick"></div>
+
+      <div class="playempty" id="playEmpty"></div>
+
+      <div class="modebar">
+        <div class="seg2">
+          <button class="on" data-pmode="full">全时录像</button>
+          <button data-pmode="clip">精简片段</button>
+        </div>
+      </div>
+
+      <div class="dates" id="dates"></div>
+
+      <div class="overview">
+        <div class="ov"><div class="l">保留时长</div><div class="v g" id="ovKeep">1:42:38</div></div>
+        <div class="ov"><div class="l">占全天</div><div class="v" id="ovPct">7.1%</div></div>
+        <div class="ov"><div class="l">片段数</div><div class="v" id="ovCnt">14</div></div>
+        <div class="ov"><div class="l">体积</div><div class="v" id="ovSize">287 MB</div></div>
+      </div>
+
+      <div class="heatwrap">
+        <div class="heatcap">
+          <b id="heatTitle">全天活动</b>
+          <span>点击色块只看该时段</span>
+          <span class="sp" id="heatClear" style="color:var(--primary);font-size:11.5px;display:none">显示全部</span>
+        </div>
+        <div class="heat" id="heat"></div>
+        <div class="heatlbl"><span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span></div>
+      </div>
+
+      <div class="listhead">
+        <b id="listTitle">全部片段</b>
+        <span class="sp" id="listCount">14 段</span>
+      </div>
+      <div class="clips" id="clips"></div>
+    </section>
+
+    <!-- ============ 设置 ============ -->
+    <section class="page" id="page-cam">
+      <div class="hdr">
+        <div class="hdr-row">
+          <div>
+            <div class="camsel" style="font-size:17px">设置</div>
+            <div class="hdr-sub">通用设置 · 每路参数 · 诊断</div>
+          </div>
+        </div>
+      </div>
+      <div class="camwrap">
+        <div class="camtabs" id="camTabs"></div>
+        <div id="camBody"></div>
+      </div>
+    </section>
+
+    <!-- ============ 播放器 ============ -->
+    <section class="player" id="player">
+      <div class="p-top">
+        <button class="p-close" id="pClose">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        <div>
+          <div class="ttl" id="pTitle">车库入口</div>
+          <div class="sub mono" id="pSub">08:12:04 – 08:19:31</div>
+        </div>
+        <button class="p-more" id="pMore">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none"/></svg>
+        </button>
+      </div>
+
+      <div class="stage" id="stage">
+        <video id="stageVideo" playsinline></video>
+        <canvas id="scene"></canvas>
+        <div class="osd mono">
+          <span id="osdCam">CH01</span>
+          <span class="rec"><i></i>REC</span>
+          <div id="osdTime" style="margin-top:1px">2026-10-20 08:12:04</div>
+        </div>
+        <div class="qchip" id="qchip"><span class="dot" style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:block"></span>预览 480p</div>
+        <div class="pcenter"><div class="ring" id="ring"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>
+      </div>
+
+      <div class="p-ctrl">
+        <div class="p-times">
+          <span class="mono" id="tNow">08:12:04</span>
+          <span class="mono" id="tEnd">08:19:31</span>
+        </div>
+        <div class="p-bar" id="pBar">
+          <div class="p-track"><i class="p-fill" id="pFill"></i><i class="p-knob" id="pKnob"></i></div>
+        </div>
+        <div class="p-btns">
+          <button class="pb" id="bPrev"><svg viewBox="0 0 24 24"><path d="M17 6v12M14 12L5 6v12z"/></svg></button>
+          <button class="pb" id="bBack"><span class="txt mono">-10s</span></button>
+          <button class="pb play" id="bPlay"><svg viewBox="0 0 24 24" id="playIcon"><path d="M8 5v14l11-7z"/></svg></button>
+          <button class="pb" id="bFwd"><span class="txt mono">+10s</span></button>
+          <button class="pb" id="bLand"><svg viewBox="0 0 24 24"><rect x="3" y="6.5" width="18" height="11" rx="2.5"/><path d="M9 21h6"/></svg></button>
+        </div>
+        <div class="p-swipe">左右滑动切换片段 · 双指可缩放画面</div>
+      </div>
+      <div class="toast" id="toast">已切换为横屏预览</div>
+    </section>
+
+    <div class="toast" id="toast2"></div>
+  </div>
+
+  <nav class="tabbar" id="tabbar">
+    <button class="tb on" data-page="live">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg>
+      <span>直播</span>
+    </button>
+    <button class="tb" data-page="list">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.4 2"/></svg>
+      <span>回放</span>
+    </button>
+    <button class="tb" data-page="cam">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2l.4 2.7h4l.4-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></svg>
+      <span>设置</span>
+    </button>
+  </nav>
+</div>
+
+<script>
+"use strict";
+
+/* ================= 数据 =================
+   摄像头只留「身份 + 码流」两类字段：不区分品牌、不存账号密码（要认证就直接写进
+   RTSP 地址里，形如 rtsp://user:pass@ip:554/...），也不做分组/录像策略。
+   每路的录像与画质参数统一放 camParams，与该路一一对应。 */
+const CAMERAS = [
+  { id:"cam-01", name:"车库入口", ch:"CH01", res:"4MP",   online:true,
+    main:"rtsp://192.168.2.108:8554/ch1", sub:"rtsp://192.168.2.108:8554/ch3" },
+  { id:"cam-02", name:"一楼大堂", ch:"CH02", res:"4MP",   online:true,
+    main:"rtsp://192.168.2.116:554/Streaming/Channels/101", sub:"rtsp://192.168.2.116:554/Streaming/Channels/102" },
+  { id:"cam-03", name:"货梯走廊", ch:"CH03", res:"1080p", online:true,
+    main:"rtsp://192.168.2.121:554/cam/realmonitor?channel=1&subtype=0", sub:"rtsp://192.168.2.121:554/cam/realmonitor?channel=1&subtype=1" },
+  { id:"cam-04", name:"后门通道", ch:"CH04", res:"1080p", online:true,
+    main:"rtsp://192.168.2.130:554/video1", sub:"rtsp://192.168.2.130:554/video2" },
+];
+
+/* 录像引擎（全时存储）设置 */
+const REC = {
+  enabled:true,
+  dir:"/vol1/@appshare/nvr-output",   // 按摄像头/日期/时段分目录
+  segSec:300,             // 段落时长（秒）
+  port:18081,             // Web 服务端口（安装时选，应用设置里改）
+  cleanupAt:"03:00",      // 每天定点清理过期录像
+  lastClean:{ at:"2026-10-20 03:00", freed:41.2, dirs:6, files:1247 },
+  diskTotalGB:473.9,
+  diskFreeGB:336.0,
+};
+const REASONS = ["人形移动","车辆进出","画面变化","光照突变","物体遗留"];
+const DAYS = ["2026-10-14","2026-10-15","2026-10-16","2026-10-17","2026-10-18","2026-10-19","2026-10-20"];
+const WD = ["周日","周一","周二","周三","周四","周五","周六"];
+
+function hashStr(s){ let h=2166136261; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619);} return h>>>0; }
+function mulberry(seed){
+  return function(){
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed>>>15, 1|seed);
+    t = t + Math.imul(t ^ t>>>7, 61|t) ^ t;
+    return ((t ^ t>>>14)>>>0) / 4294967296;
+  };
+}
+const segCache = new Map();
+function getSegs(camId, day){
+  const key = camId+"|"+day;
+  if(segCache.has(key)) return segCache.get(key);
+  const rnd = mulberry(hashStr(key));
+  const segs = [];
+  const busy = [[7,9.4],[11.5,13.6],[17,20.4]];
+  for(let h=0; h<24; h++){
+    let p = 0.16;
+    for(const [a,b] of busy) if(h>=a && h<b) p = 0.88;
+    if(h<6) p = 0.10;
+    let n = 0;
+    if(rnd() < p) n = 1 + Math.floor(rnd()*2);
+    else if(rnd() < 0.22) n = 1;
+    for(let k=0;k<n;k++){
+      const start = h*3600 + Math.floor(rnd()*3300);
+      const dur = 22 + Math.floor(Math.pow(rnd(),2.1)*820);
+      const end = Math.min(start+dur, 86395);
+      if(end-start < 18) continue;
+      const last = segs[segs.length-1];
+      if(last && start < last.e + 45) continue;
+      segs.push({ s:start, e:end, reason:REASONS[Math.floor(rnd()*REASONS.length)], level:0.32+rnd()*0.62 });
+    }
+  }
+  if(segs.length < 6){
+    segs.length = 0;
+    for(let i=0;i<7;i++){
+      const start = 7*3600 + i*5400 + Math.floor(rnd()*600);
+      segs.push({ s:start, e:start+180+Math.floor(rnd()*600), reason:REASONS[i%REASONS.length], level:0.4+rnd()*0.5 });
+    }
+  }
+  segCache.set(key,segs);
+  return segs;
+}
+
+const camParams = {};
+/* 全时段落（录像引擎按 REC.segSec 切段落盘） */
+function fullDayMbps(cam){ return cam.res === "4MP" ? 3.4 : 2.3; }   // 主码流约值
+function getFullSegs(camId, day){
+  const key = "full|"+camId+"|"+day;
+  if(segCache.has(key)) return segCache.get(key);
+  const cam = CAMERAS.find(c=>c.id===camId);
+  const p = camParams[camId];
+  const segs = [];
+  const step = REC.segSec;
+  const act = getSegs(camId, day);
+  for(let s=0; s<86400; s+=step){
+    const e = Math.min(s+step, 86400);
+    const hit = act.filter(a=>a.s < e && a.e > s);
+    segs.push({ s, e, reason:"全时", level: hit.length ? 0.75 : 0.15, hits:hit.length });
+  }
+  segCache.set(key,segs);
+  return segs;
+}
+
+/* 每路的完整默认值：新增摄像头与「恢复默认」共用同一份，
+   保证"默认"只有一个定义，不会两处漂移。 */
+/* 画面区域：16×9 方块预选（对齐摄像头 App 的隐私遮蔽交互）。
+   masks = { ignore:[格号…], redact:[格号…] }，格号 = 行*16+列，行在上。 */
+const GRID_COLS = 16, GRID_ROWS = 9;
+function rectToCells(x, y, w, h){
+  const out = [];
+  for(let r=0; r<GRID_ROWS; r++) for(let c=0; c<GRID_COLS; c++){
+    const cx=(c+0.5)/GRID_COLS, cy=(r+0.5)/GRID_ROWS;
+    if(cx>=x && cx<=x+w && cy>=y && cy<=y+h) out.push(r*GRID_COLS+c);
+  }
+  return out;
+}
+function normMasks(m){
+  if(Array.isArray(m)){   /* 旧自由框格式 → 换算成格号，中心点落在框里即选中 */
+    const ig=[], rd=[];
+    m.forEach(r=>{ rectToCells(r.x,r.y,r.w,r.h).forEach(i=>{ (r.type==="redact"?rd:ig).push(i); }); });
+    return { ignore:[...new Set(ig)], redact:[...new Set(rd)] };
+  }
+  const o = m || {};
+  return { ignore:(o.ignore||[]).slice(), redact:(o.redact||[]).slice() };
+}
+
+function defaultCamParams(cam, i){
+  i = i || 0;
+  return {
+    enabled: true,
+    main: cam ? (cam.main || "") : "",
+    sub:  cam ? (cam.sub  || "") : "",
+    sensitivity: 35 + i*6,
+    minKeep: 8,
+    mergeGap: 20,
+    mode: i===1 ? "fine" : "fast",
+    autoDN: true,
+    profile: "day",
+    day:   { crf:24, fps:12, scale:100, dn:1 },
+    night: { crf:29, fps:8,  scale:75,  dn:3 },
+    /* 判读指标（移植自 Windows 版 VideoTrim） */
+    judge: {
+      scene:"auto",        // auto | mono | color
+      chromaStd: (cam && cam.res==="4MP") ? 23.2 : 18.6,
+      noiseMult: i===0 ? 2.6 : 2.0,   // 树影多的机位默认更宽
+      pixelDelta:16, chromaDelta:8,
+      preBuf:3, postBuf:3, mergeGap:5,
+      strongArea:5,
+    },
+    speed:1, speedMode:"pts", prescan:true,
+    /* 保留周期：全时录像按天、缩时片段按天，各自独立 */
+    fullDays: 3,
+    clipDays: 10,
+    masks: { ignore:[], redact:[] }
+  };
+}
+
+CAMERAS.forEach((c,i)=>{
+  const d = defaultCamParams(c, i);
+  d.enabled = i < 3;
+  d.masks = c.id==="cam-01"
+    ? { ignore: rectToCells(.62,.55,.22,.30), redact: [] }
+    : (c.id==="cam-02" ? { ignore: [], redact: rectToCells(.04,.62,.18,.32) } : { ignore:[], redact:[] });
+  camParams[c.id] = d;
+});
+
+/* ================= 状态 ================= */
+const state = {
+  camId:"cam-01",
+  dayIdx:6,
+  hourBlock:-1,     // 0..11 两小时一格
+  segs:[],          // 当前回放模式的段列表
+  activity:[],      // 活动片段（用于热力条与全时模式标注）
+  segIdx:-1,
+  t:0,
+  playing:false,
+  land:false,
+  maskTool:"ignore",
+  pmode:"full",     // full = 全时录像 | clip = 精简片段
+  rec:null,         // /api/recordings 的结果：真实落盘的录像清单
+  dayList:[],       // 当前摄像头真正有文件的日子（升序，最多 7 个）
+  liveView:"snap",  // snap | single | grid
+  liveCam:0,
+  livePaused:false,
+  liveStream:false,   // 单路视图是否在播 MJPEG 实时流（false = 静态快照轮换）
+};
+
+/* 全局执行设置（对所有摄像头生效） */
+const GS = {
+  mode:"h1",            // now | m15 | h1 | d1
+  lastScan:"16:30",
+  done:128,
+  pending:6,
+  resume:2,
+  dedupeOnce:true,
+  reprocessOnParam:true,
+  skipIfExists:true,
+  retentionDays:3,
+  /* 硬件加速与资源 */
+  gpu:true,          // QSV 解码 + 编码
+  conc:2,            // 同时处理路数
+  nightOnly:false,   // 只在夜间重编码
+  lowPrio:true,      // nice / ionice / 磁盘空闲才写
+  sprite:true,       // 缩略图合并为雪碧图
+};
+/* 录制与压制衔接。
+   live      = 分片一封口就压，数据还热着
+   scheduled = 攒够 N 小时批量压，白天磁盘不动
+   两者共用同一套判定与导出，只有入队节奏不同 —— 不会出现切模式导致画质不一样 */
+const LK = {
+  mode:"live",
+  intervalH:6,        // 1~24
+  segSec:300,         // 分片长度
+  pending:0,          // 待处理数 —— 以 /api/link 返回为准，不再本地编数
+  done:0,
+  silent:0,
+  failed:0,
+  nextBatch:"—",
+  lastBatch:"—",
+  lastItem:"",
+};
+/* 服务端 /api/link 的真实状态 → 本地 LK。只有这里写 pending/done/failed，
+   别的地方不许手写这些数字，否则又会回到「界面说在处理、服务端其实闲着」。 */
+function applyLink(ls){
+  if(!ls) return;
+  LK.mode = ls.mode || LK.mode;
+  LK.intervalH = ls.interval_h || LK.intervalH;
+  LK.segSec = ls.segment_sec || LK.segSec;
+  LK.pending = ls.pending || 0;
+  if(ls.counters){
+    LK.done = ls.counters.done || 0;
+    LK.silent = ls.counters.silent || 0;
+    LK.failed = ls.counters.failed || 0;
+  }
+  LK.nextBatch = ls.next_batch_at || "—";
+  LK.lastBatch = ls.last_batch_at || "—";
+  LK.lastItem = ls.last_item && ls.last_item.file
+    ? (ls.last_item.ok ? "完成 " : "失败 ") + ls.last_item.file : "";
+  try{ renderCamTabs(); }catch(e){}
+}
+function syncLink(){
+  if(typeof fetch !== "function") return;
+  fetch("/api/link?_t=" + Date.now(), { cache:"no-store", mode:"same-origin" })
+    .then(r=>r.json()).then(d=>{ if(d && d.ok) applyLink(d); }).catch(()=>{});
+}
+function linkHint(){
+  if(LK.mode === "live")
+    return "分片一写完就判定并切出片段。数据还在内存里，几乎不额外读盘、也不跟录像抢磁头；镜头刚发生的事，一分钟内就能在回放里看到缩时版本。";
+  return "攒够 " + LK.intervalH + " 小时再批量处理一次。白天磁盘和 CPU 完全不动，代价是数据已经凉了，处理时要真读一遍盘。";
+}
+function nextLinkAt(){
+  const now = new Date(), t = new Date(now.getTime() + LK.intervalH * 3600e3);
+  const sameDay = t.getDate() === now.getDate();
+  return (sameDay ? "今天 " : "明天 ") + String(t.getHours()).padStart(2,"0") + ":00";
+}
+const SCAN_LABEL = { now:"立即", m15:"每 15 分钟", h1:"每小时", d1:"每天 03:00" };
+function nextScan(){
+  if(GS.mode === "now") return "—";
+  if(GS.mode === "m15") return "16:45";
+  if(GS.mode === "h1")  return "17:00";
+  return "明天 03:00";
+}
+function scanHint(){
+  const d = GS.retentionDays;
+  if(GS.mode === "now") return "点一次扫一次，不驻留定时任务，适合装完机先验证。";
+  if(GS.mode === "m15") return "NVR 只留 " + d + " 天，15 分钟一档偏密，但能最大限度避免被覆盖。";
+  if(GS.mode === "h1")  return "NVR 留 " + d + " 天，每小时扫一次来得及 —— 文件被覆盖前还有 " + (d*24) + " 次机会。";
+  return d <= 1
+    ? "警告：NVR 只留 " + d + " 天，每天一档可能在下次扫描前就被覆盖，建议改每小时。"
+    : "NVR 留 " + d + " 天，每天一次来得及，但断电一天就会丢一批。";
+}
+
+/* ================= 工具 ================= */
+const pad = n => String(n).padStart(2,"0");
+function hms(sec){
+  sec = Math.max(0, Math.floor(sec));
+  return pad(Math.floor(sec/3600)) + ":" + pad(Math.floor(sec%3600/60)) + ":" + pad(sec%60);
+}
+function hm(sec){ return pad(Math.floor(sec/3600)) + ":" + pad(Math.floor(sec%3600/60)); }
+function durText(sec){
+  sec = Math.floor(sec);
+  const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  if(h) return h + " 时 " + m + " 分";
+  if(m) return m + " 分 " + s + " 秒";
+  return s + " 秒";
+}
+function toast(el, text){
+  const t = document.getElementById(el);
+  t.textContent = text;
+  t.classList.add("on");
+  clearTimeout(t._h);
+  t._h = setTimeout(()=>t.classList.remove("on"), 1600);
+}
+
+/* ================= 布局 ================= */
+const phone = document.getElementById("phone");
+function layout(){
+  const desktop = window.innerWidth >= 760 && window.innerHeight >= 700;
+  document.body.classList.toggle("desktop", desktop);
+  if(!desktop) return;
+  const w = state.land ? 844 : 390;
+  const h = state.land ? 390 : 844;
+  phone.style.width = w + "px";
+  phone.style.height = h + "px";
+  const s = Math.min(1, (window.innerHeight - 40) / (h + 24), (window.innerWidth - 40) / (w + 24));
+  phone.style.transform = "scale(" + s.toFixed(3) + ")";
+}
+window.addEventListener("resize", ()=>{ layout(); if(state.view==="player") drawScene(); });
+
+/* ================= 全屏横屏（预览页） ================= */
+function isFullscreen(){
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+function setLand(on){
+  state.land = on;
+  phone.classList.toggle("land", on);
+  layout();
+}
+async function toggleLiveFull(){
+  if(isFullscreen()){
+    try{ if(document.exitFullscreen) document.exitFullscreen();
+         else if(document.webkitExitFullscreen) document.webkitExitFullscreen(); }catch(e){}
+    try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}
+    setLand(false);
+    toast("toast2", "已退出全屏");
+  }else{
+    const el = document.documentElement;
+    try{
+      if(el.requestFullscreen) await el.requestFullscreen();
+      else if(el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    }catch(e){}
+    try{ if(screen.orientation && screen.orientation.lock) await screen.orientation.lock("landscape"); }catch(e){}
+    setLand(true);
+    toast("toast2", "全屏横屏 · 左滑返回退出");
+  }
+}
+document.addEventListener("fullscreenchange", ()=>{
+  if(!isFullscreen() && state.land){
+    setLand(false);
+  }
+});
+const _btnLiveFull = document.getElementById("btnLiveFull");
+if(_btnLiveFull) _btnLiveFull.onclick = toggleLiveFull;
+const _lrFull = document.getElementById("lrFull");
+if(_lrFull) _lrFull.onclick = toggleLiveFull;
+
+/* ================= tab / 历史返回 =================
+   安卓左滑返回手势（触发 history.back）：
+     非直播页 → 退回直播页；直播页（根历史）→ 系统默认退出应用。
+   实现：离开直播页时 pushState 压一层；回直播页时弹掉，让直播页永远停在根历史。 */
+function activePage(){
+  const on = document.querySelector(".page.on");
+  return on ? on.id.replace("page-", "") : "live";
+}
+function activatePage(page){
+  if(page !== "live" && state.liveView !== "snap"){
+    state.liveView = "snap";
+    document.getElementById("liveRoom").classList.remove("on");
+  }
+  document.querySelectorAll(".tb").forEach(x=>x.classList.toggle("on", x.dataset.page===page));
+  document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on", p.id==="page-"+page));
+  if(page === "cam"){
+    /* 整页重渲染：画布的尺寸要等页面可见后才知道，顺带把事件重新绑上 */
+    syncLink();        /* 处理队列的真实状态每次进设置页都刷新 */
+    setTimeout(()=>{ renderCamTabs(); }, 30);
+  }
+  if(page === "live"){
+    updateSnapLabels();
+    setTimeout(renderLive, 20);   // 回到快照墙时重画，避免尺寸为 0
+  }
+  if(page === "list"){
+    camPickShow(false);
+    fetchRecordings();   /* 每次进回放页都按磁盘现状刷新 */
+    renderCamPick(); renderDates(); renderOverview(); renderHeat(); renderClips();
+  }
+}
+function goPage(page){
+  const cur = activePage();
+  if(page === cur) return;
+  if(page === "live"){
+    activatePage("live");
+    if(history.state && history.state._nvr){
+      try{ history.back(); }catch(e){}   // 弹掉那层，直播页回到根历史 → 左滑即退出
+    }
+    return;
+  }
+  activatePage(page);
+  try{
+    if(history.state && history.state._nvr){ history.replaceState({_nvr:1}, ""); }
+    else { history.pushState({_nvr:1}, ""); }
+  }catch(e){}
+}
+document.querySelectorAll(".tb").forEach(b=>{
+  b.onclick = ()=>{ goPage(b.dataset.page); };
+});
+window.addEventListener("popstate", ()=>{
+  /* 非直播页被返回 → 回直播页；直播页已在根历史，popstate 不触发，交给系统退出 */
+  if(activePage() !== "live"){ activatePage("live"); }
+});
+
+/* ================= 日期条 ================= */
+function renderDates(){
+  const box = document.getElementById("dates");
+  if(!box) return;
+  const rec = state.rec || {};
+  const src = state.pmode === "clip" ? rec.clips : rec.cameras;
+  const camDays = (src && src[state.camId]) || null;
+  const list = camDays && Object.keys(camDays).length ? Object.keys(camDays).sort().slice(-7) : [];
+  state.dayList = list;
+  if(state.dayIdx >= list.length) state.dayIdx = Math.max(0, list.length-1);
+  box.innerHTML = "";
+  const today = new Date().toISOString().slice(0,10);
+  list.forEach((d,i)=>{
+    const dt = new Date(d+"T00:00:00");
+    const files = camDays[d] || [];
+    const bytes = files.reduce((a,f)=>a+(f.b||0),0);
+    const ktext = files.length
+      ? (bytes >= 1073741824 ? (bytes/1073741824).toFixed(1)+"G" : Math.max(1,Math.round(bytes/1048576))+"M")
+      : "—";
+    const b = document.createElement("button");
+    b.className = "dchip" + (i===state.dayIdx ? " on" : "");
+    b.innerHTML = '<span class="w">' + (d===today ? "今天" : WD[dt.getDay()].replace("周","")) + '</span>' +
+      '<span class="d">' + d.slice(5).replace("-","/") + '</span>' +
+      '<span class="k">' + ktext + '</span>';
+    b.onclick = ()=>{ state.dayIdx = i; state.hourBlock = -1; loadDay(); };
+    box.appendChild(b);
+  });
+  const on = box.querySelector(".dchip.on");
+  if(on) on.scrollIntoView({inline:"center", block:"nearest"});
+}
+
+/* ================= 热力条 ================= */
+function renderHeat(){
+  const box = document.getElementById("heat");
+  const segs = state.activity;
+  const per = new Array(12).fill(0);   // 每格 2 小时，单位秒
+  segs.forEach(s=>{
+    const i = Math.min(11, Math.floor(s.s / 7200));
+    const blkEnd = (i+1)*7200;
+    per[i] += Math.min(s.e, blkEnd) - s.s;
+  });
+  const max = Math.max(...per, 1);
+  box.innerHTML = "";
+  per.forEach((v,i)=>{
+    const d = document.createElement("button");
+    d.className = "hcell" + (state.hourBlock===i ? " on" : "");
+    const ratio = v / max;
+    d.style.background = v <= 0 ? "var(--fill)"
+      : "rgba(31,157,99," + (0.16 + ratio*0.78).toFixed(2) + ")";
+    d.onclick = ()=>{
+      state.hourBlock = (state.hourBlock===i) ? -1 : i;
+      renderHeat(); renderClips();
+    };
+    box.appendChild(d);
+  });
+  const clear = document.getElementById("heatClear");
+  clear.style.display = state.hourBlock >= 0 ? "block" : "none";
+  clear.onclick = ()=>{ state.hourBlock = -1; renderHeat(); renderClips(); };
+  document.getElementById("heatTitle").textContent =
+    state.hourBlock >= 0 ? pad(state.hourBlock*2)+":00 – "+pad(state.hourBlock*2+2)+":00" : "全天活动";
+}
+
+/* ================= 概览 ================= */
+function renderOverview(){
+  const cam = CAMERAS.find(c=>c.id===state.camId);
+  const nameEl = document.getElementById("camSelName");
+  if(nameEl) nameEl.textContent = cam ? cam.name : "还没有摄像头";
+  if(!cam){
+    document.getElementById("ovKeep").textContent = "—";
+    document.getElementById("ovPct").textContent = "—";
+    document.getElementById("ovCnt").textContent = "0";
+    document.getElementById("ovSize").textContent = "—";
+    document.getElementById("hdrSub").textContent = "还没有摄像头 · 去设置页添加一台";
+    return;
+  }
+  let keep = 0, bytes = 0;
+  state.segs.forEach(sg=>{ keep += sg.e-sg.s; bytes += sg.bytes || 0; });
+  document.getElementById("ovKeep").textContent = hms(keep);
+  document.getElementById("ovPct").textContent = (keep/86400*100).toFixed(1) + "%";
+  document.getElementById("ovCnt").textContent = state.segs.length;
+  document.getElementById("ovSize").textContent =
+    bytes >= 1073741824 ? (bytes/1073741824).toFixed(1) + " GB" : (bytes/1048576).toFixed(0) + " MB";
+  document.getElementById("hdrSub").textContent = cam.ch + " · " + state.segs.length + " 个录像文件";
+}
+
+/* ================= 缩略图 ================= */
+function drawThumb(cv, level, redact){
+  const w = 192, h = 108;
+  cv.width = w; cv.height = h;
+  const c = cv.getContext("2d");
+  c.fillStyle = "#232830"; c.fillRect(0,0,w,h);
+  const hz = h*0.34;
+  c.fillStyle = "#2c313a"; c.fillRect(0,0,w,hz);
+  c.fillStyle = "#363c45"; c.fillRect(0,hz,w,h-hz);
+  c.strokeStyle = "rgba(255,255,255,.05)"; c.lineWidth = 1;
+  for(let i=-3;i<=3;i++){
+    c.beginPath(); c.moveTo(w*0.5+i*w*0.07, hz); c.lineTo(w*0.5+i*w*0.33, h); c.stroke();
+  }
+  c.fillStyle = "#1b1e24"; c.fillRect(w*0.40, h*0.06, w*0.14, hz-h*0.06);
+  c.fillStyle = "#262b33"; c.fillRect(w*0.80, h*0.10, w*0.06, h*0.60);
+  c.fillStyle = "#3f4650"; c.fillRect(w*0.05, h*0.66, w*0.26, h*0.14);
+  const px = w*(0.16 + 0.6*level);
+  const ph2 = h*0.20;
+  c.fillStyle = "#c2cad6";
+  c.fillRect(px-ph2*0.13, h*0.80-ph2*0.62, ph2*0.26, ph2*0.5);
+  c.beginPath(); c.arc(px, h*0.80-ph2*0.72, ph2*0.115, 0, Math.PI*2); c.fill();
+  if(redact){
+    c.fillStyle = "rgba(16,18,22,.94)"; c.fillRect(w*0.03, h*0.6, w*0.2, h*0.38);
+  }
+  const g = c.createLinearGradient(0,h*0.6,0,h);
+  g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.45)");
+  c.fillStyle = g; c.fillRect(0,h*0.6,w,h*0.4);
+}
+
+/* ================= 片段列表 ================= */
+function visibleSegs(){
+  if(state.hourBlock < 0) return state.segs.map((s,i)=>({s,i}));
+  const a = state.hourBlock*7200, b = a+7200;
+  return state.segs.map((s,i)=>({s,i})).filter(o=>o.s.s < b && o.s.e > a);
+}
+
+function renderClips(){
+  const box = document.getElementById("clips");
+  const list = visibleSegs();
+  const p = camParams[state.camId];
+  const hasRedact = normMasks(p && p.masks).redact.length > 0;
+  const full = state.pmode === "full";
+  const cam = CAMERAS.find(c=>c.id===state.camId);
+  box.innerHTML = "";
+  document.getElementById("listTitle").textContent =
+    state.hourBlock >= 0 ? pad(state.hourBlock*2)+":00 – "+pad(state.hourBlock*2+2)+":00" : (full ? "全时录像" : "全部片段");
+  document.getElementById("listCount").textContent = list.length + " 段";
+
+  if(!list.length){
+    box.innerHTML = '<div style="text-align:center;color:var(--faint);font-size:13px;padding:44px 0">'
+      + (full ? "该时段没有录像" : "这个时段没有任何画面变化") + '</div>';
+    return;
+  }
+
+  list.forEach(({s,i})=>{
+    const size = s.bytes ? s.bytes/1048576
+      : fullDayMbps(cam)*(s.e-s.s)/8/1000;
+    const d = document.createElement("div");
+    d.className = "card";
+    d.innerHTML =
+      '<canvas class="thumb"></canvas>' +
+      '<div class="cbody">' +
+        '<div class="ct mono">' + hms(s.s) + ' – ' + hms(s.e) + '</div>' +
+        '<div class="cm"><span>' + durText(s.e-s.s) + '</span><span>' + size.toFixed(1) + ' MB</span></div>' +
+        '<div style="margin-top:5px;display:flex;gap:5px">' +
+          (full
+            ? '<span class="tag">' + (s.hits ? "含活动 " + s.hits + " 段" : (s.file ? "连续录像" : "无活动")) + '</span>'
+            : '<span class="tag g">' + s.reason + '</span>') +
+        '</div>' +
+      '</div>' +
+      '<svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
+    box.appendChild(d);
+    if(s.file){
+      drawThumbReal(d.querySelector(".thumb"), s);   // 真分片：时间+体积，不画假画面
+    }else{
+      drawThumb(d.querySelector(".thumb"), s.level, hasRedact && (full ? s.hits>0 : true));
+    }
+    d.onclick = ()=> openPlayer(i);
+  });
+}
+
+/* 真实分片的缩略图：只标时间和体积，不伪造画面 */
+function drawThumbReal(cv, seg){
+  const w = 192, h = 108;
+  cv.width = w; cv.height = h;
+  const c = cv.getContext("2d");
+  c.fillStyle = "#14171c"; c.fillRect(0,0,w,h);
+  c.fillStyle = "#1e232a"; c.fillRect(0,h*0.66,w,h*0.34);
+  c.fillStyle = "#9aa2ad"; c.font = "11px Consolas,monospace"; c.textAlign = "center";
+  c.fillText(hms(seg.s) + " – " + hms(seg.e), w/2, h/2);
+  c.fillStyle = "#5d646f"; c.font = "10px sans-serif";
+  c.fillText((seg.bytes/1048576).toFixed(1) + " MB", w/2, h/2 + 17);
+}
+
+/* ================= 场景绘制 ================= */
+const scene = document.getElementById("scene");
+const sctx = scene.getContext("2d");
+let noiseSeed = 1;
+
+function roundRect(ctx,x,y,w,h,r){
+  r = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+}
+
+function drawScene(){
+  const rect = scene.getBoundingClientRect();
+  if(!rect.width) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = rect.width, h = w * 9/16;
+  if(scene.width !== Math.round(w*dpr) || scene.height !== Math.round(h*dpr)){
+    scene.width = Math.round(w*dpr);
+    scene.height = Math.round(h*dpr);
+    scene.style.height = h + "px";
+  }
+  sctx.setTransform(dpr,0,0,dpr,0,0);
+  sctx.clearRect(0,0,w,h);
+
+  const seg = state.segIdx >= 0 ? state.segs[state.segIdx] : null;
+  const prog = seg ? Math.max(0, Math.min(1, (state.t-seg.s)/Math.max(1,seg.e-seg.s))) : 0;
+
+  sctx.fillStyle = "#20242a"; sctx.fillRect(0,0,w,h);
+  const hz = h*0.34;
+  sctx.fillStyle = "#292e36"; sctx.fillRect(0,0,w,hz);
+  sctx.fillStyle = "#333941"; sctx.fillRect(0,hz,w,h-hz);
+
+  sctx.strokeStyle = "rgba(255,255,255,.055)"; sctx.lineWidth = 1;
+  for(let i=-4;i<=4;i++){
+    sctx.beginPath();
+    sctx.moveTo(w*0.5+i*w*0.06, hz);
+    sctx.lineTo(w*0.5+i*w*0.30, h);
+    sctx.stroke();
+  }
+  sctx.fillStyle = "#181b20"; sctx.fillRect(w*0.40, h*0.06, w*0.15, hz-h*0.06);
+  sctx.fillStyle = "rgba(255,238,200,.10)"; sctx.fillRect(w*0.405, h*0.075, w*0.14, h*0.03);
+  sctx.fillStyle = "#242930"; sctx.fillRect(w*0.80, h*0.10, w*0.055, h*0.62);
+
+  sctx.fillStyle = "#3b414a"; roundRect(sctx, w*0.05, h*0.64, w*0.26, h*0.15, 4); sctx.fill();
+  sctx.fillStyle = "rgba(140,175,205,.16)"; roundRect(sctx, w*0.09, h*0.59, w*0.18, h*0.06, 3); sctx.fill();
+  sctx.fillStyle = "#434a54"; roundRect(sctx, w*0.47, h*0.71, w*0.28, h*0.16, 4); sctx.fill();
+
+  const px = w*(0.14 + 0.68*prog);
+  const py = h*(0.78 + 0.07*Math.sin(prog*Math.PI));
+  const ph2 = h*0.22;
+  sctx.fillStyle = "#bcc5d1";
+  roundRect(sctx, px-ph2*0.13, py-ph2*0.62, ph2*0.26, ph2*0.52, 3); sctx.fill();
+  sctx.beginPath(); sctx.arc(px, py-ph2*0.72, ph2*0.115, 0, Math.PI*2); sctx.fill();
+  sctx.fillStyle = "rgba(0,0,0,.35)";
+  sctx.beginPath(); sctx.ellipse(px, py+2, ph2*0.16, ph2*0.045, 0, 0, Math.PI*2); sctx.fill();
+
+  /* 检测框 */
+  if(seg){
+    const bx = px-ph2*0.24, by = py-ph2*0.88, bw = ph2*0.48, bh = ph2*0.92;
+    sctx.strokeStyle = "rgba(80,220,180,.9)"; sctx.lineWidth = 1.3;
+    sctx.setLineDash([5,4]); sctx.strokeRect(bx,by,bw,bh); sctx.setLineDash([]);
+    sctx.font = '9.5px "Cascadia Mono",Consolas,monospace';
+    const label = seg.reason + " " + Math.round(70+seg.level*29) + "%";
+    const tw2 = sctx.measureText(label).width + 9;
+    sctx.fillStyle = "rgba(80,220,180,.9)";
+    sctx.fillRect(bx, by-13, tw2, 12);
+    sctx.fillStyle = "#08231a"; sctx.fillText(label, bx+4, by-3.5);
+  }
+
+  /* 遮蔽区 */
+  camParams[state.camId].masks.forEach(m=>{
+    const x=m.x*w, y=m.y*h, ww=m.w*w, hh=m.h*h;
+    if(m.type==="redact"){
+      sctx.fillStyle = "rgba(16,18,22,.95)"; sctx.fillRect(x,y,ww,hh);
+      sctx.strokeStyle = "rgba(220,70,70,.7)";
+    }else{
+      sctx.fillStyle = "rgba(240,180,40,.10)"; sctx.fillRect(x,y,ww,hh);
+      sctx.strokeStyle = "rgba(240,180,40,.55)";
+    }
+    sctx.lineWidth = 1; sctx.setLineDash([4,3]); sctx.strokeRect(x,y,ww,hh); sctx.setLineDash([]);
+  });
+
+  /* 噪点 + 暗角 */
+  const rnd = mulberry(noiseSeed);
+  sctx.fillStyle = "rgba(255,255,255,.03)";
+  for(let i=0;i<90;i++) sctx.fillRect(rnd()*w, rnd()*h, 1, 1);
+  const g = sctx.createRadialGradient(w/2,h/2,Math.min(w,h)*0.3,w/2,h/2,Math.max(w,h)*0.72);
+  g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.45)");
+  sctx.fillStyle = g; sctx.fillRect(0,0,w,h);
+}
+
+/* ================= 播放器 ================= */
+const player = document.getElementById("player");
+
+function openPlayer(i){
+  state.segIdx = i;
+  state.t = state.segs[i].s;
+  state.playing = true;
+  player.classList.add("on");
+  const cam = CAMERAS.find(c=>c.id===state.camId);
+  document.getElementById("pTitle").textContent = cam.name + " · " + state.segs[i].reason;
+  document.getElementById("osdCam").textContent = cam.ch;
+  /* 磁盘上有真实录像文件 → 用 <video> 播；没有 → 画布占位，绝不假装在播 */
+  const video = document.getElementById("stageVideo");
+  const sceneEl = document.getElementById("scene");
+  if(state.segs[i].file && video && sceneEl){
+    state.videoSeg = true;
+    video.src = state.segs[i].file;
+    video.style.display = "block";
+    sceneEl.style.display = "none";
+    try{ video.currentTime = 0; video.play(); }catch(e){}
+  }else{
+    state.videoSeg = false;
+    try{ video.pause(); video.removeAttribute("src"); video.load(); }catch(e){}
+    video.style.display = "none";
+    sceneEl.style.display = "";
+  }
+  syncPlayer();
+  requestAnimationFrame(()=>{ drawScene(); });
+}
+
+document.getElementById("pClose").onclick = ()=>{
+  state.playing = false;
+  const v = document.getElementById("stageVideo");
+  try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){}
+  state.videoSeg = false;
+  v.style.display = "none";
+  document.getElementById("scene").style.display = "";
+  player.classList.remove("on");
+  if(state.land){ state.land = false; phone.classList.remove("land"); layout(); }
+};
+document.getElementById("bPlay").onclick = ()=>{
+  state.playing = !state.playing;
+  const v = document.getElementById("stageVideo");
+  if(state.videoSeg && v){ if(state.playing){ try{ v.play(); }catch(e){} } else { try{ v.pause(); }catch(e){} } }
+  syncPlayer();
+};
+document.getElementById("bBack").onclick = ()=>{ seekBy(-10); };
+document.getElementById("bFwd").onclick = ()=>{ seekBy(10); };
+document.getElementById("bPrev").onclick = ()=> jumpSeg(-1);
+
+/* 真实录像：时间轴跟随 <video> 的实际播放进度，播完自动接下一段 */
+const stageVideoEl = document.getElementById("stageVideo");
+stageVideoEl.addEventListener("timeupdate", ()=>{
+  if(!state.videoSeg || state.segIdx < 0) return;
+  const seg = state.segs[state.segIdx];
+  if(!seg) return;
+  state.t = seg.s + (stageVideoEl.currentTime || 0);
+  syncPlayer();
+});
+stageVideoEl.addEventListener("ended", ()=>{
+  if(state.segIdx >= 0 && state.segIdx < state.segs.length-1){ openPlayer(state.segIdx+1); }
+  else { state.playing = false; syncPlayer(); }
+});
+stageVideoEl.addEventListener("play",  ()=>{ if(state.videoSeg && !state.playing){ state.playing = true; syncPlayer(); } });
+stageVideoEl.addEventListener("pause", ()=>{ if(state.videoSeg && state.playing && !stageVideoEl.ended){ state.playing = false; syncPlayer(); } });
+document.getElementById("bLand").onclick = ()=>{
+  state.land = !state.land;
+  phone.classList.toggle("land", state.land);
+  layout();
+  setTimeout(()=>{ drawScene(); }, 240);
+  toast(state.land ? "toast" : "toast", state.land ? "横屏预览 · 画面铺满" : "已回到竖屏");
+};
+document.getElementById("pMore").onclick = ()=> toast("toast", "下载原画质 / 导出该片段");
+
+function seekBy(d){
+  const seg = state.segs[state.segIdx];
+  if(!seg) return;
+  state.t = Math.max(seg.s, Math.min(seg.e-0.5, state.t + d));
+  state.playing = false;
+  const v = document.getElementById("stageVideo");
+  if(state.videoSeg && v){ try{ v.pause(); v.currentTime = Math.max(0, state.t - seg.s); }catch(e){} }
+  syncPlayer();
+}
+function jumpSeg(dir){
+  const n = state.segIdx + dir;
+  if(n < 0 || n >= state.segs.length){ toast("toast", dir>0 ? "已经是最后一段" : "已经是第一段"); return; }
+  openPlayer(n);
+}
+
+function syncPlayer(){
+  const seg = state.segs[state.segIdx];
+  if(!seg) return;
+  document.getElementById("pSub").textContent = hms(seg.s) + " – " + hms(seg.e);
+  document.getElementById("tNow").textContent = hms(state.t);
+  document.getElementById("tEnd").textContent = hms(seg.e);
+  const pct = (state.t - seg.s) / Math.max(1, seg.e-seg.s);
+  document.getElementById("pFill").style.width = (pct*100).toFixed(1) + "%";
+  document.getElementById("pKnob").style.left = (pct*100).toFixed(1) + "%";
+  document.getElementById("playIcon").innerHTML = state.playing
+    ? '<path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/>'
+    : '<path d="M8 5v14l11-7z"/>';
+  document.getElementById("ring").classList.toggle("show", !state.playing);
+  document.getElementById("osdTime").textContent = curDay() + " " + hms(state.t);
+}
+
+/* 进度条拖动 */
+(function bindBar(){
+  const bar = document.getElementById("pBar");
+  let on = false;
+  function set(e){
+    const seg = state.segs[state.segIdx];
+    if(!seg) return;
+    const r = bar.getBoundingClientRect();
+    const p = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    state.t = seg.s + p*(seg.e-seg.s);
+    const v = document.getElementById("stageVideo");
+    if(state.videoSeg && v){ try{ v.currentTime = Math.max(0, state.t - seg.s); }catch(e){} }
+    syncPlayer();
+  }
+  bar.addEventListener("pointerdown", e=>{ on=true; state.playing=false; bar.setPointerCapture(e.pointerId); set(e); });
+  bar.addEventListener("pointermove", e=>{ if(on) set(e); });
+  bar.addEventListener("pointerup", ()=>{ on=false; });
+})();
+
+/* 左右滑动切换片段 */
+(function bindSwipe(){
+  const stage = document.getElementById("stage");
+  let x0=null, y0=null;
+  stage.addEventListener("pointerdown", e=>{ x0=e.clientX; y0=e.clientY; });
+  stage.addEventListener("pointerup", e=>{
+    if(x0===null) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    if(Math.abs(dx) > 56 && Math.abs(dx) > Math.abs(dy)*1.6){
+      jumpSeg(dx < 0 ? 1 : -1);
+    }else if(Math.abs(dx) < 8 && Math.abs(dy) < 8){
+      state.playing = !state.playing; syncPlayer();
+    }
+    x0 = null;
+  });
+})();
+
+/* 播放循环 */
+let last = 0, liveAcc = 0;
+function loop(ts){
+  if(document.hidden){ requestAnimationFrame(loop); return; }   // 后台标签不画，省 CPU/电
+  if(!last) last = ts;
+  const dt = Math.min(0.1, (ts-last)/1000);
+  last = ts;
+  if(player.classList.contains("on")){
+    const seg = state.segs[state.segIdx];
+    if(seg && state.playing){
+      if(state.videoSeg){
+        /* 真实录像：进度由 <video> 推进，这里只兜底同步；播完由 ended 事件接管 */
+        if(stageVideoEl && !stageVideoEl.paused){ state.t = seg.s + (stageVideoEl.currentTime||0); }
+        if(state.t >= seg.e && stageVideoEl && stageVideoEl.paused){
+          if(state.segIdx < state.segs.length-1){ openPlayer(state.segIdx+1); }
+          else { state.t = seg.e-0.2; state.playing = false; }
+        }
+      }else{
+        state.t += dt * 8;
+        if(state.t >= seg.e){
+          if(state.segIdx < state.segs.length-1){ openPlayer(state.segIdx+1); }
+          else { state.t = seg.e-0.2; state.playing = false; }
+        }
+      }
+      syncPlayer();
+    }
+    if(!state.videoSeg){ noiseSeed++; drawScene(); }   /* 真视频在播时画布已隐藏，不再画假场景 */
+  }
+  /* 直播：快照墙按倒计时刷新；实时层按状态重绘 */
+  liveAcc += dt;
+  const roomEl = document.getElementById("liveRoom");
+  const roomOpen = roomEl.classList.contains("on");
+  if(roomOpen){
+    const step = state.liveView === "grid" ? 0.22 : 0.09;   // 宫格降帧，省解码
+    if(liveAcc > step){
+      liveAcc = 0;
+      if(!state.livePaused){
+        document.querySelectorAll("#lrBody .lr-tile").forEach(t=>drawLiveScene(t._cv, t._idx));
+        document.querySelectorAll("#lrBody [data-tf]").forEach(el=>el.textContent = clockStr());
+      }
+      document.getElementById("lrClock").textContent = clockStr();
+    }
+  }else if(document.getElementById("page-live").classList.contains("on")
+           && !player.classList.contains("on")){
+    tickSnaps(dt);
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ================= 直播页 =================
+   三种状态：
+     snap   快照墙（默认）—— 只有静态截图，显示"几秒前"与倒计时，几乎不耗流量
+     single 单路实时 —— 点某张快照进入，只解一路子码流
+     grid   宫格实时 —— 默认铺满全部摄像头，点任意窗口回到单路
+   ============================================ */
+const SNAP = { interval: 10 };   // 快照刷新间隔（秒），1~10 可调，齿轮里改
+try{
+  const r = +(localStorage.getItem("nvr.snapRate") || 0);
+  if(r >= 1 && r <= 10) SNAP.interval = r;
+}catch(e){}
+const snapState = {};            // camId -> { at: 上次抓拍时间戳 }
+let snapAcc = 0;
+
+/* 真实快照：服务端 ffmpeg 每隔 SNAP.interval 秒抓一帧（设置页填了 RTSP 就有）。
+   图还没就绪（404）就留在示意画面上，来了自动切过去。 */
+function hookSnapImg(img, camId){
+  if(!img) return;
+  img.onload = ()=>{ const card = img.parentNode; if(card) card.classList.add("hasphoto"); };
+  img.onerror = ()=>{ const card = img.parentNode; if(card) card.classList.remove("hasphoto"); };
+  img.src = "/api/live/snapshot/" + encodeURIComponent(camId) + ".jpg?t=" + Date.now();
+}
+function refreshSnapImg(img, camId, at){
+  if(img) img.src = "/api/live/snapshot/" + encodeURIComponent(camId) + ".jpg?t=" + at;
+}
+
+/* 把摄像头与通用设置推给后端：快照 worker、录制、衔接吃的都是这份配置。
+   内容没变就不发（签名去重），变了静默 POST，失败也不打扰用户。 */
+let lastPushSig = "";
+function pushCfg(){
+  if(typeof fetch !== "function") return;
+  const cams = CAMERAS.map(c=>{
+    const p = camParams[c.id] || {};
+    return { id:c.id, name:c.name, url:p.main || "", sub_url:p.sub || "",
+             enabled:p.enabled !== false,
+             full_days:p.fullDays, clip_days:p.clipDays,
+             masks: normMasks(p.masks) };
+  });
+  const body = { cameras: cams,
+                 record_enable: !!REC.enabled, record_dir: REC.dir,
+                 cleanup_at: REC.cleanupAt, snapshot_interval: SNAP.interval || 10,
+                 /* 这三个以前只存在 localStorage 里，服务端根本没收到过 ——
+                    recorder 的分片长度、link 的节奏都是读服务端配置的，
+                    所以「改分片长度没反应」其实是推都没推。 */
+                 record_segment_sec: LK.segSec,
+                 link_mode: LK.mode,
+                 link_interval_h: LK.intervalH,
+                 concurrency: GS.conc, gpu: !!GS.gpu };
+  const sig = JSON.stringify(body);
+  if(sig === lastPushSig) return;
+  lastPushSig = sig;
+  try{
+    fetch("/api/config", { method:"POST", mode:"same-origin",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(body) }).catch(()=>{});
+  }catch(e){}
+}
+
+function clockStr(){
+  const t = new Date();
+  return pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds());
+}
+function snapStamp(at){
+  const t = new Date(at);
+  return "2026-10-20 " + pad(t.getHours()) + ":" + pad(t.getMinutes()) + ":" + pad(t.getSeconds());
+}
+function agoText(sec){
+  if(sec < 1) return "刚刚";
+  if(sec < 60) return Math.round(sec) + " 秒前";
+  return Math.floor(sec/60) + " 分前";
+}
+
+function renderLive(){
+  const wrap = document.getElementById("liveWrap");
+  if(!wrap) return;
+  wrap.innerHTML = "";
+  if(state.liveCam >= CAMERAS.length) state.liveCam = 0;
+  if(!CAMERAS.length){
+    wrap.innerHTML = '<div class="empty" style="grid-column:1/-1">还没有摄像头<br>去「设置 · 摄像头」里添加一台，填入主码流 RTSP 地址</div>';
+    updateLiveHeader();
+    try{ updateResBar(); }catch(e){}
+    return;
+  }
+  CAMERAS.forEach((c,i)=>{
+    if(!snapState[c.id]) snapState[c.id] = { at: Date.now() - (2 + i*1.7)*1000 };
+    const on = c.online || !!(camParams[c.id] && camParams[c.id].main);
+    const d = document.createElement("div");
+    d.className = "livecard" + (on ? "" : " off");
+    d.innerHTML =
+      '<img class="snap-img" alt="">' +
+      '<div class="nophoto"><span class="np-ico">◐</span><span data-np>等待第一帧…</span></div>' +
+      '<div class="lv-osd mono" data-stamp>' + snapStamp(snapState[c.id].at) + '</div>' +
+      '<div class="snap-cd"><i class="dot"></i><span data-cd>--</span></div>' +
+      '<div class="lv-name">' + esc(c.name) + '</div>' +
+      '<div class="snap-ago" data-ago><span data-ago-txt>-- 秒前</span></div>' +
+      '<div class="snap-play"><div class="p"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>';
+    d.onclick = ()=> enterLive(i);
+    wrap.appendChild(d);
+    d._camIdx = i;
+    if(!snapState[c.id].since) snapState[c.id].since = Date.now();
+    hookSnapImg(d.querySelector(".snap-img"), c.id);
+  });
+  const hint = document.createElement("div");
+  hint.className = "livehint";
+  hint.textContent = "快照每 " + SNAP.interval + " 秒自动刷新 · 点任意画面开始实时播放";
+  wrap.appendChild(hint);
+
+  updateResBar();
+  updateSnapLabels();
+  updateLiveHeader();
+}
+
+/* 直播页头部计数（原来写死在 HTML 里，删了摄像头也不会变） */
+function updateLiveHeader(){
+  const on = CAMERAS.filter(c=>{
+    const p = camParams[c.id];
+    return c.online && p && p.main && p.enabled !== false;
+  }).length;
+  const el = document.getElementById("liveOnline");
+  if(el){
+    el.textContent = "● " + on + " 台在线";
+    el.style.color = on ? "var(--keep)" : "var(--faint)";
+  }
+  const m = document.getElementById("liveMode");
+  if(m) m.textContent = "快照 · " + SNAP.interval + " 秒刷新";
+}
+
+function updateSnapLabels(){
+  const now = Date.now();
+  document.querySelectorAll("#liveWrap .livecard").forEach(card=>{
+    const i = card._camIdx;
+    const c = CAMERAS[i];
+    const st = snapState[c.id];
+    const age = (now - st.at)/1000;
+    const left = Math.max(0, SNAP.interval - age);
+    const np = card.querySelector("[data-np]");
+    if(np && !card.classList.contains("hasphoto")){
+      np.textContent = (st.since && now - st.since > 25000)
+        ? "拉流失败 · 检查 RTSP 地址"
+        : "等待第一帧…";
+    }
+    const ago = card.querySelector("[data-ago-txt]");
+    const cd = card.querySelector("[data-cd]");
+    const box = card.querySelector("[data-ago]");
+    const cdBox = card.querySelector(".snap-cd");
+    if(ago) ago.textContent = c.online ? agoText(age) : "离线";
+    if(cd) cd.textContent = c.online ? "-" + Math.ceil(left) + "s" : "—";
+    if(cdBox) cdBox.classList.toggle("bad", !c.online || age > SNAP.interval * 2.2);
+    if(box) box.classList.toggle("stale", c.online && age > SNAP.interval * 2.2);
+  });
+}
+
+function tickSnaps(dt){
+  snapAcc += dt;
+  if(snapAcc < 0.4) return;
+  snapAcc = 0;
+  livePollAcc += 0.4;
+  if(livePollAcc >= 5){ livePollAcc = 0; pollLive(); }   // 每 ~5 秒同步一次服务端真实状态
+  const now = Date.now();
+  document.querySelectorAll("#liveWrap .livecard").forEach(card=>{
+    const i = card._camIdx;
+    const c = CAMERAS[i];
+    if(!c.online) return;
+    const st = snapState[c.id];
+    if(card.classList.contains("hasphoto") && (now - st.at)/1000 >= SNAP.interval){
+      st.at = now;
+      refreshSnapImg(card.querySelector(".snap-img"), c.id, now);
+      const s = card.querySelector("[data-stamp]");
+      if(s) s.textContent = snapStamp(st.at);
+    }
+  });
+  /* 实时播放层里的宫格/单路窗口也跟着换图 */
+  const roomOn = document.getElementById("liveRoom").classList.contains("on");
+  if(roomOn){
+    document.querySelectorAll("#lrBody [data-camid]").forEach(tile=>{
+      const cid = tile.dataset.camid;
+      const st = snapState[cid];
+      if(!st || (now - st.at)/1000 < SNAP.interval) return;
+      if(state.liveView === "single" && !state.liveStream) return;   // 暂停 = 画面冻结
+      if(tile.classList.contains("streaming")) return;               // 流播放中，别用快照覆盖
+      st.at = now;
+      refreshSnapImg(tile.querySelector(".snap-img"), cid, now);
+    });
+  }
+  updateSnapLabels();
+}
+
+/* online 必须以服务端真实快照三态（/api/live 的 snap）为准：
+   localStorage 里存的 online 是保存那一刻的静态值，服务端快照恢复后如果不回写，
+   前端会永远认为离线——不刷新画面、顶栏一直「0 台在线」。 */
+let livePollAcc = 0;
+function pollLive(){
+  if(typeof fetch !== "function") return;
+  fetch("/api/live?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" })
+    .then(r=>r.json())
+    .then(d=>{
+      if(!d || !Array.isArray(d.cameras)) return;
+      let changed = false;
+      d.cameras.forEach(sc=>{
+        const c = CAMERAS.find(x=>x.id === sc.id);
+        if(!c) return;
+        const on = sc.snap === true;             // 只有快照真正成功才算在线
+        if(c.online !== on){ c.online = on; changed = true; }
+      });
+      if(changed){
+        updateLiveHeader();
+        renderLive();                            // 重建卡片：立刻按新状态取图/显示离线
+      }
+    }).catch(()=>{});
+}
+
+/* ---------- 实时播放层 ---------- */
+function enterLive(idx){
+  state.liveView = "single";
+  state.liveCam = idx;
+  state.livePaused = false;
+  state.liveStream = true;     // 进入实时观看默认播真实流
+  document.getElementById("liveRoom").classList.add("on");
+  buildLiveRoom();
+  updateResBar();
+}
+function leaveLive(){
+  state.liveView = "snap";
+  state.livePaused = false;
+  state.liveStream = false;    // 离开实时层就断流，服务端会随即杀掉转发 ffmpeg
+  document.getElementById("liveRoom").classList.remove("on");
+  renderLive();          // 退出时刷新一遍快照，年龄从头算
+}
+
+/* MJPEG 实时流：<img> 直接吃 multipart 流，暂停 = 换回静态快照并冻结 */
+function liveStreamUrl(cid){
+  return "/api/live/stream/" + encodeURIComponent(cid) + "?t=" + Date.now();
+}
+function toggleLiveStream(cid){
+  state.liveStream = !state.liveStream;
+  const tile = document.querySelector('#lrBody [data-camid="' + cid + '"]');
+  if(tile){
+    const img = tile.querySelector(".snap-img");
+    const btn = tile.querySelector("[data-lrplay]");
+    if(img){
+      img.src = state.liveStream ? liveStreamUrl(cid)
+        : "/api/live/snapshot/" + encodeURIComponent(cid) + ".jpg?t=" + Date.now();
+    }
+    tile.classList.toggle("streaming", state.liveStream);
+    if(btn){
+      btn.classList.toggle("paused", !state.liveStream);
+      const t = btn.querySelector("span");
+      if(t) t.textContent = state.liveStream ? "暂停" : "播放";
+    }
+  }
+  const sub = document.getElementById("lrSub");
+  if(sub) sub.textContent = state.liveStream
+    ? "实时视频流 · 点暂停可省 CPU"
+    : "已暂停 · 点播放恢复实时";
+  toast("toast2", state.liveStream ? "已开始实时播放" : "已暂停实时播放");
+}
+
+function buildLiveRoom(){
+  const body = document.getElementById("lrBody");
+  if(!CAMERAS.length){                       /* 全删光了就退回快照墙 */
+    state.liveView = "snap";
+    document.getElementById("liveRoom").classList.remove("on");
+    renderLive();
+    return;
+  }
+  if(!CAMERAS[state.liveCam]) state.liveCam = 0;
+  const grid = state.liveView === "grid";
+  const total = CAMERAS.length;
+
+  document.getElementById("lrGridTxt").textContent = grid ? "单路" : "宫格";
+  document.getElementById("lrHint").textContent = grid
+    ? "点任意窗口放大 · 已铺满全部 " + total + " 路"
+    : "点画面或悬浮按钮暂停 / 继续";
+
+  /* 布局随摄像头数量自适应：1→1列，2~4→2列，5~9→3列 */
+  const cols = grid ? Math.min(3, Math.ceil(Math.sqrt(total))) : 1;
+  body.style.gridTemplateColumns = "repeat(" + cols + ",minmax(0,1fr))";
+
+  const list = grid ? CAMERAS.map((_,i)=>i) : [state.liveCam];
+  body.innerHTML = "";
+  list.forEach(i=>{
+    const c = CAMERAS[i];
+    const tile = document.createElement("div");
+    tile.className = "lr-tile" + (grid && i === state.liveCam ? " cur" : "");
+    tile.dataset.camid = c.id;
+    tile.innerHTML = '<img class="snap-img" alt="">' +
+      '<div class="nophoto"><span class="np-ico">◐</span><span data-np>等待第一帧…</span></div>' +
+      '<div class="tf mono" data-tf>' + clockStr() + '</div>' +
+      '<div class="tn">' + esc(c.name) + '</div>' +
+      (!grid ? '<div class="lr-float"><button data-lrplay class="' +
+        (state.liveStream ? "" : "paused") + '"><i></i><span>' +
+        (state.liveStream ? "暂停" : "播放") + '</span></button></div>' : "") +
+      ((c.online || !!(camParams[c.id] && camParams[c.id].main)) ? "" : '<div class="off">离线</div>');
+    tile.onclick = ()=>{
+      if(grid){ state.liveCam = i; state.liveView = "single"; state.liveStream = true; buildLiveRoom(); }
+      else { toggleLiveStream(c.id); }
+    };
+    const playBtn = tile.querySelector("[data-lrplay]");
+    if(playBtn) playBtn.onclick = e=>{ e.stopPropagation(); toggleLiveStream(c.id); };
+    body.appendChild(tile);
+    const stTile = snapState[c.id] || (snapState[c.id] = { at: Date.now() });
+    if(!stTile.since) stTile.since = Date.now();
+    hookSnapImg(tile.querySelector(".snap-img"), c.id);
+    if(!grid && state.liveStream){
+      tile.classList.add("streaming");
+      tile.querySelector(".snap-img").src = liveStreamUrl(c.id);
+    }
+  });
+
+  const c = CAMERAS[state.liveCam];
+  document.getElementById("lrName").textContent = grid ? "全部 " + total + " 路" : c.name;
+  document.getElementById("lrSub").textContent = grid
+    ? "全部 " + total + " 路 · 快照每 " + SNAP.interval + " 秒刷新"
+    : (state.liveStream ? "实时视频流 · 点暂停可省 CPU" : "快照 · 每 " + SNAP.interval + " 秒刷新");
+  document.getElementById("lrClock").textContent = clockStr();
+}
+
+function updateResBar(){
+  const rng = a => !a.length ? "—" : Math.min(...a) === Math.max(...a)
+    ? Math.min(...a) + " 天"
+    : Math.min(...a) + "~" + Math.max(...a) + " 天";
+  const fulls = CAMERAS.map(c=>camParams[c.id]).filter(Boolean).map(p=>p.fullDays);
+  const clips = CAMERAS.map(c=>camParams[c.id]).filter(Boolean).map(p=>p.clipDays);
+  const keepEl = document.getElementById("resKeep");
+  if(keepEl) keepEl.textContent = CAMERAS.length ? ("全时 " + rng(fulls) + " / 缩时 " + rng(clips)) : "无摄像头";
+  const dirEl = document.getElementById("resDir");
+  if(dirEl) dirEl.textContent = REC.dir;
+  document.getElementById("resFree").textContent = REC.diskFreeGB.toFixed(1) + " GB";
+  document.getElementById("resTotal").textContent = REC.diskTotalGB.toFixed(1) + " GB";
+  document.getElementById("resGpu").textContent = GS.gpu ? "QSV" : "软件编码";
+  const room = document.getElementById("liveRoom").classList.contains("on");
+  document.getElementById("resCpu").textContent = room ? (state.liveView === "grid" ? "22%" : "9%") : "3%";
+  document.getElementById("resMem").textContent = room ? (state.liveView === "grid" ? "312.6" : "148.2") + " MB" : "96.4 MB";
+}
+const LIVE_PAL = [
+  { top:"#262c34", bot:"#3a4149", acc:"#4d5560", kind:"yard" },
+  { top:"#23272d", bot:"#454c55", acc:"#5b636e", kind:"garage" },
+  { top:"#2b3038", bot:"#363c44", acc:"#4a525d", kind:"room" },
+  { top:"#20242a", bot:"#3f454e", acc:"#545c68", kind:"hall" },
+];
+function drawLiveScene(cv, idx){
+  if(!cv) return;
+  const cam = CAMERAS[idx];
+  if(!cam) return;
+  const rr = cv.getBoundingClientRect();
+  if(!rr.width) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = rr.width, h = w*9/16;
+  if(cv.width !== Math.round(w*dpr)){
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+    cv.style.height = h + "px";
+  }
+  const c = cv.getContext("2d");
+  c.setTransform(dpr,0,0,dpr,0,0);
+  const t = performance.now()/1000;
+  const P = LIVE_PAL[idx % 4];
+
+  c.fillStyle = P.top; c.fillRect(0,0,w,h*0.38);
+  c.fillStyle = P.bot; c.fillRect(0,h*0.38,w,h*0.62);
+
+  if(P.kind === "yard"){
+    c.fillStyle = "#333a44"; c.fillRect(w*0.06,h*0.30,w*0.26,h*0.26);
+    c.fillStyle = "#3f4a3a";
+    for(let i=0;i<5;i++){ c.beginPath(); c.arc(w*(0.08+i*0.055), h*0.30, w*0.032, 0, Math.PI*2); c.fill(); }
+    c.fillStyle = P.acc; c.fillRect(w*0.62,h*0.55,w*0.3,h*0.05);
+  }else if(P.kind === "garage"){
+    c.fillStyle = "#2b323b"; roundRect(c, w*0.10,h*0.48,w*0.46,h*0.30,6); c.fill();
+    roundRect(c, w*0.14,h*0.52,w*0.38,h*0.14,5); c.fillStyle="rgba(150,180,205,.20)"; c.fill();
+    c.fillStyle = "#171a1f";
+    c.beginPath(); c.arc(w*0.20,h*0.80,w*0.045,0,Math.PI*2); c.fill();
+    c.beginPath(); c.arc(w*0.46,h*0.80,w*0.045,0,Math.PI*2); c.fill();
+  }else if(P.kind === "room"){
+    c.fillStyle = P.acc; c.fillRect(w*0.08,h*0.56,w*0.34,h*0.13);
+    c.fillRect(w*0.50,h*0.52,w*0.4,h*0.17);
+    c.fillStyle = "rgba(190,205,220,.14)"; c.fillRect(w*0.12,h*0.20,w*0.2,h*0.16);
+  }else{
+    c.fillStyle = P.acc;
+    c.fillRect(w*0.2,h*0.42,w*0.05,h*0.5);
+    c.fillRect(w*0.75,h*0.42,w*0.05,h*0.5);
+    c.fillStyle = "rgba(200,215,230,.10)"; c.fillRect(w*0.30,h*0.24,w*0.4,h*0.2);
+  }
+
+  /* 移动的人影 */
+  const px = w*((t*0.045 + idx*0.37) % 1.15 - 0.07);
+  const ph2 = h*0.24;
+  c.fillStyle = "#c3ccd8";
+  c.fillRect(px-ph2*0.13, h*0.78-ph2*0.6, ph2*0.26, ph2*0.52);
+  c.beginPath(); c.arc(px, h*0.78-ph2*0.7, ph2*0.115, 0, Math.PI*2); c.fill();
+
+  /* 噪点 + 暗角（模拟子码流压缩感） */
+  const rnd = mulberry(hashStr(CAMERAS[idx].id) + Math.floor(t*3));
+  c.fillStyle = "rgba(255,255,255,.035)";
+  for(let i=0;i<70;i++) c.fillRect(rnd()*w, rnd()*h, 1.2, 1.2);
+  const g = c.createRadialGradient(w/2,h/2,Math.min(w,h)*0.34,w/2,h/2,Math.max(w,h)*0.74);
+  g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.42)");
+  c.fillStyle = g; c.fillRect(0,0,w,h);
+}
+
+/* ================= 摄像头页 ================= */
+/* ================= 设置页 =================
+   排布原则：
+     1) 公共参数（所有摄像头共用）放最上面 —— 日常调整九成在这几项；
+     2) 摄像头是「列表 + 折叠」，添加 / 删除都在列表里完成；
+     3) 每路专属参数折叠在它自己那一行下面，染底 + 左侧色条 + 「仅此摄像头」
+        标签，一眼就能和公共参数分开；
+     4) 专属参数默认只读，点「修改」才进编辑态；改动先进草稿，必须点「保存」
+        才落盘 —— 参数密，避免滑杆被手滑碰一下就改了。
+*/
+const SET = { open:null, editing:false, draft:null, adv:false, armed:null, genOpen:false };
+
+function esc(s){
+  return String(s==null?"":s).replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+}
+function copyObj(o){ try{ return JSON.parse(JSON.stringify(o)); }catch(e){ return o; } }
+function curCam(){ return CAMERAS.find(c=>c.id===state.camId) || CAMERAS[0] || null; }
+
+function estMbps(pr, res, isNight){
+  const base = res === "4MP" ? 3.4 : 2.3;
+  const f = Math.pow(pr.fps/12, 0.62);
+  const s = Math.pow(pr.scale/100, 1.85);
+  const c = Math.pow(2, (pr.crf-24)/6);
+  const g = isNight ? 0.60 : 1;
+  const d = 1 - Math.min(0.38, pr.dn*0.095);
+  return base*f*s*c*g*d;
+}
+const DN_NAMES = ["关闭","轻","中","强"];
+
+/* 判读指标：与 fpk/app/server/params.py 同一套口径，避免原型与实现两套说法 */
+function judgeScene(p){
+  if(p.judge.scene !== "auto") return p.judge.scene;
+  return p.judge.chromaStd >= 1.5 ? "color" : "mono";
+}
+function judgeSummary(p){
+  const mono = judgeScene(p) === "mono";
+  const base = mono ? 0.00042 : 0.00041;
+  const th = Math.max(base * p.judge.noiseMult, 0.0005);
+  return "判据 " + (mono ? "黑白单路 · 模糊 1" : "彩色双路")
+    + " · 噪声底线 " + base.toFixed(5) + " · 阈值 " + th.toFixed(5);
+}
+
+/* 全路合计占用（保留周期跟着每路走，所以放在摄像头区下面汇总） */
+function recBudgetText(){
+  let full = 0, clip = 0;
+  CAMERAS.forEach(c=>{
+    const p = camParams[c.id];
+    if(!p || !p.enabled) return;
+    const dayGB = fullDayMbps(c) * 86400 / 8 / 1024;   /* Mbps×86400s÷8=MB，再÷1024=GB */
+    full += dayGB * p.fullDays;
+    clip += dayGB * 0.07 * p.clipDays;
+  });
+  const need = full + clip;
+  const ok = need <= REC.diskFreeGB;
+  return "合计占用 ≈ <b style=\"" + (ok ? "" : "color:var(--danger)") + "\">" + need.toFixed(0)
+    + " GB</b>（全时 " + full.toFixed(0) + " + 缩时 " + clip.toFixed(0)
+    + "）· 剩余 " + REC.diskFreeGB.toFixed(0) + " GB"
+    + (ok ? "" : "，<b style='color:var(--danger)'>空间不足：减全时天数或调低画质</b>");
+}
+
+/* ---------------- 公共参数 ---------------- */
+function cardRec(){
+  return '<div class="gcard">'
+    + '<h3>录制 <span class="sub">所有摄像头共用</span></h3>'
+    + '<div class="srow" style="display:flex;align-items:center;padding-top:0;border-top:none">'
+      + '<span class="n">总开关</span>'
+      + '<div class="sw ' + (REC.enabled?"on":"") + '" data-rec="enabled" style="margin-left:auto"></div>'
+    + '</div>'
+    + '<div class="fld2" style="margin-top:12px">'
+      + '<label>保存目录（按 摄像头名称 / 日期 / 时段 分目录，改后需重启应用）</label>'
+      + '<input type="text" class="mono" value="' + esc(REC.dir) + '" id="recDir">'
+      + '<div class="hint" style="margin-top:6px">全时录像存 <code style="font-size:10.5px">' + esc(REC.dir) + '/&lt;摄像头&gt;/&lt;日期&gt;/</code>，缩时片段存 <code style="font-size:10.5px">' + esc(REC.dir) + '/_clip/&lt;摄像头&gt;/&lt;日期&gt;/</code></div>'
+    + '</div>'
+    + '<div class="fld2">'
+      + '<label>每天几点清理过期录像</label>'
+      + '<div class="chips" style="margin-top:2px">'
+        + ["01:00","02:00","03:00","04:00","05:00"].map(t=>
+            '<button class="chip ' + (REC.cleanupAt===t?"on":"") + '" data-cleanat="' + t + '">' + t + '</button>').join("")
+      + '</div>'
+    + '</div>'
+    + '<div class="hint" style="margin-top:8px">按<b>日期整目录删</b>，不在录像时倒数计时。含 <code style="font-size:10.5px">.part</code> 或待压缩文件的目录会跳过并告警。</div>'
+    + '<button class="btnline" id="btnCleanNow" style="margin-top:10px">立即预览清理（不删除）</button>'
+    + '<div class="cleanline" style="margin-top:9px"><i class="dot"></i><span>上次 ' + REC.lastClean.at.slice(5)
+      + ' 删除 <b>' + REC.lastClean.dirs + ' 个日期目录 / ' + REC.lastClean.files + ' 个文件</b>，释放 ' + REC.lastClean.freed + ' GB</span></div>'
+  + '</div>';
+}
+
+function cardLink(){
+  return '<div class="gcard">'
+    + '<h3>录制与压制衔接 <span class="sub">所有摄像头共用</span></h3>'
+    + '<div class="srow" style="padding-top:0;border-top:none">'
+      + '<div class="n">录完之后什么时候压</div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (LK.mode==="live"?"on":"") + '" data-link="live">即刻压制</button>'
+        + '<button class="chip ' + (LK.mode==="scheduled"?"on":"") + '" data-link="scheduled">定时压制</button>'
+      + '</div>'
+      + '<div class="h" style="margin-top:8px;line-height:1.55">' + linkHint() + '</div>'
+    + '</div>'
+    + (LK.mode==="scheduled" ? '<div class="srow">'
+      + '<div class="top"><span class="n">每隔多久压一次</span><span class="v">' + LK.intervalH + ' 小时</span></div>'
+      + '<div class="stepper"><button data-linkh="-1">−</button><span class="val">' + LK.intervalH + ' 小时</span><button data-linkh="1">+</button></div>'
+      + '<div class="h">1~24 小时；设 24 就是每天同一时刻批量做一次。首次启动会先处理积压，不会干等满一个周期。</div>'
+    + '</div>' : '')
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">录制分片长度</span><span class="v">' + Math.round(LK.segSec/60) + ' 分钟</span></div>'
+      + '<div class="chips">'
+        + [[60,"1 分钟"],[180,"3 分钟"],[300,"5 分钟"],[600,"10 分钟"],[900,"15 分钟"]].map(([v,l])=>
+            '<button class="chip ' + (LK.segSec===v?"on":"") + '" data-linkseg="' + v + '">' + l + '</button>').join("")
+      + '</div>'
+      + '<div class="h">分片越短，"录完"到"开压"的间隔越短；太碎又会让静止判定的上下文不够。5 分钟是平衡点。</div>'
+    + '</div>'
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">处理队列</span><span class="v" style="color:' + (LK.pending?"var(--primary)":"var(--keep)") + '">'
+        + (LK.pending ? "处理中 · " + LK.pending + " 项" : "空闲") + '</span></div>'
+      + '<div class="h">已压制 ' + LK.done + ' · 静默 ' + LK.silent + (LK.failed ? ' · <span style="color:var(--warn)">失败 ' + LK.failed + '</span>' : '') + (LK.lastItem ? ' · 最近 ' + LK.lastItem : '') + '</div>'
+      + '<div class="h">下次入队 ' + LK.nextBatch + ' · 上次 ' + LK.lastBatch + '</div>'
+      + '<button class="btnline" id="btnLinkRun" style="margin-top:9px">立即处理一批</button>'
+    + '</div>'
+  + '</div>';
+}
+
+function cardGpu(){
+  const cpuPct = GS.gpu ? (GS.conc===2 ? 17 : 9) : (GS.conc===2 ? 178 : 96);
+  const memMB  = 78 + (GS.gpu ? 205 : 330) * GS.conc;
+  return '<div class="gcard">'
+    + '<h3>硬件与资源 <span class="sub">所有摄像头共用</span></h3>'
+    + '<div class="detect" style="margin:0 0 10px">'
+      + '<span class="k" style="background:' + (GS.gpu ? "var(--live)" : "var(--faint2)") + '"></span>'
+      + '<span>' + (GS.gpu
+          ? "核显可用 · <b>Intel UHD 730 / QSV</b>，解码与编码都不占 CPU"
+          : "已关闭 · 回落 <b>x265 软件编码</b>，单路吃满 1 个核，速度约 1/10") + '</span>'
+    + '</div>'
+    + '<div class="swrow"><span>解码 + 编码走核显</span><div class="sw ' + (GS.gpu?"on":"") + '" data-gs="gpu"></div></div>'
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">同时处理</span><span class="v">' + GS.conc + ' 路</span></div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (GS.conc===1?"on":"") + '" data-conc="1">串行 · 1 路</button>'
+        + '<button class="chip ' + (GS.conc===2?"on":"") + '" data-conc="2">并行 · 2 路</button>'
+      + '</div>'
+      + '<div class="h">UHD 730 只有一个媒体引擎；2 路已接近线性，3 路以上开始抢磁盘。</div>'
+    + '</div>'
+    + '<div class="swrow"><span>只在夜间跑重编码</span><div class="sw ' + (GS.nightOnly?"on":"") + '" data-gs="nightOnly"></div></div>'
+    + '<div class="swrow"><span>低优先级 · 磁盘空闲才写</span><div class="sw ' + (GS.lowPrio?"on":"") + '" data-gs="lowPrio"></div></div>'
+    + '<div class="swrow"><span>缩略图合并成雪碧图</span><div class="sw ' + (GS.sprite?"on":"") + '" data-gs="sprite"></div></div>'
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">当前占用</span><span class="v" style="color:var(--live)">' + (GS.conc===1?"待机":"处理中 · 2 路") + '</span></div>'
+      + '<div class="bars">'
+        + '<div class="bcell"><div class="k">CPU</div><div class="num">' + cpuPct + '%</div><div class="track"><i style="width:' + Math.min(100,cpuPct) + '%;background:' + (cpuPct>60?"#e0862c":"var(--primary)") + '"></i></div></div>'
+        + '<div class="bcell"><div class="k">内存</div><div class="num">' + memMB + ' MB</div><div class="track"><i style="width:' + Math.min(100,memMB/20) + '%"></i></div></div>'
+        + '<div class="bcell"><div class="k">缩略图</div><div class="num">' + (GS.sprite?0.4:2.9) + ' GB</div><div class="track"><i style="width:' + Math.min(100,(GS.sprite?0.4:2.9)*20) + '%"></i></div></div>'
+      + '</div>'
+    + '</div>'
+  + '</div>';
+}
+
+function cardLook(){
+  return '<div class="gcard">'
+    + '<h3>外观 <span class="sub">与飞牛系统明暗一致</span></h3>'
+    + '<div class="chips" style="margin-top:0">'
+      + '<button class="chip" data-theme-set="auto">跟随系统</button>'
+      + '<button class="chip" data-theme-set="light">浅色</button>'
+      + '<button class="chip" data-theme-set="dark">深色</button>'
+    + '</div>'
+  + '</div>';
+}
+
+function cardDiag(){
+  return '<div class="gcard">'
+    + '<h3>诊断日志 <span class="sub">出问题先看这里</span></h3>'
+    + '<div class="diagwarn" id="diagWarn" style="display:none"></div>'
+    + '<div class="hint" style="margin-top:0">画面出不来 / 录像中断 / 反复重连时，先看下面的运行日志——快照失败、ffmpeg 报错、调度异常都记在这里（RTSP 密码已自动脱敏）。</div>'
+    + '<div class="diagenv" id="diagEnv"><span class="empty">环境自检中…</span></div>'
+    + '<div class="logbox" id="diagLog"><pre id="diagLogText"><span class="empty">正在读取…</span></pre></div>'
+    + '<div class="logbtns">'
+    +   '<button class="logbtn" id="btnLogRefresh">刷新</button>'
+    +   '<button class="logbtn" id="btnLogCopy">复制日志</button>'
+    +   '<button class="logbtn danger" id="btnLogClear">清除日志</button>'
+    + '</div>'
+    + '<button class="btnline" id="btnRestart">重启服务（加载最新代码）</button>'
+    + '<div class="h" style="margin-top:10px;line-height:1.6">局域网直连 <b>http://&lt;NAS 的 IP&gt;:' + REC.port + '</b>。服务监听 0.0.0.0，桌面入口与本机端口互不影响。</div>'
+  + '</div>';
+}
+
+/* ---------------- 诊断日志：直接看 / 复制 / 清除 ---------------- */
+async function loadDiagEnv(){
+  const el = document.getElementById("diagEnv");
+  const warn = document.getElementById("diagWarn");
+  if(!el) return;
+  try{
+    const r = await fetch("/api/health?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" });
+    const d = await r.json();
+    const stale = !d || typeof d.version !== "string" || !d.version;
+    if(stale){
+      // 服务端没返回 version → 磁盘上是新代码，但后台进程仍是旧版
+      // （升级时旧进程没被杀掉）。此时 ffmpeg/ffprobe 状态其实是「未知」而非「未找到」。
+      el.innerHTML = "服务端版本 <b class='bad'>未知（旧版服务进程仍在运行）</b>";
+      if(warn){
+        warn.style.display = "block";
+        warn.innerHTML = "⚠️ 检测到<b>旧版服务进程仍在运行</b>：新代码只替换到了磁盘，后台跑的仍是老版本。"
+          + "请在飞牛「应用中心」里对本应用<b>停止 → 启动</b>（关闭窗口不算重启），"
+          + "或点下方「重启服务」按钮；若按钮提示不可用，则必须手动在应用中心重启。";
+      }
+    }else{
+      const ff = d.ffmpeg ? ("<b class='ok'>✓</b> " + esc(d.ffmpeg))
+                          : "<b class='bad'>✗ 未找到 ffmpeg</b>（预览/录制会失效）";
+      const fp = d.ffprobe ? ("<b class='ok'>✓</b> " + esc(d.ffprobe))
+                           : "<b class='bad'>✗ 未找到 ffprobe</b>（压制/缩时分析会失效）";
+      el.innerHTML = "服务端版本 <b>v" + esc(d.version) + "</b>"
+        + "　ffmpeg " + ff
+        + "　ffprobe " + fp;
+      if(warn) warn.style.display = "none";
+    }
+  }catch(e){
+    el.innerHTML = "环境自检失败：" + esc(String(e));
+  }
+}
+async function restartDiag(){
+  const btn = document.getElementById("btnRestart");
+  try{
+    const r = await fetch("/api/restart", { method:"POST", mode:"same-origin" });
+    const d = await r.json().catch(()=>null);
+    if(r.ok && d && d.ok){
+      if(btn){ btn.disabled = true; btn.textContent = "正在重启…"; }
+      toast("toast2", "服务正在重启，3 秒后自动刷新");
+      setTimeout(()=>{ location.reload(); }, 3000);
+    }else{
+      toast("toast2", "重启接口不可用——当前跑的是旧版服务，请在应用中心手动停止→启动");
+    }
+  }catch(e){
+    toast("toast2", "重启接口不可用——请在应用中心手动停止→启动");
+  }
+}
+async function loadDiagLog(){
+  const pre = document.getElementById("diagLogText");
+  if(!pre) return;
+  try{
+    const r = await fetch("/api/log?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" });
+    const ct = (r.headers.get("content-type") || "");
+    if(!ct.includes("json")){
+      pre.textContent = "无法读取日志：服务端返回的不是日志接口（" + (ct || "未知类型") + "）。\n"
+        + "后台跑的还是旧版服务进程——请点上方「重启服务」按钮，或在飞牛应用中心里「停止 → 启动」本应用。";
+      pre.classList.remove("empty");
+      return;
+    }
+    const d = await r.json();
+    const txt = (d && typeof d.text === "string") ? d.text : "";
+    pre.textContent = txt || "（暂无日志）";
+    pre.classList.toggle("empty", !txt);
+    const box = pre.parentElement;
+    box.scrollTop = box.scrollHeight;      // 滚动到底部，最新的在最下面
+  }catch(e){
+    pre.textContent = "无法读取日志：" + e;
+  }
+}
+async function copyDiagLog(){
+  const pre = document.getElementById("diagLogText");
+  const txt = pre ? pre.textContent : "";
+  try{
+    await navigator.clipboard.writeText(txt);
+    toast("toast2", "日志已复制到剪贴板");
+  }catch(e){
+    try{                                     // 兼容旧 WebView / 非安全上下文
+      const ta = document.createElement("textarea");
+      ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      document.execCommand("copy"); document.body.removeChild(ta);
+      toast("toast2", "日志已复制到剪贴板");
+    }catch(e2){ toast("toast2", "复制失败，请长按日志框手动选择复制"); }
+  }
+}
+async function clearDiagLog(){
+  try{ await fetch("/api/log/clear", { method:"POST", mode:"same-origin" }); }catch(e){}
+  await loadDiagLog();
+  toast("toast2", "日志已清除");
+}
+
+/* ---------------- 摄像头列表 ---------------- */
+function camIcon(){
+  return '<svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 015.5 6h9A2.5 2.5 0 0117 8.5v7a2.5 2.5 0 01-2.5 2.5h-9A2.5 2.5 0 013 15.5z"/><path d="M17 10.5l4-2.2v7.4l-4-2.2"/></svg>';
+}
+
+function renderCamList(){
+  let h = '<div class="zone cam">'
+    + '<div class="zonehead"><span class="zi">◉</span>'
+    + '<div><b>摄像头</b><div class="zs">每路独立参数 · 点一行展开</div></div>'
+    + '<span class="cnt">' + CAMERAS.length + ' 台</span></div>';
+  if(!CAMERAS.length){
+    h += '<div class="empty">还没有摄像头<br>点下面的「添加摄像头」，填入主码流 RTSP 地址即可开始录制</div>';
+  }
+  CAMERAS.forEach(c=>{
+    const p = camParams[c.id];
+    const open = SET.open === c.id;
+    const armed = SET.armed === c.id;
+    let state0;
+    if(!p.main) state0 = '<span style="color:var(--warn)">未填主码流</span>';
+    else if(p.enabled === false) state0 = '<span style="color:var(--faint)">已停用</span>';
+    else state0 = c.online ? '<span style="color:var(--keep)">● 在线</span>' : '<span style="color:var(--faint)">● 未连接</span>';
+    const maskCnt = maskCount(p.masks);
+    h += '<div class="camrow' + (open?" open":"") + '" data-camrow="' + c.id + '">'
+      + '<button class="dragh" data-drag="' + c.id + '" title="按住拖动排序">'
+      + '<svg viewBox="0 0 16 16"><circle cx="5" cy="4" r="1.4"/><circle cx="11" cy="4" r="1.4"/>'
+      + '<circle cx="5" cy="8" r="1.4"/><circle cx="11" cy="8" r="1.4"/>'
+      + '<circle cx="5" cy="12" r="1.4"/><circle cx="11" cy="12" r="1.4"/></svg></button>'
+      + '<div class="avatar">' + camIcon() + '</div>'
+      + '<div class="meta"><div class="t">' + esc(c.name) + '</div>'
+        + '<div class="s"><span>' + c.ch + '</span><span style="color:var(--line)">|</span><span>' + c.res + '</span>'
+        + '<span style="color:var(--line)">|</span>' + state0
+        + (maskCnt ? '<span style="color:var(--line)">|</span><span>' + maskCnt + ' 格区域</span>' : '')
+        + '</div></div>'
+      + '<div class="acts"><button class="minibtn' + (armed?" armed":"") + '" data-delcam="' + c.id + '">'
+        + (armed ? "确认删除" : "删除") + '</button></div>'
+    + '</div>';
+    if(open){
+      const p2 = camParams[c.id];
+      h += SET.editing ? renderCamEdit(c, SET.draft) : renderCamRead(c, p2);
+    }
+  });
+  h += '<button class="btnline" data-addcam="1" style="margin-top:3px">＋ 添加摄像头</button>';
+  h += '</div>';
+  return h;
+}
+
+/* ---------------- 每路：只读摘要 ---------------- */
+function renderCamRead(c, p){
+  const pr = p.profile === "night" ? p.night : p.day;
+  const mb = estMbps(pr, c.res, p.profile === "night");
+  const modeTx = p.mode === "fast" ? "快速 · 流复制" : "精细 · 重编码";
+  const keep = state.segs.reduce((a,s)=>a+(s.e-s.s),0)/86400;
+  const gb = mb * 0.44 * 24 * Math.max(keep, 0.01);
+  return '<div class="ccard">'
+    + '<div class="tag"><i></i>仅此摄像头的参数<span class="ro-flag">只读 · 点「修改」可调整</span></div>'
+    + '<div class="sub">'
+      + '<h4>码流地址</h4>'
+      + roRow("主码流 · 录像", p.main ? esc(p.main) : '<span style="color:var(--warn)">未填写</span>', p.main ? "url" : "")
+      + roRow("子码流 · 预览", p.sub ? esc(p.sub) : '<span class="dim">未填 · 预览用主码流</span>', p.sub ? "url" : "")
+    + '</div>'
+    + '<div class="sub">'
+      + '<h4>保留周期</h4>'
+      + roRow("全时录像", p.fullDays + " 天")
+      + roRow("缩时片段", p.clipDays + " 天")
+      + roRow("该路状态", p.enabled ? "启用" : "已停用", p.enabled ? "" : "dim")
+    + '</div>'
+    + '<div class="sub">'
+      + '<h4>事件判定 <em>灵敏度 ' + p.sensitivity + '%</em></h4>'
+      + roRow("灵敏度", p.sensitivity + "%")
+      + roRow("最短保留 / 静默合并", p.minKeep + " 秒 / " + p.mergeGap + " 秒")
+    + '</div>'
+    + '<div class="sub">'
+      + '<h4>输出压缩 <em>约 ' + mb.toFixed(1) + ' Mbps · ' + gb.toFixed(1) + ' GB/天</em></h4>'
+      + roRow("方式", modeTx)
+      + roRow("画质档", (p.profile === "night" ? "夜间" : "白天") + " · CRF " + pr.crf + " · " + pr.fps + "fps · " + pr.scale + "%")
+      + roRow("去噪", DN_NAMES[pr.dn])
+    + '</div>'
+    + '<div class="sub">'
+      + '<h4>画面区域 <em>' + maskCount(p.masks) + ' 格</em></h4>'
+      + '<div class="maskstage locked"><img class="mimg" id="maskImg" alt=""><canvas id="maskCv"></canvas></div>'
+      + maskCountLine(p.masks)
+    + '</div>'
+    + '<div class="editbar"><button class="no" data-closecam="1">收起</button>'
+      + '<button class="ok" data-editcam="1">修改</button></div>'
+  + '</div>';
+}
+
+function roRow(k, v, cls){
+  return '<div class="ro"><span class="k">' + k + '</span><span class="v ' + (cls||"") + '">' + v + '</span></div>';
+}
+
+/* ---------------- 每路：编辑态 ---------------- */
+function renderCamEdit(c, p){
+  const isNight = p.profile === "night";
+  const pr = isNight ? p.night : p.day;
+  const mb = estMbps(pr, c.res, isNight);
+  const keep = state.segs.reduce((a,s)=>a+(s.e-s.s),0)/86400;
+  const gb = mb * 0.44 * 24 * Math.max(keep, 0.01);
+  const PFX = isNight ? "night" : "day";
+
+  return '<div class="ccard">'
+    + '<div class="tag"><i></i>仅此摄像头的参数<span class="ro-flag" style="color:var(--primary)">编辑中 · 未保存</span></div>'
+
+    /* 名称 + 码流 */
+    + '<div class="sub">'
+      + '<h4>名称与码流地址</h4>'
+      + '<div class="fld2"><label>名称</label><input type="text" value="' + esc(c.name) + '" data-camname="1"></div>'
+      + '<div class="fld2"><label>主码流 RTSP · 录像用（必填）</label>'
+        + '<input type="text" class="mono" value="' + esc(p.main) + '" data-k="main" placeholder="rtsp://192.168.2.108:554/stream1"></div>'
+      + '<div class="fld2"><label>子码流 RTSP · 预览用（可空，留空则用主码流）</label>'
+        + '<input type="text" class="mono" value="' + esc(p.sub) + '" data-k="sub" placeholder="rtsp://192.168.2.108:554/stream2"></div>'
+      + '<div class="hint" style="margin-top:2px;font-size:10.5px">需要认证就把用户名密码写进地址：<code style="font-size:10px">rtsp://user:pass@ip:554/...</code></div>'
+    + '</div>'
+    /* 保留 + 启用：紧跟在码流地址下面，先定“存多久”再调画面 */
+    + '<div class="sub">'
+      + '<h4>保留周期</h4>'
+      + '<div class="srow" style="padding-top:0;border-top:none">'
+        + '<div class="top"><span class="n">全时录像</span><span class="v" data-out="fullDays">' + p.fullDays + ' 天</span></div>'
+        + '<div class="stepper"><button data-ret="fullDays" data-d="-1">−</button><span class="val">' + p.fullDays + ' 天</span><button data-ret="fullDays" data-d="1">+</button></div>'
+      + '</div>'
+      + '<div class="srow">'
+        + '<div class="top"><span class="n">缩时片段</span><span class="v" data-out="clipDays">' + p.clipDays + ' 天</span></div>'
+        + '<div class="stepper"><button data-ret="clipDays" data-d="-1">−</button><span class="val">' + p.clipDays + ' 天</span><button data-ret="clipDays" data-d="1">+</button></div>'
+      + '</div>'
+      + '<div class="swrow" style="margin-top:4px"><span>该摄像头启用</span><div class="sw ' + (p.enabled?"on":"") + '" data-en="1"></div></div>'
+    + '</div>'
+
+    /* 事件判定 */
+    + '<div class="sub">'
+      + '<h4>事件判定 <em>越低越保守</em></h4>'
+      + rangeRow("灵敏度", "sensitivity", p.sensitivity, 5, 95, 1, "只留明显动作，树影/雨雪不易误报")
+      + rangeRow("最短保留", "minKeep", p.minKeep, 2, 60, 1, "短于这个时长的碎片并入相邻片段")
+      + rangeRow("静默合并", "mergeGap", p.mergeGap, 0, 120, 1, "两段之间空白短于此值就拼成一段")
+    + '</div>'
+
+    /* 输出压缩 */
+    + '<div class="sub">'
+      + '<h4>输出压缩 <em id="outSub">约 ' + mb.toFixed(1) + ' Mbps · ' + gb.toFixed(1) + ' GB/天</em></h4>'
+      + '<div class="chips" style="margin-top:0">'
+        + '<button class="chip ' + (p.mode==="fast"?"on":"") + '" data-mode2="fast">快速 · 流复制</button>'
+        + '<button class="chip ' + (p.mode==="fine"?"on":"") + '" data-mode2="fine">精细 · 重编码</button>'
+      + '</div>'
+      + (p.mode==="fast" ? '<div class="note" style="margin-top:8px">流复制只按关键帧裁切、不重编码，下面的画质参数<b>不生效</b>。</div>' : '')
+      + '<div class="' + (p.mode==="fast"?"dim":"") + '" style="margin-top:9px">'
+        + '<div class="chips" style="margin:0 0 9px">'
+          + '<button class="chip ' + (!isNight?"on":"") + '" data-prof="day">白天 · 彩色</button>'
+          + '<button class="chip ' + (isNight?"on":"") + '" data-prof="night">夜间 · 黑白</button>'
+        + '</div>'
+        + rangeRow("画质 CRF", PFX + ".crf", pr.crf, 18, 34, 1, isNight ? "黑白细节少，可用更高 CRF" : "彩色别超 26，否则车牌颜色会糊")
+        + rangeRow("帧率", PFX + ".fps", pr.fps, 5, 30, 1, "12 帧在手机上看不出差别，体积减半")
+        + rangeRow("分辨率", PFX + ".scale", pr.scale, 40, 100, 5, pr.scale<100 ? "降到约 " + Math.round(4*pr.scale/100*10)/10 + "MP" : "保持原始分辨率")
+        + rangeRow("去噪强度", PFX + ".dn", pr.dn, 0, 3, 1, isNight ? "红外噪声是码率元凶，先降噪" : "白天轻量即可，过强会糊掉人脸")
+      + '</div>'
+      + '<div class="swrow" style="margin-top:6px"><span>按昼夜自动分档</span><div class="sw ' + (p.autoDN?"on":"") + '" data-dn="1"></div></div>'
+    + '</div>'
+
+    /* 画面区域：上下两组 16×9 方块预选，各自独立菜单 */
+    + '<div class="sub">'
+      + '<h4>检测忽略区 <em id="igCnt">已选 ' + p.masks.ignore.length + ' 格</em></h4>'
+      + '<div class="mtip" style="margin-top:0"><b style="color:var(--warn)">忽略区</b>：区域内变化不算事件，画面照常保留。适合树影、马路。<b>按住拖动多选，点一下已选的格子取消。</b></div>'
+      + '<div class="maskstage"><img class="mimg" id="maskImg-ig" alt=""><canvas id="maskCv-ig"></canvas></div>'
+    + '</div>'
+    + '<div class="sub">'
+      + '<h4>输出遮蔽区 <em id="rdCnt">已选 ' + p.masks.redact.length + ' 格</em></h4>'
+      + '<div class="mtip" style="margin-top:0"><b style="color:var(--danger)">遮蔽区</b>：导出画面里打成黑块，谁都看不到，也不会触发事件。<b>按住拖动多选，点一下已选的格子取消。</b></div>'
+      + '<div class="maskstage"><img class="mimg" id="maskImg-rd" alt=""><canvas id="maskCv-rd"></canvas></div>'
+      + '<div class="mlist" id="mlist"></div>'
+    + '</div>'
+
+
+    + '<div class="editbar">'
+      + '<button class="no" data-cancel="1">取消</button>'
+      + '<button class="rst" data-reset="1">恢复默认</button>'
+      + '<button class="ok" data-save="1">保存</button>'
+    + '</div>'
+  + '</div>';
+}
+
+function rangeRow(label, key, val, min, max, step, hint){
+  const tail = key.split(".").pop();
+  return '<div class="srow">'
+    + '<div class="top"><span class="n">' + label + '</span><span class="v" data-out="' + key + '">' + fmtVal(tail, val) + '</span></div>'
+    + '<input type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + val + '" data-k="' + key + '">'
+    + (hint ? '<div class="h">' + hint + '</div>' : '')
+  + '</div>';
+}
+
+function fmtVal(k, v){
+  if(k==="sensitivity") return v + "%";
+  if(k==="minKeep" || k==="mergeGap" || k==="preBuf" || k==="postBuf") return v + " 秒";
+  if(k==="noiseMult") return (+v).toFixed(1) + "×";
+  if(k==="pixelDelta" || k==="chromaDelta") return v + " 级";
+  if(k==="fps") return v + " fps";
+  if(k==="scale") return v + "%";
+  if(k==="dn") return DN_NAMES[v] || v;
+  if(k==="fullDays" || k==="clipDays") return v + " 天";
+  return v;
+}
+
+/* ---------------- 草稿读写 ---------------- */
+function draftGet(path){
+  const ks = path.split(".");
+  let o = SET.draft;
+  for(let i=0;i<ks.length;i++){ o = o[ks[i]]; if(o == null) return null; }
+  return o;
+}
+function draftSet(path, v){
+  const ks = path.split(".");
+  let o = SET.draft;
+  for(let i=0;i<ks.length-1;i++){
+    if(!o[ks[i]]) o[ks[i]] = {};
+    o = o[ks[i]];
+  }
+  o[ks[ks.length-1]] = v;
+}
+function syncOuts(){
+  const body = document.getElementById("camBody");
+  if(!body || !SET.draft) return;
+  body.querySelectorAll("[data-out]").forEach(el=>{
+    const v = draftGet(el.dataset.out);
+    if(v == null) return;
+    el.textContent = fmtVal(el.dataset.out.split(".").pop(), v);
+  });
+  /* 码率 / 体积预估跟着画质参数一起动 */
+  const c = curCam();
+  if(c){
+    const p = SET.draft;
+    const isNight = p.profile === "night";
+    const pr = isNight ? p.night : p.day;
+    const mb = estMbps(pr, c.res, isNight);
+    const keep = state.segs.reduce((a,s)=>a+(s.e-s.s),0)/86400;
+    const gb = mb * 0.44 * 24 * Math.max(keep, 0.01);
+    const sub = body.querySelector("#outSub");
+    if(sub) sub.textContent = "约 " + mb.toFixed(1) + " Mbps · " + gb.toFixed(1) + " GB/天";
+  }
+}
+
+/* ---------------- 遮罩画布 ---------------- */
+/* 画面区域：16×9 方块预选。两个画布（忽略/遮蔽）各自独立，
+   只读摘要是第三张（两者叠加展示、不可编辑）。 */
+let gdrag = null;
+
+function maskArr(kind){
+  if(SET.editing && SET.draft){
+    const m = SET.draft.masks;
+    return m[kind] || (m[kind] = []);
+  }
+  const p = camParams[state.camId];
+  if(!p) return [];
+  return p.masks[kind] || (p.masks[kind] = []);
+}
+function maskCount(m){
+  m = normMasks(m);
+  return m.ignore.length + m.redact.length;
+}
+function maskCountLine(m){
+  m = normMasks(m);
+  if(!m.ignore.length && !m.redact.length)
+    return '<span style="font-size:11.5px;color:var(--faint2)">还没有区域</span>';
+  const seg = [];
+  if(m.ignore.length) seg.push('<span class="mitem"><i style="background:#e0a33a"></i>忽略区 ' + m.ignore.length + ' 格</span>');
+  if(m.redact.length) seg.push('<span class="mitem"><i style="background:var(--danger)"></i>遮蔽区 ' + m.redact.length + ' 格</span>');
+  return '<div class="mlist">' + seg.join("") + '</div>';
+}
+
+function drawMaskScene(){
+  ["maskCv", "maskCv-ig", "maskCv-rd"].forEach(drawGridCv);
+}
+
+function drawGridCv(id){
+  const cv = document.getElementById(id);
+  if(!cv) return;
+  const rr = cv.getBoundingClientRect();
+  if(rr.width < 8) return;                  /* 页面还没显示，等切过来再画 */
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = rr.width, h = rr.height || w*9/16;
+  const cw = Math.round(w*dpr), ch = Math.round(h*dpr);
+  if(cv.width !== cw || cv.height !== ch){ cv.width = cw; cv.height = ch; }
+  const c = cv.getContext("2d");
+  c.setTransform(dpr,0,0,dpr,0,0);
+  const kind = id === "maskCv" ? "both" : (id === "maskCv-ig" ? "ignore" : "redact");
+
+  /* 底图：有快照就让画布透明叠在上面；没有就画示意场景占位 */
+  const img = document.getElementById(id.replace("Cv", "Img"));
+  const hasPhoto = !!(img && img.classList && img.classList.contains("on"));
+  if(hasPhoto){
+    c.clearRect(0,0,w,h);
+  }else{
+    c.fillStyle = "#20242a"; c.fillRect(0,0,w,h);
+    const hz = h*0.34;
+    c.fillStyle = "#292e36"; c.fillRect(0,0,w,hz);
+    c.fillStyle = "#333941"; c.fillRect(0,hz,w,h-hz);
+    c.fillStyle = "#181b20"; c.fillRect(w*0.40,h*0.06,w*0.15,hz-h*0.06);
+    c.fillStyle = "#242930"; c.fillRect(w*0.80,h*0.10,w*0.055,h*0.62);
+  }
+
+  /* 选中的格子 */
+  const cellW = w/GRID_COLS, cellH = h/GRID_ROWS;
+  const fillCells = (kindSel, fill, stroke)=>{
+    maskArr(kindSel).forEach(idx=>{
+      const col = idx % GRID_COLS, row = (idx - col) / GRID_COLS;
+      c.fillStyle = fill;
+      c.fillRect(col*cellW, row*cellH, cellW, cellH);
+      if(stroke){ c.strokeStyle = stroke; c.lineWidth = 1; c.strokeRect(col*cellW+.5, row*cellH+.5, cellW-1, cellH-1); }
+    });
+  };
+  if(kind === "both" || kind === "ignore")
+    fillCells("ignore", "rgba(240,180,40,.42)", "rgba(240,180,40,.9)");
+  if(kind === "both" || kind === "redact")
+    fillCells("redact", "rgba(12,14,18,.94)", "rgba(220,70,70,.85)");
+
+  /* 拖动中的预览 */
+  if(gdrag && gdrag.kind === kind){
+    const cells = rectCells(gdrag.c0, gdrag.r0, gdrag.c1, gdrag.r1);
+    c.fillStyle = gdrag.kind === "redact" ? "rgba(220,70,70,.30)" : "rgba(240,180,40,.34)";
+    cells.forEach(idx=>{
+      const col = idx % GRID_COLS, row = (idx - col) / GRID_COLS;
+      c.fillRect(col*cellW, row*cellH, cellW, cellH);
+    });
+  }
+
+  /* 网格线盖在最上面 */
+  c.strokeStyle = "rgba(255,255,255,.20)"; c.lineWidth = 1;
+  for(let i=1; i<GRID_COLS; i++){
+    c.beginPath(); c.moveTo(i*cellW, 0); c.lineTo(i*cellW, h); c.stroke();
+  }
+  for(let j=1; j<GRID_ROWS; j++){
+    c.beginPath(); c.moveTo(0, j*cellH); c.lineTo(w, j*cellH); c.stroke();
+  }
+  if(!hasPhoto){   /* 示意底图上加一条地平线，让格子有参照 */
+    c.strokeStyle = "rgba(255,255,255,.08)";
+    c.beginPath(); c.moveTo(0, h*0.34); c.lineTo(w, h*0.34); c.stroke();
+  }
+}
+
+function rectCells(c0, r0, c1, r1){
+  const cs = [Math.min(c0,c1), Math.max(c0,c1)];
+  const rs = [Math.min(r0,r1), Math.max(r0,r1)];
+  const out = [];
+  for(let r=rs[0]; r<=rs[1]; r++) for(let c=cs[0]; c<=cs[1]; c++) out.push(r*GRID_COLS+c);
+  return out;
+}
+function cellAt(cv, e){
+  const r = cv.getBoundingClientRect();
+  const x = Math.max(0, Math.min(0.9999, (e.clientX - r.left) / r.width));
+  const y = Math.max(0, Math.min(0.9999, (e.clientY - r.top) / r.height));
+  return { c: Math.floor(x*GRID_COLS), r: Math.floor(y*GRID_ROWS) };
+}
+
+function renderMasks(){
+  const box = document.getElementById("mlist");
+  if(!box) return;
+  const ig = maskArr("ignore"), rd = maskArr("redact");
+  const item = (label, color, n, kind)=> n
+    ? '<span class="mitem"><i style="background:' + color + '"></i>' + label + ' ' + n + ' 格'
+      + '<span class="x" data-clrmask="' + kind + '">清空</span></span>'
+    : '<span class="mitem"><i style="background:' + color + '"></i>' + label + ' 0 格</span>';
+  box.innerHTML = item("忽略区", "#e0a33a", ig.length, "ignore")
+                + item("遮蔽区", "var(--danger)", rd.length, "redact");
+  box.querySelectorAll("[data-clrmask]").forEach(el=>{
+    el.onclick = ()=>{ maskArr(el.dataset.clrmask).length = 0; renderMasks(); drawMaskScene(); };
+  });
+  const igN = document.getElementById("igCnt"), rdN = document.getElementById("rdCnt");
+  if(igN) igN.textContent = "已选 " + ig.length + " 格";
+  if(rdN) rdN.textContent = "已选 " + rd.length + " 格";
+}
+
+/* 关键：每次重绘设置页都会换掉 canvas 元素，所以绑定必须跟着渲染走，
+   不能只在启动时绑一次 —— 这正是之前"画不出任何区域"的原因。 */
+function bindMaskCanvas(){
+  [["maskCv-ig","ignore"],["maskCv-rd","redact"]].forEach(([id, kind])=>{
+    const cv = document.getElementById(id);
+    if(!cv) return;
+
+    /* 底图快照；接口没接好 404 时静默留在示意底图 */
+    const img = document.getElementById(id.replace("Cv", "Img"));
+    if(img && !img.dataset.hooked){
+      img.dataset.hooked = "1";
+      img.onload = ()=>{ img.classList.add("on"); drawMaskScene(); };
+      img.onerror = ()=>{ img.classList.remove("on"); };
+      img.src = "/api/live/snapshot/" + encodeURIComponent(state.camId) + ".jpg?t=" + Date.now();
+    }
+
+    cv.onpointerdown = e=>{
+      if(!(SET.editing && SET.draft)) return;
+      e.preventDefault();
+      const cell = cellAt(cv, e);
+      gdrag = { kind, cv, c0:cell.c, r0:cell.r, c1:cell.c, r1:cell.r, moved:false };
+      try{ cv.setPointerCapture(e.pointerId); }catch(err){}
+      drawMaskScene();
+    };
+    cv.onpointermove = e=>{
+      if(!gdrag || gdrag.cv !== cv) return;
+      e.preventDefault();
+      const cell = cellAt(cv, e);
+      if(cell.c !== gdrag.c1 || cell.r !== gdrag.r1){
+        gdrag.c1 = cell.c; gdrag.r1 = cell.r; gdrag.moved = true;
+      }
+      drawMaskScene();
+    };
+    cv.onpointerup = ()=>{
+      if(!gdrag || gdrag.cv !== cv) return;
+      finishGridDrag();
+    };
+    cv.onpointercancel = ()=>{ gdrag = null; drawMaskScene(); };
+  });
+}
+
+function finishGridDrag(){
+  const { kind, c0, r0, c1, r1, moved } = gdrag;
+  gdrag = null;
+  const arr = maskArr(kind);
+  if(!moved){
+    /* 单击：点了已选的格子就取消，没选就选上 */
+    const idx = r0*GRID_COLS + c0;
+    const pos = arr.indexOf(idx);
+    if(pos >= 0) arr.splice(pos, 1); else arr.push(idx);
+  }else{
+    let added = 0;
+    rectCells(c0, r0, c1, r1).forEach(i=>{ if(arr.indexOf(i) < 0){ arr.push(i); added++; } });
+    if(added) toast("toast2", "已选 " + arr.length + " 格 · 记得点「保存」");
+  }
+  renderMasks(); drawMaskScene();
+}
+
+/* ---------------- 编辑动作 ---------------- */
+function openEditor(id){
+  if(SET.editing && state.camId !== id) return;   /* 别把未保存的改动丢掉 */
+  if(SET.editing && state.camId === id) return;
+  state.camId = id;
+  SET.open = id;
+  SET.draft = copyObj(camParams[id]);
+  SET.draft.masks = normMasks(SET.draft.masks);
+  SET.editing = true;
+  SET.adv = false;
+  renderCamTabs();
+  loadDay();
+}
+function closeEditor(){
+  SET.editing = false; SET.draft = null; SET.open = null;
+  renderCamTabs();
+}
+function saveDraft(){
+  const id = state.camId;
+  if(!id || !SET.draft) return;
+  const dst = camParams[id];
+  Object.keys(SET.draft).forEach(k=>{ dst[k] = SET.draft[k]; });
+  SET.editing = false; SET.draft = null; SET.open = id;
+  renderCamTabs();
+  syncCams();
+  toast("toast2", "已保存 · 下一段录像按新参数执行");
+}
+function resetDraft(){
+  const c = curCam();
+  if(!c) return;
+  const i = CAMERAS.indexOf(c);
+  const d = defaultCamParams(c, i);
+  d.main = SET.draft.main || c.main || "";
+  d.sub  = SET.draft.sub  || c.sub  || "";
+  SET.draft = d;
+  renderCamTabs();
+  toast("toast2", "已填回默认值 · 点「保存」才生效");
+}
+function addCamera(){
+  let n = CAMERAS.length + 1;
+  let idx = n;
+  while(CAMERAS.some(c=>c.ch === "CH" + String(idx).padStart(2,"0"))) idx++;
+  const id = "cam-" + Date.now().toString(36);
+  const cam = { id, name:"摄像头 " + n, ch:"CH" + String(idx).padStart(2,"0"), res:"1080p", online:false,
+                main:"", sub:"" };
+  CAMERAS.push(cam);
+  camParams[id] = defaultCamParams(cam, CAMERAS.length-1);
+  state.camId = id;
+  SET.open = id; SET.editing = true; SET.draft = copyObj(camParams[id]);
+  renderCamTabs();
+  syncCams();
+  toast("toast2", "已添加 · 填入主码流 RTSP 后点保存");
+}
+function delCamera(id){
+  const i = CAMERAS.findIndex(c=>c.id === id);
+  if(i < 0) return;
+  CAMERAS.splice(i,1);
+  delete camParams[id];
+  if(state.camId === id) state.camId = CAMERAS[0] ? CAMERAS[0].id : null;
+  if(SET.open === id){ SET.open = null; SET.editing = false; SET.draft = null; }
+  SET.armed = null;
+  renderCamTabs();
+  try{ loadDay(); }catch(e){}
+  syncCams();
+  toast("toast2", "已删除该摄像头 · 已录文件不会被删除");
+}
+
+/* ---------------- 渲染入口 ---------------- */
+function renderEditMode(){
+  const c = curCam();
+  if(!c || !SET.draft){ SET.editing = false; return ""; }
+  return '<div class="sechead"><b>' + c.ch + ' · ' + esc(c.name) + '</b><span class="ln"></span>'
+    + '<button class="minibtn" data-cancel="1">取消</button></div>'
+    + renderCamEdit(c, SET.draft);
+}
+
+/* 通用设置摘要（折叠后显示一行，省得每次都展开翻） */
+function genSummary(){
+  return (REC.enabled ? "录制已启用" : "录制已停用")
+    + " · 目录 " + REC.dir
+    + " · " + (LK.mode === "live" ? "即刻压制" : "每 " + LK.intervalH + " 小时压制")
+    + " · 分片 " + Math.round(LK.segSec/60) + " 分钟"
+    + " · " + (GS.gpu ? "核显" : "软编") + " " + GS.conc + " 路"
+    + " · 每天 " + REC.cleanupAt + " 清理";
+}
+
+function renderGenZone(){
+  let h = '<div class="zone gen">'
+    + '<div class="zonehead" data-gentoggle="1">'
+    + '<span class="zi">⚙</span>'
+    + '<div><b>通用设置</b><div class="zs">所有摄像头共用 · 录制 / 压制 / 硬件 / 外观 / 诊断</div></div>'
+    + '<span class="chev">' + (SET.genOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>';
+  if(SET.genOpen){
+    h += cardRec() + cardLink() + cardGpu() + cardLook() + cardDiag()
+      + '<div class="editbar"><button class="ok" data-gensave="1">保存通用设置</button></div>';
+  }else{
+    h += '<div class="gcard genfold"><div class="genline">' + genSummary() + '</div>'
+      + '<button class="minibtn" data-gentoggle="1">修改</button></div>';
+  }
+  return h + '</div>';
+}
+
+function renderCamTabs(){
+  const body = document.getElementById("camBody");
+  const tabs = document.getElementById("camTabs");
+  if(tabs) tabs.style.display = "none";
+  if(!body) return;
+
+  if(!CAMERAS.length){
+    state.camId = null;
+    SET.open = null; SET.editing = false; SET.draft = null;
+  }else if(!CAMERAS.some(c=>c.id === state.camId)){
+    state.camId = CAMERAS[0].id;
+  }
+  /* 编辑态下必须始终有草稿；否则退出编辑 */
+  if(SET.editing && !SET.draft){ SET.editing = false; }
+
+  /* 编辑态独占一屏：公共参数先收起来，避免手滑改到全局，也省得往下滚半天 */
+  if(SET.editing){
+    body.innerHTML = renderEditMode();
+    const wrap = body.parentNode;
+    if(wrap) wrap.scrollTop = 0;
+    renderMasks(); bindMaskCanvas(); drawMaskScene();
+    bindSettings(body);
+    saveCfgSoon();
+    return;
+  }
+
+  body.innerHTML = renderGenZone()
+    + renderCamList()
+    + (CAMERAS.length ? '<div class="gcard" style="padding:12px 14px;margin-top:12px"><div class="h" style="line-height:1.6;margin:0">'
+        + recBudgetText() + '</div></div>' : '');
+
+  bindSettings(body);
+  renderMasks();
+  bindMaskCanvas();
+  drawMaskScene();
+  saveCfgSoon();
+}
+
+/* 兼容旧调用点 */
+function renderCamBody(){ renderCamTabs(); }
+
+function bindSettings(body){
+  /* 公共：录制总开关 / 清理时刻 / 目录 */
+  body.querySelectorAll("[data-rec]").forEach(el=>{
+    el.onclick = ()=>{
+      REC.enabled = !REC.enabled;
+      renderCamTabs(); updateResBar();
+      toast("toast2", REC.enabled ? "录像已启用" : "录像已停止，直播不受影响");
+    };
+  });
+  body.querySelectorAll("[data-cleanat]").forEach(el=>{
+    el.onclick = ()=>{ REC.cleanupAt = el.dataset.cleanat; renderCamTabs(); };
+  });
+  const rd = body.querySelector("#recDir");
+  if(rd) rd.onchange = ()=>{
+    REC.dir = rd.value.trim() || REC.dir;
+    toast("toast2", "目录已记录 · 重启应用后生效");
+    renderCamTabs();
+  };
+  const cn = body.querySelector("#btnCleanNow");
+  if(cn) cn.onclick = ()=> toast("toast2", "预览：将删除 6 个日期目录 / 1247 个文件，释放 41.2 GB（未执行）");
+  const dg = body.querySelector("#btnDiag");
+  if(dg) dg.onclick = ()=> toast("toast2", "诊断日志已导出（凭据已脱敏）");
+
+  /* 诊断日志：直接看 / 复制 / 清除 */
+  const lr = body.querySelector("#btnLogRefresh");
+  if(lr) lr.onclick = ()=>{ loadDiagLog(); toast("toast2", "日志已刷新"); };
+  const lc = body.querySelector("#btnLogCopy");
+  if(lc) lc.onclick = copyDiagLog;
+  const lx = body.querySelector("#btnLogClear");
+  if(lx) lx.onclick = clearDiagLog;
+  const rs = body.querySelector("#btnRestart");
+  if(rs) rs.onclick = restartDiag;
+  if(body.querySelector("#diagEnv")) loadDiagEnv();
+  if(body.querySelector("#diagLogText")) loadDiagLog();
+
+  /* 公共：压制衔接 */
+  body.querySelectorAll("[data-link]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.mode = el.dataset.link;
+      if(LK.mode === "live"){ LK.nextBatch = "—"; toast("toast2", "改为即刻压制 · 分片写完就处理"); }
+      else { LK.nextBatch = nextLinkAt(); toast("toast2", "改为定时压制 · 每 " + LK.intervalH + " 小时一次"); }
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  body.querySelectorAll("[data-linkh]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.intervalH = Math.max(1, Math.min(24, LK.intervalH + (+el.dataset.linkh)));
+      LK.nextBatch = nextLinkAt(); renderCamTabs(); saveCfgSoon();
+    };
+  });
+  body.querySelectorAll("[data-linkseg]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.segSec = +el.dataset.linkseg; renderCamTabs();
+      saveCfgSoon();            /* 落盘 + 推服务端：分片长度立即热生效 */
+      toast("toast2", "分片改为 " + Math.round(LK.segSec/60) + " 分钟，正在按新参数重启录制");
+    };
+  });
+  const lkRun = body.querySelector("#btnLinkRun");
+  if(lkRun) lkRun.onclick = ()=>{
+    lkRun.disabled = true; lkRun.textContent = "正在触发…";
+    fetch("/api/link/run", { method:"POST", mode:"same-origin",
+      headers:{ "Content-Type":"application/json" }, body:"{}" })
+      .then(r=>r.json()).then(d=>{
+        if(d && d.ok && d.link) applyLink(d.link);
+        const n = (d && d.link && d.link.pending) || 0;
+        toast("toast2", n ? "已入队，待处理 " + n + " 项" : "本轮没有新的已封口分片");
+      }).catch(()=>{ toast("toast2", "触发失败：请查看服务端日志"); })
+      .finally(()=>{ lkRun.disabled = false; lkRun.textContent = "立即处理一批"; });
+  };
+
+  /* 公共：硬件 */
+  body.querySelectorAll("[data-gs]").forEach(el=>{
+    el.onclick = ()=>{ GS[el.dataset.gs] = !GS[el.dataset.gs]; renderCamTabs(); };
+  });
+  body.querySelectorAll("[data-conc]").forEach(el=>{
+    el.onclick = ()=>{
+      GS.conc = +el.dataset.conc; renderCamTabs();
+      toast("toast2", GS.conc===1 ? "改为串行：内存峰值减半" : "并行 2 路：约 1.5～1.8 倍速");
+    };
+  });
+
+  bindCamDrag(body);
+
+  /* 摄像头行：展开 / 收起 */
+  body.querySelectorAll("[data-camrow]").forEach(row=>{
+    row.onclick = e=>{
+      if(e.target.closest("[data-delcam]") || e.target.closest("[data-drag]")) return;
+      const id = row.dataset.camrow;
+      if(SET.editing && state.camId !== id){
+        toast("toast2", "还有未保存的改动 · 先保存或取消");
+        return;
+      }
+      if(SET.open === id && !SET.editing){ SET.open = null; }
+      else { SET.open = id; state.camId = id; }
+      renderCamTabs();
+      if(SET.open === id) loadDay();
+    };
+  });
+
+  /* 删除：两段确认 */
+  body.querySelectorAll("[data-delcam]").forEach(el=>{
+    el.onclick = e=>{
+      e.stopPropagation();
+      const id = el.dataset.delcam;
+      if(SET.armed === id){ delCamera(id); return; }
+      SET.armed = id;
+      renderCamTabs();
+      toast("toast2", "再点一次「确认删除」");
+      setTimeout(()=>{ if(SET.armed === id){ SET.armed = null; renderCamTabs(); } }, 3200);
+    };
+  });
+
+  /* 添加 */
+  body.querySelectorAll("[data-addcam]").forEach(el=>{
+    el.onclick = e=>{ e.stopPropagation(); addCamera(); };
+  });
+
+  /* 只读 → 编辑 / 收起 */
+  body.querySelectorAll("[data-editcam]").forEach(el=>{
+    el.onclick = e=>{ e.stopPropagation(); openEditor(state.camId); };
+  });
+  body.querySelectorAll("[data-closecam]").forEach(el=>{
+    el.onclick = e=>{ e.stopPropagation(); closeEditor(); };
+  });
+
+  /* 编辑态：输入框 / 滑杆 */
+  body.querySelectorAll("[data-k]").forEach(inp=>{
+    inp.oninput = ()=>{
+      const k = inp.dataset.k;
+      const v = inp.type === "range" ? +inp.value : inp.value;
+      draftSet(k, v);
+      syncOuts();
+    };
+    inp.onchange = inp.oninput;
+  });
+  const nm = body.querySelector("[data-camname]");
+  if(nm) nm.oninput = ()=>{ const c = curCam(); if(c) c.name = nm.value; };
+
+  /* 编辑态：快照型按钮（点击后重绘） */
+  body.querySelectorAll("[data-mode2]").forEach(el=>{
+    el.onclick = ()=>{ draftSet("mode", el.dataset.mode2); renderCamTabs(); };
+  });
+  body.querySelectorAll("[data-prof]").forEach(el=>{
+    el.onclick = ()=>{ draftSet("profile", el.dataset.prof); renderCamTabs(); };
+  });
+  body.querySelectorAll("[data-dn]").forEach(el=>{
+    el.onclick = ()=>{ draftSet("autoDN", !draftGet("autoDN")); renderCamTabs(); };
+  });
+  body.querySelectorAll("[data-en]").forEach(el=>{
+    el.onclick = ()=>{ draftSet("enabled", !draftGet("enabled")); renderCamTabs(); };
+  });
+  /* 通用设置：展开 / 收起 / 保存并折叠 */
+  body.querySelectorAll("[data-gentoggle]").forEach(el=>{
+    el.onclick = ()=>{
+      if(SET.editing) return;
+      SET.genOpen = !SET.genOpen;
+      renderCamTabs();
+    };
+  });
+  const gsv = body.querySelector("[data-gensave]");
+  if(gsv) gsv.onclick = ()=>{
+    SET.genOpen = false;
+    genApply();          /* 通用参数在这里落盘 + 对齐到录像/回放页 */
+    renderCamTabs();
+    toast("toast2", "通用设置已保存 · 已折叠");
+  };
+
+  /* 步进器：保留天数（草稿） */
+  body.querySelectorAll("[data-ret]").forEach(el=>{
+    el.onclick = ()=>{
+      const key = el.dataset.ret, d = +el.dataset.d;
+      const lim = key === "fullDays" ? [1,30] : [7,3650];
+      const cur = draftGet(key);
+      draftSet(key, Math.max(lim[0], Math.min(lim[1], cur + d)));
+      renderCamTabs();
+    };
+  });
+
+  /* 保存 / 恢复默认 / 取消 */
+  body.querySelectorAll("[data-save]").forEach(el=>{ el.onclick = e=>{ e.stopPropagation(); saveDraft(); }; });
+  body.querySelectorAll("[data-reset]").forEach(el=>{ el.onclick = e=>{ e.stopPropagation(); resetDraft(); }; });
+  body.querySelectorAll("[data-cancel]").forEach(el=>{ el.onclick = e=>{ e.stopPropagation(); closeEditor(); }; });
+}
+
+/* ================= 配置持久化 =================
+   摄像头列表、每路参数、通用设置都要活过刷新。
+   0.7.0 之前全在内存里，删掉的机器一刷新又回来了 —— 这是"删了还在"的真因。
+   存在 localStorage（按 http://NAS:端口 这个源隔离），换浏览器/清缓存会回到演示数据。 */
+const CFG_KEY = "nvr.cfg.v1";
+let cfgTimer = null;
+
+function saveCfg(){
+  try{
+    cfgTimer = null;
+    pushCfg();
+    const params = {};
+    CAMERAS.forEach(c=>{ if(camParams[c.id]) params[c.id] = camParams[c.id]; });
+    localStorage.setItem(CFG_KEY, JSON.stringify({
+      v: 1,
+      cams: CAMERAS.map(c=>({ id:c.id, name:c.name, ch:c.ch, res:c.res, online:!!c.online })),
+      params: params,
+      gen: {
+        enabled: REC.enabled, dir: REC.dir, cleanupAt: REC.cleanupAt,
+        linkMode: LK.mode, intervalH: LK.intervalH, segSec: LK.segSec,
+        gpu: GS.gpu, conc: GS.conc, nightOnly: GS.nightOnly, lowPrio: GS.lowPrio, sprite: GS.sprite
+      }
+    }));
+  }catch(e){}
+}
+/* 渲染很频繁，攒一下再写，避免连续改动时反复序列化 */
+function saveCfgSoon(){
+  if(cfgTimer) return;
+  try{ cfgTimer = setTimeout(saveCfg, 250); }catch(e){ saveCfg(); }
+}
+
+function cfgMerge(base, saved){
+  if(!saved || typeof saved !== "object") return base;
+  Object.keys(saved).forEach(k=>{
+    const v = saved[k];
+    if(v && typeof v === "object" && !Array.isArray(v)
+       && base[k] && typeof base[k] === "object" && !Array.isArray(base[k])){
+      cfgMerge(base[k], v);
+    }else if(v !== undefined){
+      base[k] = v;
+    }
+  });
+  return base;
+}
+
+function loadCfg(){
+  let raw = null;
+  try{ raw = localStorage.getItem(CFG_KEY); }catch(e){ return false; }
+  if(!raw) return false;
+  let d = null;
+  try{ d = JSON.parse(raw); }catch(e){ return false; }
+  if(!d || !Array.isArray(d.cams)) return false;
+
+  CAMERAS.length = 0;
+  d.cams.forEach(c=>{
+    if(!c || !c.id) return;
+    CAMERAS.push({ id:c.id, name:c.name || "摄像头", ch:c.ch || "", res:c.res || "1080p",
+                   online:!!c.online, main:"", sub:"" });
+  });
+  Object.keys(camParams).forEach(k=>{ delete camParams[k]; });
+  CAMERAS.forEach((c,i)=>{
+    const saved = d.params && d.params[c.id];
+    const p = cfgMerge(defaultCamParams(c, i), saved || null);
+    p.masks = normMasks(p.masks);
+    camParams[c.id] = p;
+  });
+
+  const g = d.gen || {};
+  ["enabled","dir","cleanupAt"].forEach(k=>{ if(g[k] !== undefined) REC[k] = g[k]; });
+  if(g.linkMode) LK.mode = g.linkMode;
+  if(g.intervalH) LK.intervalH = g.intervalH;
+  if(g.segSec) LK.segSec = g.segSec;
+  ["gpu","conc","nightOnly","lowPrio","sprite"].forEach(k=>{ if(g[k] !== undefined) GS[k] = g[k]; });
+
+  if(!CAMERAS.length){ state.camId = null; }
+  else if(!CAMERAS.some(c=>c.id === state.camId)){ state.camId = CAMERAS[0].id; }
+  return true;
+}
+
+/* ================= 拖动排序 ================= */
+let dragCam = null;
+function bindCamDrag(body){
+  body.querySelectorAll("[data-drag]").forEach(h=>{
+    h.onpointerdown = e=>{
+      if(SET.editing) return;                     /* 编辑态先别动顺序，免得误触 */
+      const row = h.closest ? h.closest("[data-camrow]") : null;
+      if(!row) return;
+      const rows = Array.prototype.slice.call(body.querySelectorAll("[data-camrow]"));
+      const from = rows.indexOf(row);
+      if(from < 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const hh = (row.getBoundingClientRect().height || 64) + 8;
+      dragCam = { id:h.dataset.drag, row, rows, from, to:from, lastTo:from, y0:e.clientY, hh };
+      row.classList.add("dragging");
+      try{ h.setPointerCapture(e.pointerId); }catch(err){}
+    };
+    h.onpointermove = e=>{
+      if(!dragCam) return;
+      e.preventDefault();
+      const dy = e.clientY - dragCam.y0;
+      dragCam.row.style.transform = "translateY(" + dy + "px)";
+      const to = Math.max(0, Math.min(dragCam.rows.length-1, dragCam.from + Math.round(dy / dragCam.hh)));
+      if(to !== dragCam.lastTo){
+        dragCam.lastTo = to; dragCam.to = to;
+        dragCam.rows.forEach((r,i)=>{
+          if(r === dragCam.row) return;
+          let off = 0;
+          if(dragCam.from < to && i > dragCam.from && i <= to) off = -dragCam.hh;
+          else if(dragCam.from > to && i >= to && i < dragCam.from) off = dragCam.hh;
+          r.style.transition = "transform .12s ease";
+          r.style.transform = off ? "translateY(" + off + "px)" : "";
+        });
+      }
+    };
+    h.onpointerup = ()=>{ if(dragCam) finishCamDrag(); };
+    h.onpointercancel = ()=>{ if(dragCam) cancelCamDrag(); };
+  });
+}
+function finishCamDrag(){
+  const d = dragCam; dragCam = null;
+  if(!d) return;
+  d.rows.forEach(r=>{ r.style.transform = ""; r.style.transition = ""; });
+  d.row.classList.remove("dragging");
+  if(d.to !== d.from){
+    const moved = CAMERAS.splice(d.from, 1)[0];
+    if(moved) CAMERAS.splice(d.to, 0, moved);
+    saveCfg();
+    renderCamTabs();
+    syncCams();                       /* 预览墙与回放下拉的顺序立刻跟着变 */
+    toast("toast2", "顺序已更新 · 预览与回放同步");
+  }else{
+    renderCamTabs();
+  }
+}
+function cancelCamDrag(){
+  const d = dragCam; dragCam = null;
+  if(!d) return;
+  d.rows.forEach(r=>{ r.style.transform = ""; r.style.transition = ""; });
+  d.row.classList.remove("dragging");
+}
+
+/* ================= 回放页只认磁盘上的真实文件 ================= */
+/* 按 state.rec 缓存重算当前摄像头的日期列表（切摄像头时立即可用，不等网络） */
+function recalcDayList(){
+  const rec = state.rec || {};
+  const src = state.pmode === "clip" ? rec.clips : rec.cameras;
+  const days = (src && src[state.camId]) || {};
+  state.dayList = Object.keys(days).sort().slice(-7);
+  if(state.dayIdx >= state.dayList.length) state.dayIdx = Math.max(0, state.dayList.length-1);
+}
+let recRetry = 0;
+function fetchRecordings(){
+  if(typeof fetch !== "function") return;
+  /* ?_t + no-store 双保险：WebView 曾把空录像清单缓存住，导致回放页永远「无视频文件」 */
+  fetch("/api/recordings?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" }).then(r=>r.json()).then(d=>{
+    if(!d || !d.ok) return;
+    state.rec = d;
+    recRetry = 0;
+    recalcDayList();
+    renderDates(); renderOverview(); renderHeat(); renderClips();
+    applyPlaybackVisibility();
+  }).catch(()=>{
+    if(recRetry++ < 3) setTimeout(fetchRecordings, 2500);   // 服务刚重启时给几次机会
+  });
+}
+
+/* 某天真实分片 → 回放片段（文件名 HH-MM-SS 就是起始时刻） */
+function realSegs(camId, day, kind){
+  const rec = state.rec || {};
+  const src = kind === "clip" ? rec.clips : rec.cameras;
+  const days = src && src[camId];
+  const files = days && days[day];
+  if(!Array.isArray(files) || !files.length) return null;
+  const toS = n=>{ const q = n.slice(0,8).split("-"); return (+q[0])*3600 + (+q[1])*60 + (+q[2]); };
+  return files.map((f,i)=>{
+    const s = toS(f.n);
+    const e = i+1 < files.length ? Math.max(s+1, toS(files[i+1].n)) : Math.min(86400, s+300);
+    return { s, e, level:.5, reason:"已录像", hits:0, bytes:f.b || 0,
+             file:"/api/record/file?kind=" + (kind === "clip" ? "clip" : "full")
+                + "&cam=" + encodeURIComponent(camId)
+                + "&day=" + day + "&name=" + encodeURIComponent(f.n) };
+  });
+}
+function curDay(){
+  return (state.dayList && state.dayList[state.dayIdx]) || DAYS[state.dayIdx];
+}
+
+/* 没有录像文件就不显示日期条、片段列表这些空架子 */
+function applyPlaybackVisibility(){
+  const rec = state.rec || {};
+  const camDays = rec.cameras && rec.cameras[state.camId];
+  const clipDays = rec.clips && rec.clips[state.camId];
+  const hasCam = !!(camDays && Object.keys(camDays).length)
+              || !!(clipDays && Object.keys(clipDays).length);
+  const show = !!hasCam;
+  [".modebar","#dates",".overview",".heatwrap",".listhead","#clips"].forEach(sel=>{
+    const el = document.querySelector(sel);
+    if(el) el.style.display = show ? "" : "none";
+  });
+  const empty = document.getElementById("playEmpty");
+  if(!empty) return;
+  empty.style.display = show ? "none" : "block";
+  if(!rec || !rec.total){
+    empty.innerHTML = "还没有任何录像文件<br><span style=\"font-size:11.5px;color:var(--faint2)\">填好 RTSP 地址并启用后，录像会按「摄像头 / 日期 / 时段」存进保存目录；出现文件后这里会自动点亮</span>";
+  }else{
+    const cam = curCam();
+    empty.innerHTML = "「" + esc(cam ? cam.name : "该摄像头") + "」还没有"
+      + (state.pmode === "clip" ? "缩时片段：全时录像压制完成后会出现在这里" : "录像文件");
+  }
+}
+
+/* ================= 跨页同步 ================= */
+/* 设置页增删摄像头、改名字之后，直播与回放不能还拿着启动时那份列表 */
+function syncCams(){
+  try{ renderLive(); }catch(e){}
+  try{ renderDates(); }catch(e){}
+  try{ renderOverview(); }catch(e){}
+  try{ renderHeat(); }catch(e){}
+  try{ renderClips(); }catch(e){}
+  try{ updateResBar(); }catch(e){}
+  try{ renderCamPick(); }catch(e){}
+  try{ fetchRecordings(); }catch(e){}   /* 摄像头增删后，回放页的录像列表跟着同步 */
+}
+
+/* 通用参数是即时生效的，这里只把依赖它的界面重新对齐 */
+function genApply(){
+  try{ updateResBar(); }catch(e){}
+  try{ renderDates(); }catch(e){}
+  try{ updateLiveHeader(); }catch(e){}
+  try{ renderClips(); }catch(e){}
+}
+
+/* ================= 回放页：摄像头下拉 ================= */
+function renderCamPick(){
+  const box = document.getElementById("camPick");
+  if(!box) return;
+  if(!CAMERAS.length){
+    box.innerHTML = '<div class="cempty">还没有摄像头 · 去设置页添加</div>';
+    return;
+  }
+  box.innerHTML = CAMERAS.map(c=>{
+    const pp = camParams[c.id] || {};
+    const off = !c.online || !pp.main || pp.enabled === false;
+    return '<div class="cp' + (c.id === state.camId ? " on" : "") + '" data-pickcam="' + c.id + '">'
+      + '<span class="dt' + (off ? " off" : "") + '"></span>'
+      + '<span class="nm">' + esc(c.name) + '</span>'
+      + '<span class="ch">' + c.ch + '</span></div>';
+  }).join("");
+  box.querySelectorAll("[data-pickcam]").forEach(el=>{
+    el.onclick = e=>{ e.stopPropagation(); pickCam(el.dataset.pickcam); };
+  });
+}
+
+function camPickShow(force){
+  const box = document.getElementById("camPick");
+  const sel = document.getElementById("camSel");
+  if(!box) return;
+  const open = (force == null) ? !box.classList.contains("on") : !!force;
+  box.classList.toggle("on", open);
+  if(sel) sel.classList.toggle("open", open);
+  if(open) renderCamPick();
+}
+
+/* 切摄像头：回放页所有面板都按新机器重算 */
+function pickCam(id){
+  const c = CAMERAS.find(x=>x.id === id);
+  if(!c) return;
+  state.camId = id;
+  state.hourBlock = -1;
+  camPickShow(false);
+  try{ loadDay(); }catch(e){}
+  renderOverview(); updateResBar(); renderDates();
+  renderCamPick();
+  /* 设置页若正展开这一路，跟着切过去 */
+  if(SET.open) SET.open = id;
+  renderCamTabs();
+  toast("toast2", "已切到「" + c.name + "」");
+}
+
+/* ================= 启动 ================= */
+function loadDay(){
+  if(!state.camId || !camParams[state.camId]){
+    state.activity = []; state.segs = [];
+    renderDates(); renderOverview(); renderHeat(); renderClips();
+    applyPlaybackVisibility();
+    return;
+  }
+  recalcDayList();
+  const real = realSegs(state.camId, curDay(), "full");
+  state.activity = real || [];          // 磁盘上没有就是没有，绝不拿演示数据充数
+  state.segs = state.pmode === "clip"
+    ? (realSegs(state.camId, curDay(), "clip") || [])   // 缩时模式吃 _clip 成品清单
+    : (real || []);
+  renderDates(); renderOverview(); renderHeat(); renderClips();
+  applyPlaybackVisibility();
+}
+
+/* 回放模式切换 */
+document.querySelectorAll("[data-pmode]").forEach(el=>{
+  el.onclick = ()=>{
+    if(state.pmode === el.dataset.pmode) return;
+    state.pmode = el.dataset.pmode;
+    document.querySelectorAll("[data-pmode]").forEach(x=>x.classList.toggle("on", x===el));
+    state.hourBlock = -1; state.segIdx = -1;
+    loadDay();
+    toast("toast2", state.pmode==="full" ? "全时录像 · 主码流原画质" : "精简片段 · 压缩后成品");
+  };
+});
+
+loadCfg();          /* 先把上次保存的摄像头与参数读回来，再渲染 */
+syncFromServer();   /* 分片长度/衔接节奏/快照间隔以服务端为准，避免两边各说各话 */
+syncLink();         /* 处理队列的真实 pending/done/failed 以服务端为准 */
+fetchRecordings();  /* 回放页只要磁盘上真实存在的录像，有就点亮 */
+pollLive();         /* 立刻同步一次服务端快照状态（否则 localStorage 里的旧 online 会压住真实状态） */
+renderDates();
+renderCamTabs();
+renderLive();
+loadDay();
+layout();
+setTimeout(()=>{ renderCamTabs(); renderLive(); }, 60);
+requestAnimationFrame(loop);
+
+document.getElementById("btnScan").onclick = ()=> toast("toast2", "正在扫描 NVR 目录…");
+
+/* ================= 齿轮：快照刷新频率（1~10 秒） =================
+   原来这个齿轮是"跳到设置页"的快捷方式，但预览页最常调的其实就是
+   刷新快慢 —— 就地弹出比来回翻页顺手。设置页仍可从底部导航进。 */
+function renderRatePop(){
+  const grid = document.getElementById("rateGrid");
+  const now = document.getElementById("rateNow");
+  if(!grid) return;
+  let html = "";
+  for(let n = 1; n <= 10; n++){
+    html += '<button data-rate="' + n + '"' + (n === SNAP.interval ? ' class="on"' : "") + '>'
+          + n + 's</button>';
+  }
+  grid.innerHTML = html;
+  if(now) now.textContent = SNAP.interval + " 秒";
+  grid.querySelectorAll("[data-rate]").forEach(b=>{
+    b.onclick = (e)=>{ e.stopPropagation(); setSnapRate(+b.dataset.rate); renderRatePop(); };
+  });
+}
+function setSnapRate(n){
+  n = Math.max(1, Math.min(10, Math.round(+n) || 10));
+  const same = n === SNAP.interval;
+  SNAP.interval = n;
+  try{ localStorage.setItem("nvr.snapRate", String(n)); }catch(e){}
+  updateLiveHeader();
+  renderLive();
+  saveCfgSoon();          /* 服务端抓帧线程每轮读一次配置，推上去就生效 */
+  toast("toast2", same ? ("快照间隔已是 " + n + " 秒") : ("快照改为每 " + n + " 秒刷新"));
+}
+function toggleRatePop(e){
+  const pop = document.getElementById("ratePop");
+  if(!pop) return;
+  const on = !pop.classList.contains("on");
+  pop.classList.toggle("on", on);
+  if(on) renderRatePop();
+  if(e && e.stopPropagation) e.stopPropagation();
+}
+document.getElementById("btnGoSet").onclick = (e)=> toggleRatePop(e);
+document.getElementById("ratePop").onclick = (e)=> e.stopPropagation();
+document.addEventListener("click", ()=>{
+  const p = document.getElementById("ratePop");
+  if(p) p.classList.remove("on");
+});
+/* 从服务端把「运行时配置」拉回来：分片长度 / 衔接模式 / 快照间隔
+   以服务端为准，localStorage 只是缓存 —— 否则 UI 显示 10 分钟、
+   recorder 实际按 5 分钟切，两边各说各话。 */
+function syncFromServer(){
+  if(typeof fetch !== "function") return;
+  fetch("/api/config?_t=" + Date.now(), { cache:"no-store", mode:"same-origin" })
+    .then(r=>r.json()).then(d=>{
+      const c = (d && (d.config || d)) || null;
+      if(!c) return;
+      let dirty = false;
+      if(c.record_segment_sec){ const s = +c.record_segment_sec; if(s && s !== LK.segSec){ LK.segSec = s; dirty = true; } }
+      if(c.link_mode && c.link_mode !== LK.mode){ LK.mode = c.link_mode; dirty = true; }
+      if(c.link_interval_h){ const h = +c.link_interval_h; if(h && h !== LK.intervalH){ LK.intervalH = h; dirty = true; } }
+      if(c.snapshot_interval){
+        const n = Math.max(1, Math.min(10, +c.snapshot_interval || 10));
+        if(n !== SNAP.interval){
+          SNAP.interval = n;
+          try{ localStorage.setItem("nvr.snapRate", String(n)); }catch(e){}
+          updateLiveHeader(); renderLive();
+        }
+      }
+      if(c.record_dir && !REC.dir){ REC.dir = c.record_dir; dirty = true; }
+      if(dirty){ saveCfg(); try{ renderCamTabs(); }catch(e){} }
+    }).catch(()=>{});
+}
+/* ================= 明暗主题 =================
+   auto    : 跟随系统 prefers-color-scheme（飞牛桌面明暗）
+   light   : 固定浅色
+   dark    : 固定深色
+   桌面壳如果通过 postMessage 通知主题（{fnosTheme:"dark"}），优先级最高。 */
+const THEME = {
+  mode: localStorage.getItem("nvr.theme") || "auto",
+  forced: null,
+  mq: window.matchMedia("(prefers-color-scheme: dark)")
+};
+function applyTheme(){
+  const t = THEME.forced || (THEME.mode === "dark"
+    || (THEME.mode === "auto" && THEME.mq.matches) ? "dark" : "light");
+  document.documentElement.dataset.theme = t;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if(meta) meta.setAttribute("content", t === "dark" ? "#14161b" : "#ffffff");
+  document.querySelectorAll("[data-theme-set]").forEach(el=>
+    el.classList.toggle("on", el.dataset.themeSet === THEME.mode));
+}
+if(THEME.mq.addEventListener) THEME.mq.addEventListener("change", applyTheme);
+else if(THEME.mq.addListener) THEME.mq.addListener(applyTheme);
+window.addEventListener("message", e=>{
+  const t = e && e.data && (e.data.fnosTheme || e.data.theme);
+  if(t === "dark" || t === "light"){ THEME.forced = t; applyTheme(); }
+});
+document.addEventListener("click", e=>{
+  const b = e.target.closest("[data-theme-set]");
+  if(!b) return;
+  THEME.mode = b.dataset.themeSet;
+  THEME.forced = null;
+  localStorage.setItem("nvr.theme", THEME.mode);
+  applyTheme();
+  toast("toast2", THEME.mode === "auto" ? "外观跟随系统"
+    : THEME.mode === "dark" ? "已切换深色" : "已切换浅色");
+});
+(()=>{ const q = new URLSearchParams(location.search).get("theme");
+  if(q === "dark" || q === "light") THEME.mode = q;
+  applyTheme(); })();
+
+document.getElementById("lrBack").onclick = ()=> leaveLive();
+
+/* 回放页摄像头下拉：标题点一下展开，点别处收起 */
+const camSelEl = document.getElementById("camSel");
+if(camSelEl) camSelEl.onclick = e=>{ e.stopPropagation(); camPickShow(); };
+document.addEventListener("click", e=>{
+  const box = document.getElementById("camPick");
+  if(!box || !box.classList.contains("on")) return;
+  if(box.contains(e.target) || (e.target.closest && e.target.closest("#camSel"))) return;
+  camPickShow(false);
+});
+renderCamPick();
+
+/* 直达某一页（排查 / 截图用）：index.html?page=cam 直接落在设置页 */
+(()=>{
+  try{
+    const p = new URLSearchParams(location.search).get("page");
+    if(!p) return;
+    const b = document.querySelector('.tb[data-page="' + p + '"]');
+    if(b) b.click();
+  }catch(e){}
+})();
+document.getElementById("lrGrid").onclick = ()=>{
+  state.liveView = state.liveView === "grid" ? "single" : "grid";
+  state.livePaused = false;
+  state.liveStream = state.liveView === "single";   // 回到单路就续播实时流
+  buildLiveRoom();
+  updateResBar();
+};
+</script>
+</body>
+</html>
