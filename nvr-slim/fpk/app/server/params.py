@@ -18,6 +18,9 @@
 # ---------------------------------------------------------------- 默认值
 
 ANALYSIS_DEFAULTS = {
+    # 判读引擎：pixel=逐像素差（能剔除静止画面，要解码）| bytes=码流曲线（只读容器）
+    # auto = 这台机器的 ffmpeg 支持像素链就用 pixel，否则自动回落 bytes
+    "engine": "auto",
     # 画面类型
     "scene": "auto",            # auto | mono | color
     "scene_probe_sec": 5,       # 判彩色的抽点间隔，0=逐帧
@@ -30,7 +33,7 @@ ANALYSIS_DEFAULTS = {
     "blur_color": 0,
     "temporal_median": 0,       # 0=关。开了会抹掉只出现 1~2 帧的目标
     # 判据
-    "pixel_delta": 16,          # 黑白降到 14
+    "pixel_delta": 24,          # 逐像素亮度差门槛（0~255），黑白降到 20
     "chroma_delta": 8,
     "noise_mult": 2.0,          # 1.1~20
     "floor": 5e-4,              # 噪声极小时的绝对下限
@@ -73,8 +76,8 @@ ENCODE_DEFAULTS = {
 
 # 画面类型预设：黑白/彩色是两套判据组合，不是换个数值
 SCENE_PRESETS = {
-    "mono":  {"blur": 1, "pixel_delta": 14, "use_chroma": False},
-    "color": {"blur": 0, "pixel_delta": 16, "use_chroma": True},
+    "mono":  {"blur": 1, "pixel_delta": 20, "use_chroma": False},
+    "color": {"blur": 0, "pixel_delta": 24, "use_chroma": True},
 }
 
 PROFILE_DEFAULTS = {
@@ -98,6 +101,7 @@ PROFILE_DEFAULTS = {
 
 SCHEMA = {
     "analysis.fps":        (0.2, 10.0, float),
+    "analysis.scene_probe_sec": (0, 60, int),
     "analysis.width":      (80, 640, int),
     "analysis.blur_mono":  (0, 3, int),
     "analysis.blur_color": (0, 3, int),
@@ -124,6 +128,7 @@ SCHEMA = {
 }
 
 ENUMS = {
+    "analysis.engine": {"auto", "pixel", "bytes"},
     "analysis.scene": {"auto", "mono", "color"},
     "analysis.sensitivity": {"high", "mid", "low"},
     "analysis.speed_mode": {"pts", "reencode"},

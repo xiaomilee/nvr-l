@@ -80,6 +80,8 @@ class Link:
         self.max_queue = runtime.clamp_int(cfg.get("link_max_queue"), 20, 2000, 200)
 
         self.profiles = {}
+        # 判读引擎的降级说明只记一次（同一路同一个原因），否则每个分片刷一行
+        self._engine_logged = {}
         raw = cfg.get("profiles") or {}
         for c in self.cams:
             p = raw.get(c["id"]) if isinstance(raw, dict) else None
@@ -353,14 +355,26 @@ class Link:
             return {"ok": False, "reason": "no-ffprobe",
                     "error": "缺少 ffprobe，无法分析画面变化"}
         profile = self.profiles.get(it["cam"]) or params.new_profile(it["name"])
-        a = params.resolve(profile, "auto")
+        an = (profile.get("analysis") or {})
+        # 画面类型：auto 不预设，mono 才给黑白那套（更重的模糊、更低的门槛、
+        # 判定时额外的容噪）。resolve 要的是具体类型，原始选择另外留住。
+        sc = str(an.get("scene") or "auto").lower()
+        a = params.resolve(profile, "mono" if sc == "mono" else "color")
+        a["scene"] = sc if sc in ("auto", "mono", "color") else "auto"
+        a["engine"] = str(an.get("engine") or "auto").lower()
 
         try:
             size_in = os.path.getsize(src)
         except OSError:
             size_in = 0
 
-        res = condense.analyze(self.ffprobe, src, a, ignore=self.ignore_cells(it["cam"]))
+        res = condense.analyze(self.ffprobe, src, a,
+                               ignore=self.ignore_cells(it["cam"]),
+                               ffmpeg=self.ffmpeg)
+        note = res.get("engine_note") or ""
+        if note and self._engine_logged.get(it["cam"]) != note:
+            self._engine_logged[it["cam"]] = note
+            self.log("%s 判读：%s" % (it.get("name") or it["cam"], note))
         if res["error"]:
             return {"ok": False, "reason": "analyze", "error": res["error"]}
 

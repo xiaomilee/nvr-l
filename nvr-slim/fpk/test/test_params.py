@@ -31,7 +31,7 @@ class TestParams(unittest.TestCase):
         mono = params.resolve(self.prof, "mono")
         color = params.resolve(self.prof, "color")
         self.assertEqual(mono["blur"], 1)          # 黑白必须空域模糊压颗粒噪声
-        self.assertEqual(mono["pixel_delta"], 14)
+        self.assertEqual(mono["pixel_delta"], 20)  # 门槛随 0.9.22 的像素差引擎上调
         self.assertFalse(mono["use_chroma"])
         self.assertEqual(color["blur"], 0)         # 彩色色度本身干净，模糊会丢小目标
         self.assertTrue(color["use_chroma"])

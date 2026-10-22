@@ -4,4 +4,6 @@ __pycache__/
 *.tmp
 .DS_Store
 var/
-test/.shots/
+.shots/
+.probe/
+.probe_ui.js

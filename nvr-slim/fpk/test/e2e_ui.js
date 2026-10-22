@@ -118,6 +118,10 @@ function d2(n) { return String(n).padStart(2, "0"); }
     // 遮蔽区整块已下线：编辑页里不应再有它的画布
     check("输出遮蔽区已从编辑页移除", !(await page.$("#maskCv-rd")));
 
+    // 0.9.24：参数分四段手风琴，一次只展开一段，画布在「检测忽略区」段里
+    const accMask = await page.$('[data-acc="mask"]');
+    check("编辑页有四段手风琴", !!accMask && !!(await page.$('[data-acc="condense"]')));
+    if (accMask) { await accMask.click(); await page.waitForTimeout(400); }
     const cv = await page.$("#maskCv-ig");
     check("检测忽略区画布已挂载", !!cv);
     if (cv) {
@@ -139,7 +143,9 @@ function d2(n) { return String(n).padStart(2, "0"); }
       // 初始配置里 masks.ignore 是空的，拖 2×2 后应正好 4 格
       check("拖选忽略区后草稿里真有格子", ig.length === 4, ig);
 
-      // 单路分片长度：点「1 分钟」芯片，草稿应立刻变 60
+      // 单路分片长度：切到「保留与分片」段，点「1 分钟」芯片，草稿应立刻变 60
+      const accKeep = await page.$('[data-acc="keep"]');
+      if (accKeep) { await accKeep.click(); await page.waitForTimeout(400); }
       const segBtn = await page.$('[data-camseg="60"]');
       check("编辑页有单路分片长度选项", !!segBtn);
       if (segBtn) {
@@ -437,35 +443,34 @@ function d2(n) { return String(n).padStart(2, "0"); }
 
   // ================= 本轮修复的四项 =================
 
-  // --- 5) 资源条只留存储与目录；「硬件与资源」卡整体下线 ---
+  // --- 5) 存储信息搬进「设置 · 诊断与日志」；顶栏 CPU / 内存 / 核显 早已下线 ---
   const resInfo = await page.evaluate(async () => {
     const r = await refreshRes();
-    SET.genOpen = true;
+    SET.genOpen = false; SET.diagOpen = true; SET.editing = false; SET.draft = null;
     renderCamTabs();
-    const cards = Array.from(document.querySelectorAll(".gcard"))
-      .map(e => e.textContent).join(" ");
-    const bar = document.querySelector(".resbar");
+    const diag = document.querySelector(".zone.diag");
     const out = {
       ok: r.ok, err: r.err,
-      barText: bar ? bar.textContent.replace(/\s+/g, " ").trim() : "",
+      diagText: diag ? diag.textContent.replace(/\s+/g, " ").trim() : "",
+      hasLiveBar: !!document.querySelector(".resbar"),
       hasCpuEl: !!document.getElementById("resCpu"),
-      hasGpuCard: /硬件与资源/.test(cards),
-      bogus: /178%|312\.6|UHD 730|96\.4 MB/.test(cards + " " + (bar ? bar.textContent : "")),
+      hasStorageCard: !!document.querySelector(".zone.diag .dcard"),
+      bogus: /178%|312\.6|UHD 730|96\.4 MB/.test(diag ? diag.textContent : ""),
     };
-    SET.genOpen = false;
+    SET.diagOpen = false;
     renderCamTabs();
     return out;
   });
   check("/api/status 仍然返回资源数据（接口保留，只是界面不展示）", resInfo.ok, resInfo.err);
-  check("资源条只剩「存储 + 目录」",
-        resInfo.barText.includes("存储") && resInfo.barText.includes("目录")
-        && !/CPU|内存|核显/.test(resInfo.barText), resInfo.barText);
+  check("直播页不再有第二排状态条", resInfo.hasLiveBar === false);
+  check("存储占用落在诊断与日志里", resInfo.hasStorageCard === true);
+  check("诊断区不出现 CPU / 内存 / 核显 这类实时占用",
+        !/CPU|内存|核显/.test(resInfo.diagText), resInfo.diagText);
   check("顶栏 CPU / 内存 / 核显 元素已移除", resInfo.hasCpuEl === false);
-  check("「硬件与资源」卡片已下线", resInfo.hasGpuCard === false);
   check("页面不再出现编造的占用数字（178% / 312.6 / UHD 730）",
         resInfo.bogus === false);
 
-  // --- 6) 快照倒计时：拉不到图时必须真反映，不能假装倒数 ---
+  // --- 6) 快照墙右下角的「多久之前」必须真反映状态，不能假装新鲜 ---
   const cdFail = await page.evaluate(async () => {
     const cam = CAMERAS[0];
     const st = snapSt(cam.id);
@@ -484,21 +489,25 @@ function d2(n) { return String(n).padStart(2, "0"); }
     const cam = CAMERAS[0];
     const st = snapSt(cam.id);
     /* 失败态优先于离线态：网断了 c.online 也是 false，但用户看到的应是
-       "未更新"（这张图没刷新），而不是笼统的一个横杠。 */
+       "未拿到画面"（这张图没刷新），而不是一句笼统的"离线"。 */
     st.fails = 3; st.at = Date.now() - 60000; st.pend = false;
     updateSnapLabels();
     const card = document.querySelector("#liveWrap .livecard");
+    const ago = card.querySelector("[data-ago]");
     return {
-      cd: (card.querySelector("[data-cd]") || {}).textContent,
-      bad: (card.querySelector(".snap-cd") || { className: "" }).className,
       ago: (card.querySelector("[data-ago-txt]") || {}).textContent,
+      bad: ago ? /bad/.test(ago.className) : false,
+      dot: !!ago && !!ago.querySelector(".dot"),
+      stamp: (card.querySelector("[data-stamp]") || {}).textContent,
     };
   });
-  check("失败时倒计时显示「未更新」而不是继续 -Ns",
-        cdText.cd === "未更新", cdText);
-  check("失败时倒计时块标红", /bad/.test(cdText.bad), cdText.bad);
   check("失败时不再显示「刚刚」这类假的新鲜度",
-        cdText.ago !== "刚刚" && cdText.ago !== "0 秒前", cdText.ago);
+        cdText.ago !== "刚刚" && cdText.ago !== "0 秒前"
+        && /未拿到画面|离线/.test(cdText.ago || ""), cdText);
+  check("失败时状态点转红（bad 类）且点元素存在",
+        cdText.bad === true && cdText.dot === true, cdText);
+  check("时间戳是抓拍时刻（HH:MM:SS），不是当前钟点",
+        /^\d\d:\d\d:\d\d$/.test(cdText.stamp || ""), cdText.stamp);
 
   const cdOk = await page.evaluate(() => {
     const cam = CAMERAS[0];
@@ -507,9 +516,14 @@ function d2(n) { return String(n).padStart(2, "0"); }
     st.fails = 0; st.at = Date.now() - 3000; st.pend = false;
     updateSnapLabels();
     const card = document.querySelector("#liveWrap .livecard");
-    return (card.querySelector("[data-cd]") || {}).textContent;
+    const ago = card.querySelector("[data-ago]");
+    return {
+      txt: (card.querySelector("[data-ago-txt]") || {}).textContent,
+      bad: ago ? /bad/.test(ago.className) : null,
+    };
   });
-  check("正常时倒计时恢复为剩余秒数", /^-\d+s$/.test(cdOk || ""), cdOk);
+  check("正常时年龄条回到「N 秒前」且状态点是绿色（无 bad 类）",
+        /秒前/.test(cdOk.txt || "") && cdOk.bad === false, cdOk);
 
   // --- 4) 手势返回逐层退，不能一退就退出应用 ---
   const hist = await page.evaluate(async () => {

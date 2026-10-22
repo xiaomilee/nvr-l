@@ -29,6 +29,7 @@ import link as link_mod  # noqa: E402
 import snapshots  # noqa: E402
 import sysinfo  # noqa: E402
 import ffmpeg_cmd  # noqa: E402
+import pixdiff  # noqa: E402
 
 STATE = {
     "started_at": time.time(),
@@ -211,6 +212,61 @@ CAMERA_DEFAULTS = [
 
 _CLIP_SPEEDS = (1, 2, 4, 8)
 
+# 灵敏度预设 → 噪声倍率。数值越大越保守（越不容易报事件）。
+# 与前端 chips 一一对应，「标准」保持 params.ANALYSIS_DEFAULTS 的 2.0。
+SENS_MULT = {"high": 1.6, "mid": 2.0, "low": 3.0}
+
+
+def _num(v, default, lo, hi):
+    """把前端来的任何东西夹成一个范围内的数。非法值一律回落默认。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        f = float(default)
+    if f != f:                      # NaN
+        f = float(default)
+    return max(float(lo), min(float(hi), f))
+
+
+def profile_from_judge(cid, name, judge):
+    """设置页的判读条件 → params 档案（真正进判定引擎的那份）。
+
+    为什么在服务端重建而不是直接存前端对象：判据字段一旦被前端塞进奇怪的
+    值（字符串、负数、超大 fps），坏的不是界面而是判定结果 —— 会整天判不出
+    事件，用户还以为是摄像头的问题。所有字段在这里夹取 + 过 params.validate。
+    """
+    p = params.new_profile(name or cid)
+    a = p["analysis"]
+    j = judge if isinstance(judge, dict) else {}
+
+    engine = str(j.get("engine") or "auto").strip().lower()
+    a["engine"] = engine if engine in ("auto", "pixel", "bytes") else "auto"
+    scene = str(j.get("scene") or "auto").strip().lower()
+    a["scene"] = scene if scene in ("auto", "mono", "color") else "auto"
+    sens = str(j.get("sens") or j.get("sensitivity") or "mid").strip().lower()
+    a["sensitivity"] = sens if sens in ("high", "mid", "low") else "mid"
+
+    a["noise_mult"] = _num(j.get("noise_mult"), SENS_MULT[a["sensitivity"]], 1.1, 20.0)
+    a["pixel_delta"] = int(_num(j.get("pixel_delta"), 24, 1, 80))
+    # 最短事件同时是"碎片阈值"和"最短成品"：短于此的片段本就不该单独存在
+    me = _num(j.get("min_event"), 2.0, 0.5, 60.0)
+    a["min_event"] = round(me, 2)
+    a["min_clip"] = round(me, 2)
+    blur = int(_num(j.get("blur"), 1, 0, 3))
+    a["blur_mono"] = blur
+    a["blur_color"] = blur
+    a["fps"] = round(_num(j.get("fps"), 2.0, 0.2, 10.0), 2)
+    a["scene_probe_sec"] = int(_num(j.get("scene_probe_sec"), 5, 0, 60))
+    a["merge_gap"] = round(_num(j.get("merge_gap"), 5.0, 0.0, 120.0), 1)
+    a["pre_buf"] = round(_num(j.get("pre_buf"), 3.0, 0.0, 30.0), 1)
+    a["post_buf"] = round(_num(j.get("post_buf"), 3.0, 0.0, 30.0), 1)
+    ok, errs = params.validate(p)
+    if not ok:
+        # 夹取之后仍然不合法说明表结构本身有问题：回落到默认档，记录原因
+        _record("判读参数校验失败（%s）：%s，已回落默认" % (cid, "；".join(errs)))
+        p = params.new_profile(name or cid)
+    return p
+
 
 def clip_speed_of(v):
     """缩时倍速白名单：只认 1/2/4/8，其它一律回落 1。
@@ -223,6 +279,35 @@ def clip_speed_of(v):
     except (TypeError, ValueError):
         return 1
     return n if n in _CLIP_SPEEDS else 1
+
+
+def merge_cam_urls(cams, old_cams):
+    """跨设备防覆盖：回给浏览器的 url 永远是脱敏的（rtsp://***@），明文只存在
+    "配置它的那台浏览器"的 localStorage 里。换设备 / 清缓存后推回来的 url 是
+    空（或脱敏串），绝不能拿去覆盖 NAS 上的真地址 —— 按 id 回落旧值；
+    只有显式 url_clear/sub_clear 或推来了新明文，才真的改动地址。
+    就地修改 cams 并返回，便于直接串在 norm_cameras 之后。"""
+    old = {}
+    for oc in (old_cams or []):
+        if isinstance(oc, dict) and oc.get("id"):
+            old[oc["id"]] = oc
+    for c in cams or []:
+        o = old.get(c.get("id")) or {}
+        uc = c.pop("url_clear", False)
+        sc = c.pop("sub_clear", False)
+        if c.get("url") and "***@" not in c["url"]:
+            pass                                  # 新明文地址，直接采用
+        elif uc:
+            c["url"] = ""                         # 显式清空
+        else:
+            c["url"] = o.get("url") or ""         # 空/脱敏 → 回落 NAS 旧值
+        if c.get("sub_url") and "***@" not in c["sub_url"]:
+            pass
+        elif sc:
+            c["sub_url"] = ""
+        else:
+            c["sub_url"] = o.get("sub_url") or ""
+    return cams
 
 
 def norm_cameras(raw):
@@ -243,6 +328,12 @@ def norm_cameras(raw):
             "sub_url": str(c.get("sub_url") or c.get("sub") or "").strip(),
             "enabled": bool(c.get("enabled", True)),
         })
+        if c.get("url_clear"):
+            # 显式清空标记：本地有明文的浏览器把输入框清空保存，才是真想清掉；
+            # 换设备/清缓存后输入框本来就是空的，那是"不知道"，不是"要清掉"。
+            out[-1]["url_clear"] = True
+        if c.get("sub_clear"):
+            out[-1]["sub_clear"] = True
         if c.get("full_days") is not None:
             out[-1]["full_days"] = c.get("full_days")
         if c.get("clip_days") is not None:
@@ -263,6 +354,10 @@ def norm_cameras(raw):
             out[-1]["masks"] = {
                 "ignore": [int(x) for x in (m.get("ignore") or []) if isinstance(x, int) or str(x).isdigit()],
             }
+        # 判读条件：只在这里临时挂着，由调用方转成 profiles 后 pop 掉，
+        # cameras 本身不存这份数据（一份参数只留一个真相来源）。
+        if isinstance(c.get("judge"), dict):
+            out[-1]["judge"] = c.get("judge")
     return out
 
 
@@ -710,6 +805,86 @@ def recordings_payload():
             "cameras": per, "clips": clips}
 
 
+# ---------------------------------------------------------------- 存储占用统计
+# 「每路吃了多少盘」只需要看个大概，没必要跟着录像实时算。
+# 统计口径：只扫「摄像头/日期/」两级目录（4 路 × 30 天 ≈ 120 个目录），
+# 结果带时间戳缓存，30 分钟内最多重算一次；只有打开诊断页且缓存过期才扫盘 ——
+# 直播、回放、其它设置页都不会触发。手动「立即重算」走 force。
+STORAGE_TTL = 1800.0
+
+
+def storage_cache_path():
+    return os.path.join(STATE["var_dir"], "storage-usage.json")
+
+
+def _sum_cam_bytes(root, names, sub=""):
+    """按「日期/文件名」去重后求和 —— 旧 id 目录与新名称目录可能同时存在。"""
+    seen = {}
+    for dn in names:
+        base = os.path.join(root, sub, dn) if sub else os.path.join(root, dn)
+        for day, files in _scan_day_dirs(base).items():
+            for x in files:
+                seen[(day, x["n"])] = x["b"]
+    return sum(seen.values())
+
+
+def storage_usage(force=False):
+    """每路摄像头的全时 / 缩时占用 + 磁盘总量。带缓存，force=True 强制重算。"""
+    now = time.time()
+    cache = None
+    try:
+        with open(storage_cache_path(), "r", encoding="utf-8") as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        cache = None
+    fresh = (isinstance(cache, dict)
+             and now - float(cache.get("at") or 0) < STORAGE_TTL)
+    if cache and fresh and not force:
+        return _storage_payload(cache, cached=True)
+    root = record_dir()
+    per = {}
+    for c in cameras():
+        names = cam_storage_dirs(c)
+        per[c["id"]] = {
+            "name": c["name"],
+            "full": _sum_cam_bytes(root, names),
+            "clip": _sum_cam_bytes(root, names, "_clip"),
+        }
+    data = {"at": now, "root": root, "cams": per}
+    try:
+        tmp = storage_cache_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, storage_cache_path())
+    except OSError as e:
+        _record("存储统计缓存写入失败：%s" % e)
+    return _storage_payload(data, cached=False)
+
+
+def _storage_payload(data, cached):
+    cams = data.get("cams") or {}
+    full = sum(int(v.get("full") or 0) for v in cams.values())
+    clip = sum(int(v.get("clip") or 0) for v in cams.values())
+    free, total = sysinfo.disk(data.get("root") or record_dir())
+    return {
+        "ok": True,
+        "cached": bool(cached),
+        "at": int(data.get("at") or 0),
+        "ttl": int(STORAGE_TTL),
+        "root": data.get("root") or record_dir(),
+        "used": full + clip,
+        "full": full,
+        "clip": clip,
+        "disk_free_gb": free,
+        "disk_total_gb": total,
+        "cameras": [dict(id=cid, name=v.get("name") or cid,
+                         full=int(v.get("full") or 0),
+                         clip=int(v.get("clip") or 0),
+                         total=int(v.get("full") or 0) + int(v.get("clip") or 0))
+                    for cid, v in cams.items()],
+    }
+
+
 def cleanup_state_path():
     return os.path.join(STATE["var_dir"], "cleanup-state.json")
 
@@ -1032,6 +1207,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, live_payload())
         if path == "/api/recordings":
             return self._send(200, recordings_payload())
+        if path == "/api/storage/usage":
+            # 命中缓存就直接回（30 分钟内不重复扫盘）；?force=1 强制重算
+            qs = parse_qs(urlparse(self.path).query)
+            return self._send(200, storage_usage(
+                force=(qs.get("force") or ["0"])[0] in ("1", "true")))
         if path == "/api/record/probe":
             return self._record_probe(urlparse(self.path).query)
         if path == "/api/record/file":
@@ -1042,6 +1222,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, link_payload())
         if path == "/api/probe":
             return self._probe_file(urlparse(self.path).query)
+        if path == "/api/diag/pixel":
+            # 像素判读自检：用合成片源跑一遍滤镜链，说明这台机器能不能用像素引擎
+            ff = STATE.get("ffmpeg_bin")
+            if not ff:
+                return self._send(200, {"ok": False, "reason": "未找到 ffmpeg"})
+            return self._send(200, pixdiff.self_test(ff))
         if path == "/api/log":
             return self._send(200, {"ok": True, "version": runtime.VERSION,
                                     "lines": list(_LOG),
@@ -1360,6 +1546,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         if code == 206:
             self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+        # dl=1 → 附件下载（播放页「⋯ → 导出当前文件」走这个参数）。
+        # 只加下载头，文件流完全复用上面的逻辑：同一份文件、同一套 Range 处理。
+        if (q.get("dl") or [""])[0] in ("1", "true") and code == 200:
+            from urllib.parse import quote as _uq
+            fname = "%s_%s_%s.mp4" % (cam, day, name[:8].replace("-", ""))
+            self.send_header("Content-Disposition",
+                             "attachment; filename*=UTF-8''" + _uq(fname))
         self.end_headers()
         try:
             with open(full, "rb") as f:
@@ -1438,10 +1631,30 @@ class Handler(BaseHTTPRequestHandler):
                     changed.append(k)
             if "cameras" in body:
                 cams = norm_cameras(body.get("cameras"))
+                # 判读条件 → profiles：先把临时挂的 judge 摘出来再比 cameras，
+                # 否则每次推送都因为 judge 不同而把 cameras 判成"变了"。
+                newp = {}
+                for c in cams:
+                    j = c.pop("judge", None)
+                    if isinstance(j, dict):
+                        newp[c["id"]] = profile_from_judge(
+                            c["id"], c.get("name"), j)
+                # 跨设备防覆盖：换设备/清缓存推回的空地址不许抹掉 NAS 真配置
+                merge_cam_urls(cams, cfg.get("cameras"))
                 if cams or body.get("cameras") == []:
                     if cams != cfg.get("cameras"):
                         cfg["cameras"] = cams
                         changed.append("cameras")
+                if newp:
+                    prof = cfg.get("profiles")
+                    if not isinstance(prof, dict):
+                        prof = {}
+                    for cid, prof_new in newp.items():
+                        if prof.get(cid) != prof_new:
+                            prof[cid] = prof_new
+                            if "profiles" not in changed:
+                                changed.append("profiles")
+                    cfg["profiles"] = prof
             try:
                 cfg["concurrency"] = max(1, min(3, int(cfg["concurrency"])))
             except (TypeError, ValueError):
@@ -1529,6 +1742,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(503, {"ok": False, "error": "调度尚未启动"})
             lo.trigger()
             return self._send(200, {"ok": True, "link": link_payload()})
+
+        if path == "/api/storage/usage/refresh":
+            # 用户手按「立即重算」：无视缓存扫一次。扫盘很轻（只读目录元数据），
+            # 但仍然限定为单次触发，不做定时轮询。
+            return self._send(200, storage_usage(force=True))
 
         if path == "/api/log/clear":
             log_clear()
