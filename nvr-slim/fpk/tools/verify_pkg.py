@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""独立校验 fpk 包内容：解开 app.tgz，逐项断言本轮 5 个改动都进包了。
+"""独立校验 fpk 包内容：解开 app.tgz，逐项断言本轮改动都进包了。
 
 不依赖 build.sh 的输出，只看真实字节。
-    python tools/verify_pkg.py dist/nvr-0.9.21_x86.fpk
+    python tools/verify_pkg.py dist/nvr-0.9.28_x86.fpk
 """
 import hashlib
 import io
@@ -13,9 +13,6 @@ import tarfile
 import tempfile
 
 MUST_HAVE_UI = [
-    # 第 2 项：资源条只留存储+目录
-    "updateResBar",
-        'id="resDir"',
     # 第 4 项：直播真的动
     "mountLiveStream",
     "liveStreamUrl",
@@ -26,10 +23,97 @@ MUST_HAVE_UI = [
     # 第 5 项：播放按钮移出画面到底栏
     'id="lrPlay"',
     "lr-pausebtn",
-    # 第 1 项：录制状态可见
-    "recCamsBlock",
+    # 0.9.23：回放页改版（双层时间轴 / 五键 / 倍速 / 真全屏 / 触控）
+    'id="tStart"',
+    'id="fPos"',
+    'id="fDur"',
+    'id="bSpeed"',
+    'id="speedPop"',
+    'id="bNext"',
+    "function playOrder",
+    "touch-action:none",
+    "fshide",
+    # 0.9.23：多日筛选修复（日期顺序唯一 + daySel 保持选中）
+    "state.daySel",
+    # 0.9.24：设置页三区（通用折叠 / 摄像头 / 诊断折叠）
+    'class="zone gen"',
+    'class="zone cam"',
+    'class="zone diag"',
+    "function renderGenZone",
+    "function renderDiagZone",
+    "function genSummary",
+    "function diagSummary",
+    'id="diagSum"',
+    "data-gentoggle",
+    "data-diagtoggle",
+    # 0.9.24：诊断区的存储占用（非实时 · 只扫目录元数据 · 无灰色剩余段）
+    "function cardStorage",
+    "function loadStorageUsage",
+    "/api/storage/usage",
+    "storage/usage/refresh",
+    'id="btnStRefresh"',
+    "只扫目录元数据，不读文件内容",
+    "每 30 分钟最多重算一次",
+    "if(SET.diagOpen) loadStorageUsage(false)",
+    "if(!force && STORAGE.err) return Promise.resolve(null)",
+    # 0.9.24：每路录制状态搬进诊断区
+    "function cardRecCams",
     "ffmpeg_missing",
-    # 第 3 项：雪碧图已删
+    "本机 ffmpeg 不支持的参数已自动跳过",
+    # 0.9.24：四段手风琴 + 缩时三层 + 影响预估
+    "function camAcc",
+    'data-acc="',
+    'data-cond="1"',
+    'data-adv="1"',
+    'data-outopen="1"',
+    'class="master"',
+    'class="impact"',
+    "function judgeDrift",
+    "function judgeAdvLine",
+    # 0.9.24：防误操作
+    "function dirtyCount",
+    '已改 " + dirtyCount() + " 项未保存',
+    "再点一次确认删除",
+    "已调 ' + drift + ' 项",
+    # 0.9.24：直播单列/双列
+    "function setLiveCols",
+    "function applyLiveCols",
+    "LIVE_COLS_KEY",
+    'nvr.live.cols',
+    'id="btnLiveCols"',
+    'id="colPop"',
+    # 0.9.24：连续播放是按钮，原地换流
+    'id="wallPlay"',
+    "function syncWallBar",
+    "function toggleWall",
+    "state.wallStream = true;",
+    # 0.9.24：单路全屏横屏
+    "function openLiveFull",
+    "function closeLiveRoom",
+    "function syncLiveChrome",
+    "enterFull(null, { noExit: true })",
+    "state.lrFs",
+    # 0.9.24：四角状态位
+    'class="lv-name"',
+    'class="lv-osd',
+    "syncDiagSum",
+    # 0.9.25：右下角 HomeKit 风格状态点（绿=正常/红=异常，带光晕）；
+    # 左上徽标（lv-rec）下线，不再盖住画面自带的时间戳
+    '.snap-ago .dot{',
+    ".snap-ago.bad .dot{",
+    "box-shadow:0 0 7px rgba(48,209,88,.95),0 0 2px rgba(48,209,88,.8)",
+    "live ? false :",
+    ".livecard.streaming .snap-ago span{display:none}",
+    # 0.9.25：单路全屏吃满视口 + contain 完整呈现（与回放页同口径）
+    ".liveroom.fs .lr-tile{border-radius:0;aspect-ratio:auto;height:100%}",
+    ".liveroom.fs .lr-tile .snap-img{object-fit:contain}",
+    # 0.9.25：跨设备 RTSP 地址保护（空/脱敏回落 NAS 旧值；显示不误报未配置）
+    "hasUrl: !!c.url, hasSub: !!c.sub_url",
+    "url_clear: !!p.urlClear, sub_clear: !!p.subClear",
+    "dst.urlClear = !!(dst.main && !SET.draft.main)",
+    "已保存在 NAS（本机不显示明文）· 留空 = 不修改",
+    "已保存在 NAS · 本机不显示明文",
+    "(p.main || c.hasUrl) && p.enabled !== false",
 ]
 MUST_NOT_HAVE_UI = [
     # 第 2 项删掉的实时占用
@@ -46,6 +130,28 @@ MUST_NOT_HAVE_UI = [
     # 第 3 项删掉的雪碧图
     "sprite",
     "GS.sprite",
+    # 0.9.23：±10s 按钮移除（五键：倍速/上一段/播放/下一段/全屏）
+    'id="bBack"',
+    'id="bFwd"',
+    # 0.9.24：直播页底部信息栏整体搬进设置页，旧资源条与旧函数都不该留
+    'class="resbar"',
+    'id="resKeep"',
+    'id="resDir"',
+    "updateResBar",
+    'id="stFree"',
+    # 0.9.24：每路录制状态改为诊断区的 cardRecCams
+    "recCamsBlock",
+    "function cardDiag",
+    # 0.9.24：缩时用四段手风琴，不再有独立的 tlOpen 折叠菜单
+    "tlOpen",
+    "data-tltoggle",
+    # 0.9.24：右上角倒计时圆点徽标下线（四角状态层接管）
+    "snap-cd",
+    # 0.9.25：左上录制态徽标下线（不盖画面自带时间戳）；琥珀 stale 底色下线
+    "recTagOf",
+    "lv-rec",
+    "lv-badge",
+    ".snap-ago.stale",
 ]
 MUST_HAVE_SRV = {
     "server/ffmpeg_cmd.py": [
@@ -74,6 +180,38 @@ MUST_HAVE_SRV = {
         "recorder.cam_dir(root, dname)",
         "def _safe_res",
         "_tb_where",
+        # 0.9.22：判读条件落到服务端档案（UI 推送 → profiles → 判定引擎）
+        "def profile_from_judge",
+        "SENS_MULT",
+        "judge",
+        # 0.9.23：导出当前文件（dl=1 → 附件下载头）
+        'in ("1", "true")',
+        "Content-Disposition",
+        "attachment; filename*=UTF-8''",
+        # 0.9.24：存储占用统计（非实时 · 目录元数据聚合 · 30 分钟 TTL 缓存）
+        "STORAGE_TTL",
+        "def storage_usage",
+        "def _storage_payload",
+        "def _sum_cam_bytes",
+        "/api/storage/usage",
+        "storage/usage/refresh",
+        "storage-usage.json",
+        # 0.9.25：跨设备 RTSP 地址保护
+        "def merge_cam_urls",
+        "merge_cam_urls(cams, cfg.get(\"cameras\"))",
+        "url_clear",
+        "sub_clear",
+        '"***@" not in',
+    ],
+    "server/pixdiff.py": [
+        # 像素差引擎：整条差分在 ffmpeg 滤镜里完成，Python 只解析每帧一个数
+        "def build_chain",
+        "tblend=all_mode=difference",
+        "signalstats",
+        "metadata=print",
+        "def parse",
+        "def self_test",
+        "def available",
     ],
     "server/recorder.py": [
         "STALL_SEC",
@@ -94,12 +232,15 @@ MUST_HAVE_SRV = {
     "server/sysinfo.py": [
         "_TICK = (0.0, 0.0, 0.0)",
     ],
-    "server/runtime.py": ['VERSION = "0.9.21"',
+    "server/runtime.py": ['VERSION = "0.9.28"',
                           'record_dir": "/vol1/@appshare/nvr-output"',
                           '"service_port": 18080',
                           "def probe_record_dir"],
     # 0.9.18：缩时链路要把每路开关与倍速真正用起来
-    "server/link.py": ["condense", "clip_speed_of"],
+    # 0.9.22：判定必须把 ffmpeg 传下去，否则像素引擎永远走降级
+    "server/link.py": ["condense", "clip_speed_of", "a[\"engine\"]", "ffmpeg=self.ffmpeg"],
+    "server/condense.py": ["def _pixel_analyze", "def pixel_threshold",
+                           "def cell_rects", "engine_note"],
 }
 MUST_NOT_HAVE_SRV = {
     # 只查「作为 ffmpeg 命令数组元素」出现的形式（带引号）；注释里提到这些
@@ -145,8 +286,8 @@ def main(path):
     mf = blobs["manifest"].decode("utf-8", "replace")
     import re as _re
     vline = _re.search(r"(?m)^\s*version\s*=\s*(\S+)", mf)
-    chk(bool(vline) and vline.group(1) == "0.9.21",
-        "manifest 版本号不是 0.9.21：%s" % (vline.group(1) if vline else "无"))
+    chk(bool(vline) and vline.group(1) == "0.9.28",
+        "manifest 版本号不是 0.9.28：%s" % (vline.group(1) if vline else "无"))
     print("manifest 版本行：%s"
           % [l for l in mf.splitlines() if l.strip().startswith("version")])
 
@@ -154,7 +295,7 @@ def main(path):
     cl = _re.search(r"(?m)^\s*changelog\s*=\s*(.+)$", mf)
     n_cl = len(cl.group(1).split(" | ")) if cl else 0
     print("changelog 分段：%d" % n_cl)
-    chk(n_cl >= 6, "changelog 只有 %d 段，本轮应有 6 段" % n_cl)
+    chk(n_cl >= 15, "changelog 只有 %d 段，本轮应有 15 段" % n_cl)
 
     # manifest 做 CRC 校验（fnOS 会校验，坏包直接装不上）
     crc_line = [l for l in mf.splitlines() if l.strip().startswith("crc")]
@@ -240,4 +381,4 @@ def main(path):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1] if len(sys.argv) > 1
-                  else "dist/nvr-0.9.21_x86.fpk"))
+                  else "dist/nvr-0.9.28_x86.fpk"))

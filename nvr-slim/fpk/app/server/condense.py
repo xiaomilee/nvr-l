@@ -24,6 +24,7 @@ import os
 import subprocess
 
 import ffmpeg_cmd
+import pixdiff
 
 
 # ---------------------------------------------------------------- 读曲线
@@ -204,6 +205,32 @@ def region_filter(cells, cols=MASK_COLS, rows=MASK_ROWS):
     return ",".join(parts)
 
 
+def cell_rects(cells, cols=MASK_COLS, rows=MASK_ROWS, w=None, h=None):
+    """忽略区格号 → 判定画面上的像素矩形 [(x, y, w, h)]（给 drawbox 用）。
+
+    像素差路径和码流曲线路径对忽略区的处理**相反**：字节曲线必须 crop 出去，
+    因为涂黑会让那块从无到有地产生大包；像素差则是两帧都涂黑后差分，
+    差值恒为 0，涂黑才是正解。所以这里给的是 drawbox 坐标，不是 crop 滤镜。
+    """
+    cells = sorted(set(int(c) for c in (cells or []) if isinstance(c, int)))
+    cells = [c for c in cells if 0 <= c < cols * rows]
+    if not cells:
+        return []
+    w = int(w or pixdiff.W)
+    h = int(h or pixdiff.H)
+    grid = [[False] * cols for _ in range(rows)]
+    for c in cells:
+        grid[c // cols][c % cols] = True
+    out = []
+    for r0, r1, c0, c1 in _merge_rects(grid, cols, rows):
+        x = int(round(c0 * w / float(cols)))
+        y = int(round(r0 * h / float(rows)))
+        rw = int(round((c1 - c0 + 1) * w / float(cols)))
+        rh = int(round((r1 - r0 + 1) * h / float(rows)))
+        out.append((x, y, max(1, rw), max(1, rh)))
+    return out
+
+
 def _merge_rects(grid, cols, rows):
     """贪心矩形合并：按行优先把能并的行拼成一个矩形。"""
     used = [[False] * cols for _ in range(rows)]
@@ -251,19 +278,50 @@ def threshold(curve, a):
         return 0
     base = _pct(sizes, 0.20)
     mult = max(1.2, float(a.get("noise_mult", 2.0)))
+    # 黑白/红外机位的压缩噪声整体比彩色高一档：用户显式选了"黑白"就多给一点
+    # 容噪，否则夜间满屏细碎颗粒会被当成连续活动，整天切不出干净片段。
+    if str(a.get("scene") or "") == "mono":
+        mult *= 1.25
     floor = max(8192.0, base * 1.5)
     return max(base * mult, floor)
 
 
-def pick_windows(curve, a, duration=None):
+PIXEL_FLOOR = 5e-4          # 0.05% 像素（320×180 上约 29 个）
+
+
+def pixel_threshold(curve, a):
+    """像素差门槛：曲线的值已经是「变化像素占比」，所以用占比语义。
+
+    与字节门槛的区别在量纲：字节数没有绝对参照（1080p 和 4MP 差一倍很正常），
+    占比有 —— 0.5% 的像素在动，对任何机位都是"确实有事"。
+
+    **零值必须参与分位计算**。只取非零值会犯一个致命的错：一段 5 分钟里只有
+    10 秒有人走过时，非零值全是"活动帧"，它们的 20 分位就是活动强度本身，
+    再乘倍率之后门槛比活动还高 —— 结果就是"明明有人在走，却判成整段静止"。
+    含零后，安静时段占多数时基线自然压到 0，门槛退回绝对地板。
+    """
+    vals = [v for _, v in curve]
+    base = _pct(vals, 0.20) if vals else 0.0
+    mult = max(1.2, float(a.get("noise_mult", 2.0)))
+    if str(a.get("scene") or "") == "mono":
+        mult *= 1.25          # 红外机位噪点多，门槛再放宽一档
+    floor = max(PIXEL_FLOOR, float(a.get("floor") or PIXEL_FLOOR))
+    return max(base * mult, floor)
+
+
+def pick_windows(curve, a, duration=None, th=None):
     """把曲线压成区间列表 [(start, end)]。
 
     merge_gap 合并的是"两段活动之间的短暂安静"（比如人走出去又回来），
     pre/post 补上判定必然存在的滞后，min_clip 去掉一闪而过的碎片。
+
+    th：外部算好的门槛。像素差引擎自己有一套量纲（占比），不能套字节那套
+    「20 分位 × 倍率 + 8KB 地板」，所以门槛由调用方给。
     """
     if not curve:
         return []
-    th = threshold(curve, a)
+    if th is None:
+        th = threshold(curve, a)
     flag = [(t, b > th) for t, b in curve]
 
     segs = []
@@ -402,18 +460,116 @@ def _unlink(p):
 
 # ---------------------------------------------------------------- 编排
 
-def analyze(ffprobe, src, a, timeout=180, ignore=None):
+def analyze(ffprobe, src, a, timeout=180, ignore=None, ffmpeg=None):
     """一次判定：返回区间列表和整段是否基本静默。
 
-    ignore：检测忽略区的格号列表（16×9，格号 = row*16+col）。
-    给了就按区域逐块读包大小曲线，再从整帧曲线里**减掉**它们：
-      整帧字节 ≈ 背景 + 忽略区的活动 + 真正关心的活动
-    所以「整帧 − 忽略区」才是该拿来判定的信号。这样树影、马路上跑的车就
-    真的不参与判定，而不是被涂黑后继续贡献"从无到有"的突变。
+    两种引擎，由 a["engine"] 决定（auto = 能用像素就用像素）：
+      pixel  逐像素差：真正"剔除静止画面"，能抓到码流曲线漏掉的小变化，
+             代价是要解码。用预筛把解码限制在候选区间。
+      bytes  码流曲线：只读容器不解码，最省；但码率策略会骗人
+             （静止画面遇到 I 帧照样一大包），且忽略区只能靠 crop 扣减。
 
-    减法的下限逐个时点取 0（不是整体取 0）：重叠区域、封装开销都会让某项
-    偏大，逐点夹取比整段夹取更不容易把真实活动一起抹掉。
+    降级规则：像素引擎要的滤镜缺失、或这次跑不出曲线，就**整段**回落到
+    码流曲线，并在 engine_note 里写明原因 —— 宁可慢一点、判得粗一点，
+    也不能因为一个滤镜不可用就把有内容的片段当静止丢掉。
+
+    ignore：检测忽略区的格号列表（16×9，格号 = row*16+col）。
     """
+    engine = str(a.get("engine") or "auto").strip().lower()
+    note = ""
+    if engine in ("pixel", "auto"):
+        if not ffmpeg:
+            note = "像素判读不可用（未找到 ffmpeg），已回落到码流曲线"
+        else:
+            ok, why = pixdiff.available(ffmpeg)
+            if not ok:
+                note = "像素判读不可用（%s），已回落到码流曲线" % why
+            else:
+                res = _pixel_analyze(ffmpeg, ffprobe, src, a, ignore, timeout)
+                if res.get("ok"):
+                    return res
+                note = "像素判读失败（%s），已回落到码流曲线" % (res.get("error") or "无输出")
+    res = _bytes_analyze(ffprobe, src, a, timeout, ignore)
+    res["engine"] = "bytes"
+    res["engine_note"] = note
+    return res
+
+
+def _pixel_analyze(ffmpeg, ffprobe, src, a, ignore, timeout):
+    """像素差路径。先用码流曲线预筛候选区间，只对这些区间解码。"""
+    rects = cell_rects(ignore) if ignore else []
+    margin = max(0.0, float(a.get("prescan_margin", 10)))
+    prescan = bool(a.get("prescan", True))
+    duration = None
+    ranges = [(None, None)]
+    scanned_full = True
+    fps_used = a.get("fps", 2.0)
+    note = ""
+
+    if prescan:
+        packets, _err = read_packets(ffprobe, src, timeout)
+        if packets:
+            duration = packets[-1][0]
+            # 预筛只负责"别漏"，所以门槛放低：min_clip 降到 1 秒，
+            # 否则 2 秒的小事件会在预筛阶段就被当碎片滤掉，像素判读根本看不到。
+            cands = pick_windows(activity_curve(packets),
+                                 dict(a, min_clip=1.0), duration)
+            if cands:
+                ranges = [(max(0.0, s - margin), (e - s) + 2 * margin)
+                          for s, e in cands]
+                scanned_full = False
+            else:
+                # 预筛一个候选都没有：码流曲线上连 I 帧都没抖过。这时仍然
+                # 全段扫一遍像素，但把抽样帧率压到 1 fps —— 这些段落本来就是
+                # 静态的代价，压一半成本；真有小变化也还在 1 秒粒度上抓得住。
+                fps_used = min(_float(fps_used, 2.0), 1.0)
+                note = "预筛无候选，全段像素判读（抽样 1 帧/秒）"
+        else:
+            # 连包信息都读不到（文件可能还在写）：全段像素判读，别下结论
+            note = "预筛读不到包信息，全段像素判读"
+
+    a2 = dict(a)
+    a2["fps"] = fps_used
+    run = pixdiff.curve(ffmpeg, src, a2, rects=rects, ranges=ranges,
+                        timeout=max(timeout, 300))
+    if not run["ok"]:
+        return {"ok": False, "error": run.get("error") or "像素判读无输出"}
+
+    curve = run["curve"]
+    if not curve:
+        return {"ok": False, "error": "像素判读无输出"}
+    if duration is None:
+        duration = curve[-1][0] + 1.0
+    th = pixel_threshold(curve, a)
+    windows = pick_windows(curve, a, duration, th=th)
+    covered = sum(max(0.0, e - s) for s, e in windows)
+    return {
+        "ok": True,
+        "windows": windows,
+        "packets": len(curve),
+        "frames": len(curve),
+        "duration": round(duration or 0, 2),
+        "bytes": 0,
+        "threshold": round(th, 6),
+        "active_ratio": round(covered / duration, 3) if duration else 0.0,
+        "silent": not windows,
+        "ignored_regions": len(rects),
+        "error": "",
+        "engine": "pixel",
+        "engine_note": note or ("" if not scanned_full else "全段像素判读"),
+        "prescan_ranges": len(ranges) if not scanned_full else 0,
+    }
+
+
+def _float(v, default=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _bytes_analyze(ffprobe, src, a, timeout=180, ignore=None):
+    """码流曲线路径（原实现，保持行为不变以便对照与降级）。"""
     packets, err = read_packets(ffprobe, src, timeout)
     if not packets:
         return {"windows": [], "packets": 0, "silent": None,

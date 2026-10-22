@@ -227,9 +227,11 @@ class TestR4Speed(unittest.TestCase):
 class TestR5ClipTimeline(unittest.TestCase):
     def test_ui_has_source_time_helpers(self):
         ui = _read(INDEX)
+        # 0.9.24 起缩时压制收进四段手风琴：折叠开关由 data-acc 统一管，
+        # 原来的 data-tltoggle 已下线，倍速 chip 仍在。
         for needle in ("function segA(", "function segB(",
                        "src: st, srcEnd: en", "seg.srcEnd", "api/dir/check",
-                       "btnDirSave", "data-tltoggle", 'data-speed="'):
+                       "btnDirSave", 'data-acc="', 'data-speed="'):
             self.assertIn(needle, ui, "UI 缺少 %s" % needle)
 
     def test_ui_default_dir_and_port(self):
@@ -241,9 +243,9 @@ class TestR5ClipTimeline(unittest.TestCase):
 
 class TestVersion(unittest.TestCase):
     def test_version_bumped(self):
-        self.assertEqual(runtime.VERSION, "0.9.21")
+        self.assertEqual(runtime.VERSION, "0.9.28")
         m = _read(MANIFEST)
-        self.assertRegex(m, r"(?m)^version\s*=\s*0\.9\.21\s*$")
+        self.assertRegex(m, r"(?m)^version\s*=\s*0\.9\.28\s*$")
 
 
 class TestWizardPackaging(unittest.TestCase):
