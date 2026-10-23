@@ -42,12 +42,14 @@ def _fingerprint(profile):
         return "na"
 
 
-def item_key(src, root, cam_id, profile, ignore=None):
-    """幂等键：相对路径 + 大小 + mtime + 参数指纹 + 忽略区。
+def item_key(src, root, cam_id, profile, ignore=None, style="join"):
+    """幂等键：相对路径 + 大小 + mtime + 参数指纹 + 忽略区 + 切分方式。
 
     忽略区必须进指纹：用户画完忽略区，同一批分片的判定结果本该不同。
     不进指纹的话它们已经在 done 集合里，会被永久跳过 —— 表现就是
     "忽略了树影，但历史片段一点没变"，用户只能以为功能没生效。
+    切分方式同理：join 改 split 是两种产物（一个文件 vs 多个片段），
+    不进指纹的话切过去的路永远不会再处理。
     """
     try:
         st = os.stat(src)
@@ -56,7 +58,8 @@ def item_key(src, root, cam_id, profile, ignore=None):
         return None
     rel = os.path.relpath(src, os.path.join(root, cam_id)).replace("\\", "/")
     ig = ",".join(str(int(x)) for x in sorted(set(ignore or [])))
-    raw = "%s|%d|%d|%s|%s" % (rel, size, mtime, _fingerprint(profile), ig)
+    raw = "%s|%d|%d|%s|%s|%s" % (rel, size, mtime, _fingerprint(profile), ig,
+                                 str(style or "join"))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -78,6 +81,8 @@ class Link:
         self.interval_h = runtime.link_interval_h(cfg.get("link_interval_h"))
         self.seg_sec = runtime.segment_sec(cfg.get("record_segment_sec"))
         self.max_queue = runtime.clamp_int(cfg.get("link_max_queue"), 20, 2000, 200)
+        # 通用切分方式（每路可用 clip_mode=join/split 覆盖，follow=用这个值）
+        self.clip_style = runtime.clip_style(cfg.get("clip_style"))
 
         self.profiles = {}
         # 判读引擎的降级说明只记一次（同一路同一个原因），否则每个分片刷一行
@@ -129,6 +134,15 @@ class Link:
         except (TypeError, ValueError):
             return 1
         return v if v in (1, 2, 4, 8) else 1
+
+    def clip_mode_of(self, cam_id):
+        """这一路自己选的切分方式：join/split 或 follow（跟随通用）。"""
+        return runtime.clip_mode((self.cam_of(cam_id) or {}).get("clip_mode"))
+
+    def eff_clip_mode(self, cam_id):
+        """生效的切分方式：follow 展开成通用 clip_style。"""
+        m = self.clip_mode_of(cam_id)
+        return self.clip_style if m == "follow" else m
 
     def set_cameras(self, cams):
         """列表变化（增删/改地址）时更新；新出现的摄像头补一个默认画质档。"""
@@ -250,14 +264,22 @@ class Link:
             out.extend(os.path.join(full, n) for n in names)
         return out
 
-    def _new_items(self):
-        """尚未入队、且已封口的分片。"""
+    def _new_items(self, only_split=False):
+        """尚未入队、且已封口的分片。
+
+        only_split=True 时只扫「生效切分方式 = 活动切片」的路：
+        定时批量模式下，这些路仍然走即刻精编分支（双路分流方案的
+        服务端形态），不必等下一个批量窗口。
+        """
         now = time.time()
         out = []
         for c in self.cams:
             cid = c["id"]
             # 每路的缩时压制总开关：关了就不入队（已生成的片段照常回放/清理）
             if c.get("condense") is False:
+                continue
+            style = self.eff_clip_mode(cid)
+            if only_split and style != "split":
                 continue
             segs = []
             # 新目录（摄像头名称）+ 旧 id 目录都要扫：升级前的存量分片也要缩时
@@ -278,7 +300,7 @@ class Link:
             profile = self.profiles.get(cid)
             ignore = self.ignore_cells(cid)
             for p in ready:
-                k = item_key(p, self.root, cid, profile, ignore)
+                k = item_key(p, self.root, cid, profile, ignore, style=style)
                 if not k or k in self.done or k in self.failed:
                     continue
                 # pending 最多 link_max_queue(默认 200) 个，以前用 any() 线性扫，
@@ -286,16 +308,28 @@ class Link:
                 if k in self.pending_keys:
                     continue
                 rel = os.path.relpath(p, self.root)
+                try:
+                    mt = os.path.getmtime(p)
+                except OSError:
+                    mt = 0.0
                 out.append({"key": k, "path": p, "cam": cid,
                             "dir": rel.split(os.sep)[0],
-                            "name": c.get("name") or cid})
-        out.sort(key=lambda x: x["path"])
+                            "name": c.get("name") or cid,
+                            "mtime": mt,
+                            "style": style})
+        # 最新优先——按分片 mtime 排，不是路径。0.9.39 按路径倒序踩过坑：
+        # 目录名是中文摄像头名，Unicode 码点「餐>院>车>客」，餐厅的全部
+        # 历史消化完之前别的路一片都出不来（真机表现为"只有一路在出片"）。
+        # mtime 才是"哪个分片最新录完"，跨路按时间公平；mtime 相同用
+        # 路径兜底保证同批稳定。
+        out.sort(key=lambda x: (x["mtime"], x["path"]), reverse=True)
         return out
 
     # ------------------------------------------------------------ 入队
 
     def tick(self, now=None):
-        """一次调度节拍。live 模式每拍都扫；scheduled 模式到点才扫。"""
+        """一次调度节拍。live 模式每拍都扫；scheduled 模式到点才扫——
+        但选了「活动切片」的路例外：它们每拍都即刻入队（精编分支）。"""
         if self.stopped:
             return
         now = now if now is not None else time.time()
@@ -305,6 +339,8 @@ class Link:
             self._enqueue(now)
             return
 
+        # scheduled：切片路不等批量窗口，每拍扫一次（只扫这几路，开销很小）
+        self._enqueue(now, only_split=True)
         if self.next_batch <= 0:
             # 首次启动：先处理一次积压，否则要等满一个间隔才有第一个片段
             self.next_batch = now
@@ -314,13 +350,13 @@ class Link:
             self.next_batch = now + self.interval_h * 3600
             self._save()
 
-    def _enqueue(self, now, batch=False):
+    def _enqueue(self, now, batch=False, only_split=False):
         if self.q.qsize() >= self.max_queue:
             if not batch:
                 return          # 背压：暂停入队，队列不丢
             self.log("入队暂停：队列已满（%d），本轮跳过" % self.q.qsize())
             return
-        items = self._new_items()
+        items = self._new_items(only_split=only_split)
         if not items:
             return
         cap = self.max_queue - self.q.qsize()
@@ -331,7 +367,8 @@ class Link:
                 self.pending.append(it)
                 self.pending_keys.add(it["key"])
             n += 1
-        self.log("%s入队 %d 项%s" % ("批量" if batch else "即时", n,
+        self.log("%s入队 %d 项%s" % ("批量" if batch else
+                                     ("切片" if only_split else "即时"), n,
                                      ("（积压 %d）" % (len(items) - n)) if len(items) > n else ""))
 
     def trigger(self):
@@ -385,6 +422,25 @@ class Link:
                     "bytes_out": 0, "detail": res}
 
         out = condense.clip_path(self.root, it.get("dir") or it["cam"], src)
+        if it.get("style") == "split":
+            # 活动切片：每个区间独立成片（帧级切点，QSV 失败自动回落软编/流复制）
+            w = condense.write_split(self.ffmpeg, src, out[:-4],
+                                     res["windows"],
+                                     os.path.join(self.var_dir, "tmp", it["key"]),
+                                     hw="qsv",
+                                     speed=self.clip_speed_of(it["cam"]))
+            if not w["ok"]:
+                return {"ok": False, "reason": "export", "error": w.get("error"),
+                        "detail": res}
+            size_out = 0
+            for q in (w.get("files") or []):
+                try:
+                    size_out += os.path.getsize(q)
+                except OSError:
+                    pass
+            return {"ok": True, "silent": False, "bytes_in": size_in,
+                    "bytes_out": size_out, "out": out, "detail": res,
+                    "parts": w.get("parts", 0)}
         w = condense.write_one(self.ffmpeg, src, out, res["windows"],
                                os.path.join(self.var_dir, "tmp", it["key"]),
                                speed=self.clip_speed_of(it["cam"]))
@@ -426,6 +482,8 @@ class Link:
                         where = os.path.relpath(r.get("out") or "", self.root)
                     except ValueError:
                         where = r.get("out") or "?"
+                    if r.get("parts"):
+                        where = "%s（%d 个切片）" % (where, r["parts"])
                     self.log("缩时完成 %s → %s" % (os.path.basename(it["path"]), where))
                 self.stats["bytes_in"] += r.get("bytes_in", 0)
                 self.stats["bytes_out"] += r.get("bytes_out", 0)
@@ -487,6 +545,10 @@ class Link:
         self.mode = runtime.link_mode(cfg.get("link_mode"))
         self.interval_h = runtime.link_interval_h(cfg.get("link_interval_h"))
         self.seg_sec = runtime.segment_sec(cfg.get("record_segment_sec"))
+        new_style = runtime.clip_style(cfg.get("clip_style"))
+        if new_style != self.clip_style:
+            self.clip_style = new_style
+            self.log("通用切分方式改为%s" % runtime.CLIP_STYLE_LABEL[new_style])
         new_root = (str(cfg.get("record_dir") or "").strip() or self.root)
         if new_root != self.root:
             self.root = new_root
@@ -514,6 +576,8 @@ class Link:
         return {
             "mode": self.mode,
             "mode_label": "即刻压制" if self.mode == "live" else "定时压制",
+            "clip_style": self.clip_style,
+            "clip_style_label": runtime.CLIP_STYLE_LABEL[self.clip_style],
             "interval_h": self.interval_h,
             "segment_sec": self.seg_sec,
             "max_queue": self.max_queue,

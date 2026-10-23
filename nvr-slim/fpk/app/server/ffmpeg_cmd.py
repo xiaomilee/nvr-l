@@ -222,10 +222,14 @@ def encode_cmd(ffmpeg, src, out, enc, hw="qsv", night=False, ss=None, to=None):
         # fine 模式：setpts 放在 fps 之前 —— setpts 把时间轴压短，
         # _encode_filter 的 fps 封顶负责把"倍速后变密的帧"限回去。
         filt = "setpts=PTS/%s,%s" % (_num(speed), filt)
+    # -hwaccel 是输入选项，必须放在 -i 之前：放到输出侧 ffmpeg 会报
+    # "Error opening output files: Invalid argument"（0.9.38 真机活动切片
+    # 零输出的元凶——QSV 那一级从此必挂）。三处导出命令同一修法。
+    if hw == "qsv":
+        cmd += ["-hwaccel", "qsv"]
     cmd += ["-i", src]
     if hw == "qsv":
         # 编码支路允许一次下载：滤镜（去噪/缩放）在系统内存做，再交给 QSV 编码
-        cmd += ["-hwaccel", "qsv"]
         vcodec = "hevc_qsv" if codec == "hevc" else "h264_qsv"
         cmd += ["-vf", filt, "-c:v", vcodec,
                 "-global_quality", str(int(prof.get("quality", 26))),
@@ -245,6 +249,78 @@ def encode_cmd(ffmpeg, src, out, enc, hw="qsv", night=False, ss=None, to=None):
     if enc.get("faststart", True):
         cmd += ["-movflags", "+faststart"]
     cmd += ["-y", out]
+    return cmd
+
+
+def precise_cmd(ffmpeg, src, out, ss, to, hw="qsv", speed=1.0,
+                quality=26, fps_cap=15):
+    """活动切片的精确导出：重编码换帧级切点。
+
+    -ss/-to 放在 -i 前（输入侧 seek）+ 重编码，起点不再受关键帧约束。
+    输出固定 H.264：回放页走 <video> 标签，缩时片段里混进 HEVC 会有
+    浏览器播不了的坑；流复制路径的源本来就是摄像头的 H.264，不冲突。
+
+    hw="qsv"   解码编码都走核显，4MP 单路只占个位数核（会话满/驱动坏时
+               由调用方回落 hw="none"，这里不做探测）；
+    hw="none"  libx264 veryfast：任何 NAS 都编得动，画质对监控画面足够。
+    speed>1    与 fast 路径同规则：setpts 压时间轴 + fps 封顶，否则 2×
+               的 25fps 源会变成 50fps，文件反而更大。
+    """
+    try:
+        speed = float(speed or 1.0)
+    except (TypeError, ValueError):
+        speed = 1.0
+    if speed < 1.0:
+        speed = 1.0
+    cap = max(5, min(60, int(fps_cap or 15)))
+    cmd = _head(ffmpeg)
+    if ss is not None:
+        cmd += ["-ss", _num(ss)]
+    if to is not None:
+        cmd += ["-to", _num(to)]
+    # 同 encode_cmd：-hwaccel 是输入选项，必须在 -i 之前
+    if hw == "qsv":
+        cmd += ["-hwaccel", "qsv"]
+    cmd += ["-i", src, "-map", "0:v:0", "-an"]
+    if speed > 1.0:
+        filt = "setpts=PTS/%s,fps=%d" % (_num(speed), cap)
+    else:
+        filt = "null"
+    if hw == "qsv":
+        cmd += ["-vf", filt,
+                "-c:v", "h264_qsv", "-global_quality", str(int(quality)),
+                "-preset", "medium"]
+    else:
+        cmd += ["-vf", filt,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", str(int(quality))]
+    cmd += ["-movflags", "+faststart", "-y", out]
+    return cmd
+
+
+def copy_speed_cmd(ffmpeg, src, out, ss, to, speed=1.0):
+    """终极兜底：转封装 + 时间戳缩放，**不经过任何编码器**。
+
+    0.9.39 起 _export_precise 的最后一级。之前的兜底走 -c copy 没问题，
+    但 speed>1 时 encode_cmd 会悄悄换成 libx264 重编码 —— 在没有 libx264
+    的 ffmpeg（LGPL 构建、裁剪版）上三级回落全灭，表现就是活动切片
+    零输出。itsscale 直接改输入时间戳实现倍速：全部帧保留、播放时长按
+    倍数缩短，任何 ffmpeg 都能跑；代价是体积不缩（兜底要的是"有输出"，
+    不是省空间）。切点仍受关键帧约束。
+    """
+    try:
+        speed = float(speed or 1.0)
+    except (TypeError, ValueError):
+        speed = 1.0
+    speed = max(1.0, speed)
+    cmd = _head(ffmpeg)
+    if ss is not None:
+        cmd += ["-ss", _num(ss)]
+    if to is not None:
+        cmd += ["-to", _num(to)]
+    cmd += ["-itsscale", _num(1.0 / speed), "-i", src,
+            "-map", "0:v:0", "-an", "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart", "-y", out]
     return cmd
 
 
@@ -286,9 +362,11 @@ def speed_cmd(ffmpeg, src, out, speed=2.0, mode="pts", enc=None, hw="qsv"):
     prof = dict(enc or {}, denoise=0, scale=100)
     prof["fps"] = max(1, int(round(30 / speed)))
     filt = "setpts=PTS/%s,%s" % (_num(speed), _encode_filter(prof))
+    if hw == "qsv":
+        cmd += ["-hwaccel", "qsv"]
     cmd += ["-i", src]
     if hw == "qsv":
-        cmd += ["-hwaccel", "qsv", "-vf", filt,
+        cmd += ["-vf", filt,
                 "-c:v", "hevc_qsv", "-global_quality", "28", "-preset", "medium"]
     else:
         cmd += ["-vf", filt, "-c:v", "libx265", "-crf", "28",

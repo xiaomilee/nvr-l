@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NVR-L 回放页改版设计稿 v1.1</title>
+<style>
+:root{
+  --bg:#f4f5f7; --surface:#fff; --line:#e8eaef; --text:#1b1e24; --muted:#6a7280; --faint:#9aa1ac;
+  --primary:#2f6bff; --primary-soft:#ecf1ff; --keep:#1f9d63; --danger:#d43b3b;
+  --fill:#eef1f5; --track:#e3e7ee; --stage:#e9ebf0;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#dfe3ea;color:var(--text);
+  font:15px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  padding:28px 20px 60px}
+.mono{font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;font-variant-numeric:tabular-nums}
+h1{font-size:20px;margin:0 0 4px}
+.sub1{color:var(--muted);font-size:13px;margin-bottom:24px}
+.frames{display:flex;gap:34px;flex-wrap:wrap;align-items:flex-start}
+.frame{display:flex;flex-direction:column;gap:12px}
+.fcap{font-size:14px;font-weight:600}
+.fcap small{font-weight:400;color:var(--muted);margin-left:6px}
+
+/* ---- 手机框 ---- */
+.phone{
+  position:relative;width:390px;height:760px;background:var(--surface);
+  border-radius:36px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 0 0 9px #12151a, 0 0 0 11px #2a2f38, 0 20px 48px rgba(15,20,35,.32);
+}
+/* 横屏全屏框 */
+.phone.land{width:760px;height:390px;border-radius:28px}
+
+/* ---- 播放器顶部 ---- */
+.p-top{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:12px 14px 8px}
+.p-ico{width:34px;height:34px;border-radius:50%;background:var(--fill);display:grid;place-items:center;flex:0 0 auto}
+.p-ico svg{width:17px;height:17px;stroke:var(--text);fill:none;stroke-width:2.2;stroke-linecap:round}
+.p-top .tt{flex:1;min-width:0}
+.p-top .ttl{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p-top .ttl .seg{color:var(--primary);font-weight:600}
+.p-top .sub{font-size:11.5px;color:var(--muted)}
+.p-more{width:34px;height:34px;display:grid;place-items:center}
+.p-more svg{width:18px;height:18px;fill:var(--muted)}
+
+/* ---- 画面区 ---- */
+.stage{position:relative;background:#0d1016;border-radius:12px;margin:2px 12px 0;overflow:hidden;flex:0 0 auto}
+.stage canvas,.stage .vid{display:block;width:100%;height:auto;aspect-ratio:16/9;background:
+  linear-gradient(160deg,#232b38 0%,#151a22 60%,#10141b 100%)}
+.osd{position:absolute;left:10px;top:8px;color:#dfe6ef;font-size:10.5px;line-height:1.5;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+.osd .rec{color:#ff5f56}
+.osd .rec i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff5f56;margin-right:4px}
+.qchip{position:absolute;right:10px;top:8px;font-size:10px;color:#cfd8e3;background:rgba(10,14,20,.55);
+  border-radius:99px;padding:2px 8px}
+.ring{position:absolute;inset:0;display:grid;place-items:center}
+.ring .c{width:54px;height:54px;border-radius:50%;background:rgba(10,14,20,.55);display:grid;place-items:center}
+.ring svg{width:26px;height:26px;fill:#fff;margin-left:2px}
+.hide{display:none!important}
+
+/* ---- 控制区 ---- */
+.p-ctrl{flex:1;display:flex;flex-direction:column;padding:10px 16px 14px}
+/* ① 进度条上方三时刻：起始 · 当前（跟随进度点） · 结束 */
+.times{display:flex;align-items:baseline;font-size:12px;margin-bottom:2px}
+.times .cur{flex:1;text-align:center;color:var(--primary);font-weight:600;font-size:12.5px}
+.times .end{}
+.times .l{color:var(--faint);font-size:10px;margin-right:4px}
+/* 进度条：轨道加粗、触控区扩大 */
+.bar{padding:9px 0 12px;cursor:pointer}      /* 透明 padding 即扩大后的触控区 */
+.bar .track{position:relative;height:4px;background:var(--track);border-radius:99px}
+.bar .fill{position:absolute;left:0;top:0;bottom:0;background:var(--primary);border-radius:99px}
+.bar .knob{position:absolute;top:50%;width:16px;height:16px;border-radius:50%;background:#fff;
+  border:2px solid var(--primary);transform:translate(-50%,-50%);
+  box-shadow:0 1px 4px rgba(20,30,60,.28)}
+/* ② 文件播放进度行：00:00 · 当前 · 总长 */
+.fprog{display:flex;font-size:11px;color:var(--muted);margin-bottom:10px}
+.fprog .cur{flex:1;text-align:center}
+.fprog .dur{}
+/* 按钮行 */
+.btns{display:flex;align-items:center;justify-content:space-between;padding:0 8px}
+.pb{width:52px;height:44px;display:grid;place-items:center;border-radius:12px}
+.pb svg{width:21px;height:21px;stroke:var(--text);fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.pb .spd{font-size:13.5px;font-weight:600;color:var(--text)}
+.pb.big{width:62px;height:62px;border-radius:50%;background:var(--primary-soft)}
+.pb.big svg{width:26px;height:26px;stroke:var(--primary);fill:var(--primary)}
+.hint{ text-align:center;color:var(--faint);font-size:11px;margin-top:8px}
+
+/* 倍速弹出菜单 */
+.speedpop{position:absolute;right:26px;bottom:186px;background:var(--surface);border:1px solid var(--line);
+  border-radius:14px;box-shadow:0 10px 30px rgba(20,30,60,.18);padding:6px;z-index:5}
+.speedpop button{display:block;width:100%;text-align:center;padding:7px 18px;border-radius:9px;font-size:13.5px;color:var(--text)}
+.speedpop button.on{background:var(--primary-soft);color:var(--primary);font-weight:600}
+
+/* ⋯ 导出菜单 */
+.mask{position:absolute;inset:0;background:rgba(10,14,20,.35);z-index:4}
+.morepop{position:absolute;right:12px;top:62px;width:272px;background:var(--surface);border:1px solid var(--line);
+  border-radius:14px;box-shadow:0 12px 34px rgba(20,30,60,.22);padding:6px;z-index:5}
+.morepop .mp-fn{font-size:11px;color:var(--muted);padding:6px 10px 2px;word-break:break-all}
+.morepop button{display:block;width:100%;text-align:left;padding:10px 10px;border-radius:9px;font-size:13.5px;color:var(--text)}
+.morepop button:active{background:var(--fill)}
+.morepop .mp-hint{font-size:10.5px;color:var(--faint);padding:4px 10px 8px;line-height:1.5}
+
+/* ---- 全屏横屏 ---- */
+.land .stage{margin:0;border-radius:0;flex:1;height:100%}
+.land .stage canvas,.land .stage .vid{height:100%;aspect-ratio:auto}
+.land .osd{left:16px;top:12px;font-size:12px}
+.land .exit{position:absolute;right:14px;top:12px;color:#dfe6ef;font-size:12px;
+  background:rgba(10,14,20,.55);border-radius:99px;padding:4px 12px}
+.land .fsbar{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(5,8,12,.82));
+  padding:26px 18px 12px}
+.land .fsbar .times{color:#e8edf4;font-size:12.5px;margin-bottom:2px}
+.land .fsbar .times .l{color:rgba(230,238,248,.6)}
+.land .fsbar .times .cur{color:#7ea4ff}
+.land .fsbar .bar .track{background:rgba(255,255,255,.22)}
+.land .fsbar .fprog{color:rgba(230,238,248,.75)}
+.land .fsbar .btns{padding:0 30px}
+.land .fsbar .pb svg{stroke:#fff}
+.land .fsbar .pb.big{background:rgba(255,255,255,.16)}
+.land .fsbar .pb.big svg{stroke:#fff;fill:#fff}
+.land .fsbar .spd{color:#fff}
+.fshint{position:absolute;left:0;right:0;bottom:14px;text-align:center;color:rgba(235,242,250,.75);
+  font-size:12px;text-shadow:0 1px 3px rgba(0,0,0,.7)}
+
+/* ---- 标注 ---- */
+.notes{margin-top:36px;max-width:1180px}
+.note{display:flex;gap:10px;margin-bottom:12px;font-size:13.5px;line-height:1.65}
+.note b.n{flex:0 0 22px;height:22px;border-radius:50%;background:var(--primary);color:#fff;
+  display:grid;place-items:center;font-size:12px;margin-top:2px}
+.note code{background:var(--fill);border-radius:5px;padding:1px 6px;font-size:12px}
+</style>
+</head>
+<body>
+
+<h1>NVR-L 回放页改版 · 设计稿 v1.1</h1>
+<div class="sub1">v1.1 按反馈调整：倍速上限 8× · 当前时刻固定居中（不跟随进度条）· 新增「导出当前文件」方案 · 附多日筛选错乱 bug 的根因与修复。确认后按此实现。</div>
+
+<div class="frames">
+
+  <!-- ========= 帧 1：播放中（竖屏） ========= -->
+  <div class="frame">
+    <div class="fcap">① 播放页 · 播放中 <small>竖屏 · 新进度区 + 新按钮排布</small></div>
+    <div class="phone">
+      <div class="p-top">
+        <div class="p-ico"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></div>
+        <div class="tt">
+          <div class="ttl">车库入口 · 检测到活动 <span class="seg">· 第 2/5 段</span></div>
+          <div class="sub mono">覆盖 10:04:11 – 10:09:02 · 播放 00:12</div>
+        </div>
+        <div class="p-more"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></div>
+      </div>
+
+      <div class="stage">
+        <div class="vid"></div>
+        <div class="osd mono">CH01<br><span class="rec"><i></i></span><span style="color:#dfe6ef">10月22日 10:06:23 · 缩时</span></div>
+        <div class="qchip mono">缩时 8×</div>
+      </div>
+
+      <div class="p-ctrl">
+        <!-- ① 进度条上方：起始 · 当前 · 结束 -->
+        <div class="times mono">
+          <span><span class="l">起始</span>10:04:11</span>
+          <span class="cur">10:06:23</span>
+          <span class="end"><span class="l">结束</span>10:09:02</span>
+        </div>
+        <!-- ④ 触控区加高、旋钮加大 -->
+        <div class="bar">
+          <div class="track">
+            <div class="fill" style="width:42%"></div>
+            <div class="knob" style="left:42%"></div>
+          </div>
+        </div>
+        <!-- ① 进度条下方：本文件播放进度 -->
+        <div class="fprog mono">
+          <span>00:00</span>
+          <span class="cur" style="margin-left:0;transform:none;flex:1;text-align:center">00:05</span>
+          <span class="dur">00:12</span>
+        </div>
+
+        <!-- ③ 按钮重排：倍速 / 上一段 / 播放暂停 / 下一段 / 全屏 -->
+        <div class="btns">
+          <button class="pb"><span class="spd mono">1×</span></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M7 6v12M18 6l-8 6 8 6z"/></svg></button>
+          <button class="pb big"><svg viewBox="0 0 24 24"><path d="M7 5h3.4v14H7zM13.6 5H17v14h-3.4z"/></svg></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M17 6v12M6 6l8 6-8 6z"/></svg></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        </div>
+        <div class="hint">左右滑动切换片段 · 倍速对缩时/全时同样生效</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========= 帧 2：暂停 + 倍速菜单 ========= -->
+  <div class="frame">
+    <div class="fcap">② 播放页 · 暂停 + 倍速菜单展开 <small>点「1×」在按钮上方弹出</small></div>
+    <div class="phone">
+      <div class="p-top">
+        <div class="p-ico"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></div>
+        <div class="tt">
+          <div class="ttl">车库入口 · 检测到活动 <span class="seg">· 第 2/5 段</span></div>
+          <div class="sub mono">覆盖 10:04:11 – 10:09:02 · 播放 00:12</div>
+        </div>
+        <div class="p-more"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></div>
+      </div>
+
+      <div class="stage">
+        <div class="vid"></div>
+        <div class="osd mono">CH01<br><span style="color:#dfe6ef">10月22日 10:06:23 · 缩时</span></div>
+        <div class="ring"><div class="c"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>
+      </div>
+
+      <div class="p-ctrl">
+        <div class="times mono">
+          <span><span class="l">起始</span>10:04:11</span>
+          <span class="cur">10:06:23</span>
+          <span class="end"><span class="l">结束</span>10:09:02</span>
+        </div>
+        <div class="bar">
+          <div class="track">
+            <div class="fill" style="width:42%"></div>
+            <div class="knob" style="left:42%"></div>
+          </div>
+        </div>
+        <div class="fprog mono">
+          <span>00:00</span>
+          <span class="cur" style="margin-left:0;transform:none;flex:1;text-align:center">00:05</span>
+          <span class="dur">00:12</span>
+        </div>
+        <div class="speedpop">
+          <button class="on mono">1×</button>
+          <button class="mono">2×</button>
+          <button class="mono">4×</button>
+          <button class="mono">8×</button>
+        </div>
+        <div class="btns">
+          <button class="pb"><span class="spd mono">1×</span></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M7 6v12M18 6l-8 6 8 6z"/></svg></button>
+          <button class="pb big"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M17 6v12M6 6l8 6-8 6z"/></svg></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        </div>
+        <div class="hint">倍速应用于当前段及后续连续播放（0.5× 不做，档位 1/2/4/8×）</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========= 帧 2b：⋯ 菜单（导出当前文件） ========= -->
+  <div class="frame">
+    <div class="fcap">③ 播放页 · 右上「⋯」菜单 <small>导出当前播放文件的入口</small></div>
+    <div class="phone">
+      <div class="p-top">
+        <div class="p-ico"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></div>
+        <div class="tt">
+          <div class="ttl">车库入口 · 检测到活动 <span class="seg">· 第 2/5 段</span></div>
+          <div class="sub mono">覆盖 10:04:11 – 10:09:02 · 播放 00:12</div>
+        </div>
+        <div class="p-more"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></div>
+      </div>
+
+      <div class="stage">
+        <div class="vid"></div>
+        <div class="osd mono">CH01<br><span style="color:#dfe6ef">10月22日 10:06:23 · 缩时</span></div>
+      </div>
+
+      <div class="p-ctrl">
+        <div class="times mono">
+          <span><span class="l">起始</span>10:04:11</span>
+          <span class="cur">10:06:23</span>
+          <span class="end"><span class="l">结束</span>10:09:02</span>
+        </div>
+        <div class="bar">
+          <div class="track">
+            <div class="fill" style="width:42%"></div>
+            <div class="knob" style="left:42%"></div>
+          </div>
+        </div>
+        <div class="fprog mono">
+          <span>00:00</span>
+          <span class="cur">00:05</span>
+          <span class="dur">00:12</span>
+        </div>
+        <div class="btns">
+          <button class="pb"><span class="spd mono">1×</span></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M7 6v12M18 6l-8 6 8 6z"/></svg></button>
+          <button class="pb big"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M17 6v12M6 6l8 6-8 6z"/></svg></button>
+          <button class="pb"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        </div>
+      </div>
+
+      <!-- 导出菜单（右上 ⋯ 弹出） -->
+      <div class="morepop">
+        <div class="mp-fn mono">车库入口_2026-10-22_100411.mp4</div>
+        <button>⬇︎ 导出当前文件（MP4 · 3.2 MB）</button>
+        <button>🔗 复制下载链接</button>
+        <div class="mp-hint">导出即原画质源文件，不做转码；全时与缩时均可导出</div>
+      </div>
+      <div class="mask"></div>
+    </div>
+  </div>
+
+  <!-- ========= 帧 3：全屏横屏（暂停，控制浮现） ========= -->
+  <div class="frame">
+    <div class="fcap">④ 全屏横屏 · 暂停时控制浮现 <small>真全屏（横屏铺满整个屏幕，非容器内旋转）</small></div>
+    <div class="phone land">
+      <div class="stage">
+        <div class="vid" style="width:100%;height:100%"></div>
+        <div class="osd mono">CH01 · 10月22日 10:06:23 · 缩时</div>
+        <div class="exit">退出全屏 ✕</div>
+        <div class="ring"><div class="c"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>
+        <!-- 暂停时浮现的底部控制 -->
+        <div class="fsbar">
+          <div class="times mono">
+            <span><span class="l">起始</span>10:04:11</span>
+            <span class="cur">10:06:23</span>
+            <span class="end"><span class="l">结束</span>10:09:02</span>
+          </div>
+          <div class="bar">
+            <div class="track">
+              <div class="fill" style="width:42%"></div>
+              <div class="knob" style="left:42%"></div>
+            </div>
+          </div>
+          <div class="fprog mono">
+            <span>00:00</span>
+            <span class="cur" style="margin-left:0;transform:none;flex:1;text-align:center">00:05</span>
+            <span class="dur">00:12</span>
+          </div>
+          <div class="btns">
+            <button class="pb"><span class="spd mono">1×</span></button>
+            <button class="pb"><svg viewBox="0 0 24 24"><path d="M7 6v12M18 6l-8 6 8 6z"/></svg></button>
+            <button class="pb big"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+            <button class="pb"><svg viewBox="0 0 24 24"><path d="M17 6v12M6 6l8 6-8 6z"/></svg></button>
+            <button class="pb"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========= 帧 4：全屏横屏（播放中，控制隐藏） ========= -->
+  <div class="frame">
+    <div class="fcap">⑤ 全屏横屏 · 播放中 <small>按钮全部隐藏，只留画面与极简提示</small></div>
+    <div class="phone land">
+      <div class="stage">
+        <div class="vid" style="width:100%;height:100%"></div>
+        <div class="osd mono">CH01 · 10月22日 10:06:23 · 缩时</div>
+        <div class="fshint">轻点画面 → 暂停并显示控制</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="notes">
+  <div class="note"><b class="n">1</b><div><b>双层时间轴：</b>进度条上方一行 =「起始时刻 · <b>当前时刻（固定居中，不随进度点移动）</b> · 结束时刻」（缩时片段显示<b>源钟点</b>，全时显示录像钟点）；进度条下方一行 = 本文件的播放进度「00:00 · 当前 · 总长」（<code>mm:ss</code>，当前值同样固定居中）。两行当前值都用主色高亮。</div></div>
+  <div class="note"><b class="n">2</b><div><b>段数去重 + 按筛选计数：</b>标题栏保留「第 x/y 段」（第一处），副标题改为「覆盖 10:04:11 – 10:09:02 · 播放 00:12」，不再重复段号。y 与 x 均按<b>当前筛选时段</b>计算：点了 10:00–12:00 热力格后，进入第 1 段显示「第 1/3 段」（该时段共 3 段），而不是全天的 1/57；选中筛选时段时，上一段/下一段也只在筛选范围内切换，不再跳出 10:00–12:00。列表页原有的段数统计不变。</div></div>
+  <div class="note"><b class="n">3</b><div><b>按钮重排为 5 键：</b>倍速（点按弹出 <b>1/2/4/8×</b> 菜单，当前档高亮，直接改 <code>video.playbackRate</code>）→ 上一段 → 暂停/播放 → 下一段 → 全屏。全屏走<b>真全屏 API</b>（Fullscreen API + 屏幕方向锁定横屏，WebView 不支持时退回铺满容器的旋转方案），画面横向铺满整块屏幕；播放中隐藏全部控制，暂停（或轻点画面）时底部控制条带渐显浮现，退出按钮常驻右上角。</div></div>
+  <div class="note"><b class="n">4</b><div><b>进度条触控优化：</b>现在难点拖是因为可点区域只有 4px 高的轨道。改法：给进度条上下各加约 12px 的<b>透明触控 padding</b>（命中区 ≥ 40px 高），旋钮从 10px 加大到 16px，<code>touch-action:none</code> 防止页面滚动抢手势；拖动中旋钮轻微放大反馈。点击跳转逻辑保持不变。</div></div>
+  <div class="note"><b class="n">5</b><div><b>导出当前文件（第 ③ 帧）：</b>入口放在播放页右上「⋯」菜单（现在是点了没反应的占位）。方案：<b>服务端</b>给现有 <code>/api/record/file</code> 加 <code>dl=1</code> 参数 —— 命中文件时加 <code>Content-Disposition: attachment; filename*=UTF-8''&lt;摄像头&gt;_&lt;日期&gt;_&lt;时刻&gt;.mp4</code>，其余（Range、鉴权、目录试探）全部复用，零新增文件读写；<b>前端</b>「⋯」弹出菜单显示文件名 +「导出当前文件」+「复制下载链接」，点导出直接 <code>location.href</code> 该地址，由系统下载器接手（fnOS 浏览器/文件管理都能收）。导出的是<b>原画质源文件</b>，不做转码；全时与缩时均可导。</div></div>
+  <div class="note"><b class="n">6</b><div><b>多日筛选错乱 · 根因已找到（随本轮一并修复）：</b><code>recalcDayList()</code> 把日期列表排成<b>新→旧</b>（<code>sort().reverse()</code>，全量），而 <code>renderDates()</code> 又把它重排成<b>旧→新</b>的<b>最后 7 天</b>（<code>sort().slice(-7)</code>）——两个函数各写各的，<code>state.dayIdx</code> 在两套顺序里指向不同的日子。点日期条上的某天 → <code>dayIdx=i</code> → <code>loadDay()</code> 先调 <code>recalcDayList()</code> 把列表翻成新→旧，再用 <code>dayList[i]</code> 取「当天」→ <b>取到的是另一天</b>（N 天里只有正中间那天碰巧对，只有 1 天数据时看不出来），随后 <code>renderDates()</code> 又把列表翻回去 —— 于是高亮的日子和加载的日子对不上，正是你看到的「筛选错乱」。<b>修复：</b>统一为「旧→新、全量」一种顺序（日期条本就横向可滚动），并用选中的<b>日期字符串</b>而非纯下标来保持选中，跨天零点新增文件也不会串。</div></div>
+</div>
+
+</body>
+</html>

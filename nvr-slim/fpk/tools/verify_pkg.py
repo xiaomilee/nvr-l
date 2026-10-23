@@ -2,7 +2,7 @@
 """独立校验 fpk 包内容：解开 app.tgz，逐项断言本轮改动都进包了。
 
 不依赖 build.sh 的输出，只看真实字节。
-    python tools/verify_pkg.py dist/nvr-0.9.28_x86.fpk
+    python tools/verify_pkg.py dist/nvr-0.9.41_x86.fpk
 """
 import hashlib
 import io
@@ -114,6 +114,56 @@ MUST_HAVE_UI = [
     "已保存在 NAS（本机不显示明文）· 留空 = 不修改",
     "已保存在 NAS · 本机不显示明文",
     "(p.main || c.hasUrl) && p.enabled !== false",
+    # 0.9.30/0.9.33：全天分布时间轴（全时/缩时 两行，常驻播放器画面上方）
+    'class="tlane p-tl" id="tlane"',
+    "function renderTl",
+    "function unionLen",
+    "function mergeBlocks",
+    "function tlPlay",
+    "压缩 ≈",
+    ".tl-track{flex:1;height:18px",
+    # 0.9.34：说明行上移、全宽色条、大触区
+    ".tl-cap{display:flex;justify-content:space-between",
+    ".p-tl{flex:0 0 auto;margin:2px 0 4px;padding:6px 12px 2px",
+    ".p-tl .tl-track{height:20px}",
+    # 0.9.35：底部热力格 = 时段选择器（选中琥珀描边 + 时间轴联动 + 再点取消）
+    ".ph-heat .phcell.sel{box-shadow:0 0 0 2px var(--warn);z-index:1}",
+    ".ph-heat .phcell.sel.on{box-shadow:0 0 0 2px var(--warn),0 0 0 4px rgba(92,141,255,.95)}",
+    "点格子选中时段 · 上方显示该时段分布",
+    "const toggle = state.hourBlock === i;",
+    # 0.9.36：顶部热力图 ↔ 底部 12 格双向联动
+    "const blk = Math.min(11, Math.max(0, Math.floor(t/7200)));",
+    '<span class="tl-all" data-tlall',
+    ".tl-all{font-size:10.5px;color:var(--primary)",
+    # 0.9.37：16/32× 倍速档 + 热力图播放定位竖线
+    "const SPEEDS = [1,2,4,8,16,32];",
+    "const rate = Math.min(x, 16);",
+    "function tlCursorFrac()",
+    ".tl-cursor{position:absolute;top:-1px;bottom:-1px;width:2px;background:#ff5a5a;",
+    "tlDens",
+    # 0.9.39：竖线与播放当前时刻红色
+    ".p-times .pt-c{flex:1;text-align:center;font-size:12.5px;font-weight:600;color:#ff6b6b}",
+    "Array.isArray(f.w) && f.w.length === 2",
+    # 0.9.38：切分方式（通用 + 每路）
+    "data-clipstyle",
+    "data-clipmode",
+    "缩时片段切分方式",
+    "function clipModeLabel",
+    "clip_style: LK.clipStyle",
+    "clip_mode: p.clipMode",
+    # 0.9.33：播放器黑底适配 + 横屏/全屏隐藏
+    ".p-tl .tl-track{background:rgba(255,255,255,.10)}",
+    ".phone.land .p-tl{display:none}",
+    ".player.fshide .p-tl{opacity:0;pointer-events:none}",
+    # 0.9.33：回放页排版精简（CH 行并入摄像头名行）
+    '<span class="hdr-sub" id="hdrSub">',
+    ".camsel .hdr-sub{font-weight:400",
+    # 0.9.31：播放页内嵌热力格（非全屏画面下方，点格跳播，横屏隐藏）
+    'id="pHeat"',
+    "function renderPlayerHeat",
+    "function pHeatJump",
+    ".phone.land .p-heat{display:none}",
+    "renderPlayerHeat();          /* 热力格高亮跟随当前片段，切段自动刷新 */",
 ]
 MUST_NOT_HAVE_UI = [
     # 第 2 项删掉的实时占用
@@ -152,6 +202,15 @@ MUST_NOT_HAVE_UI = [
     "lv-rec",
     "lv-badge",
     ".snap-ago.stale",
+    # 0.9.30：数字对比条被三轴时间轴取代
+    'id="rangeCmp"',
+    "renderRangeCmp",
+    'class="rangecmp"',
+    "rcbar",
+    "rcrow",
+    # 0.9.33：概览四格下线；时间轴缩放态（回到全天）下线
+    "ovKeep",
+    'id="tlBack"',
 ]
 MUST_HAVE_SRV = {
     "server/ffmpeg_cmd.py": [
@@ -161,6 +220,13 @@ MUST_HAVE_SRV = {
         "mpjpeg",
         # 0.9.18：倍速导出必须重编码压时间轴
         "setpts=PTS/",
+        # 0.9.38：活动切片的精确导出命令
+        "def precise_cmd",
+        '"-c:v", "h264_qsv"',
+        '"-c:v", "libx264", "-preset", "veryfast"',
+        # 0.9.39：免编码器兜底（itsscale 转封装）+ hwaccel 位置回归
+        "def copy_speed_cmd",
+        '"-itsscale", _num(1.0 / speed), "-i", src',
     ],
     "server/nvr_slim.py": [
         "MAX_LIVE_STREAMS = 8",
@@ -202,6 +268,20 @@ MUST_HAVE_SRV = {
         "url_clear",
         "sub_clear",
         '"***@" not in',
+        # 0.9.38：每路切分方式归一化与透传
+        'out[-1]["clip_mode"] = runtime.clip_mode(c.get("clip_mode"))',
+        '"clip_mode": runtime.clip_mode(c.get("clip_mode"))',
+        'cfg["clip_style"] = runtime.clip_style(body.get("clip_style"))',
+        # 0.9.39：活动切片 idx 侧车 → 真实源时间窗
+        "def _clip_window",
+        '_CLIP_SLICE_RE',
+        'x["w"] = w',
+        # 0.9.40：切片文件名白名单（.cNN.mp4）+ 客户端断开不刷日志
+        'NAME_CLIP_RE = re.compile(r"^\\d{2}-\\d{2}-\\d{2}(\\.c\\d{2,3})?\\.mp4$")',
+        'NAME_FULL_RE = re.compile(r"^\\d{2}-\\d{2}-\\d{2}\\.mp4$")',
+        'NAME_CLIP_RE if kind == "clip" else NAME_FULL_RE',
+        'except (BrokenPipeError, ConnectionResetError):\n            # 客户端主动断开',
+        'except (BrokenPipeError, ConnectionResetError):\n            self.close_connection = True      # 同 do_GET：客户端断开不算异常',
     ],
     "server/pixdiff.py": [
         # 像素差引擎：整条差分在 ffmpeg 滤镜里完成，Python 只解析每帧一个数
@@ -232,15 +312,32 @@ MUST_HAVE_SRV = {
     "server/sysinfo.py": [
         "_TICK = (0.0, 0.0, 0.0)",
     ],
-    "server/runtime.py": ['VERSION = "0.9.28"',
+    "server/runtime.py": ['VERSION = "0.9.41"',
                           'record_dir": "/vol1/@appshare/nvr-output"',
                           '"service_port": 18080',
-                          "def probe_record_dir"],
+                          "def probe_record_dir",
+                          # 0.9.38：通用切分方式（每路可覆盖）
+                          '"clip_style": "join"',
+                          "def clip_style",
+                          "def clip_mode",
+                          'CLIP_MODES = ("follow", "join", "split")'],
     # 0.9.18：缩时链路要把每路开关与倍速真正用起来
     # 0.9.22：判定必须把 ffmpeg 传下去，否则像素引擎永远走降级
-    "server/link.py": ["condense", "clip_speed_of", "a[\"engine\"]", "ffmpeg=self.ffmpeg"],
+    # 0.9.38：每路切分方式 + 活动切片导出路径
+    # 0.9.39：最新优先 + 免编码器兜底
+    # 0.9.41：排序按分片 mtime（路径倒序被中文目录码点劫持，一路独占）
+    "server/link.py": ["condense", "clip_speed_of", "a[\"engine\"]", "ffmpeg=self.ffmpeg",
+                       "def eff_clip_mode", "def clip_mode_of",
+                       'style=style', 'only_split=only_split',
+                       'it.get("style") == "split"',
+                       'out.sort(key=lambda x: (x["mtime"], x["path"]), reverse=True)'],
     "server/condense.py": ["def _pixel_analyze", "def pixel_threshold",
-                           "def cell_rects", "engine_note"],
+                           "def cell_rects", "engine_note",
+                           # 0.9.38：活动切片导出 + 三级回落 + 侧车索引
+                           "def write_split", "def _export_precise",
+                           "_HW_FAIL", "idx.json",
+                           # 0.9.39：终极兜底走免编码器转封装
+                           "def _export_copy", "force=True"],
 }
 MUST_NOT_HAVE_SRV = {
     # 只查「作为 ffmpeg 命令数组元素」出现的形式（带引号）；注释里提到这些
@@ -286,8 +383,8 @@ def main(path):
     mf = blobs["manifest"].decode("utf-8", "replace")
     import re as _re
     vline = _re.search(r"(?m)^\s*version\s*=\s*(\S+)", mf)
-    chk(bool(vline) and vline.group(1) == "0.9.28",
-        "manifest 版本号不是 0.9.28：%s" % (vline.group(1) if vline else "无"))
+    chk(bool(vline) and vline.group(1) == "0.9.41",
+        "manifest 版本号不是 0.9.41：%s" % (vline.group(1) if vline else "无"))
     print("manifest 版本行：%s"
           % [l for l in mf.splitlines() if l.strip().startswith("version")])
 
@@ -295,7 +392,7 @@ def main(path):
     cl = _re.search(r"(?m)^\s*changelog\s*=\s*(.+)$", mf)
     n_cl = len(cl.group(1).split(" | ")) if cl else 0
     print("changelog 分段：%d" % n_cl)
-    chk(n_cl >= 15, "changelog 只有 %d 段，本轮应有 15 段" % n_cl)
+    chk(n_cl >= 19, "changelog 只有 %d 段，本轮应有 19 段" % n_cl)
 
     # manifest 做 CRC 校验（fnOS 会校验，坏包直接装不上）
     crc_line = [l for l in mf.splitlines() if l.strip().startswith("crc")]
@@ -381,4 +478,4 @@ def main(path):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1] if len(sys.argv) > 1
-                  else "dist/nvr-0.9.28_x86.fpk"))
+                  else "dist/nvr-0.9.41_x86.fpk"))
