@@ -318,9 +318,9 @@ class TestProfileFromJudge(unittest.TestCase):
 
 class TestVersion(unittest.TestCase):
     def test_version(self):
-        self.assertEqual(nvr_slim.runtime.VERSION, "0.9.28")
+        self.assertEqual(nvr_slim.runtime.VERSION, "0.9.41")
         m = _read(os.path.join(ROOT, "manifest"))
-        self.assertRegex(m, r"(?m)^version\s*=\s*0\.9\.28\s*$")
+        self.assertRegex(m, r"(?m)^version\s*=\s*0\.9\.41\s*$")
 
 
 # ---------------------------------------------------------------- 真机滤镜链

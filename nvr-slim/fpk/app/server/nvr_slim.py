@@ -31,6 +31,13 @@ import sysinfo  # noqa: E402
 import ffmpeg_cmd  # noqa: E402
 import pixdiff  # noqa: E402
 
+# /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
+# 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
+# 不认这个后缀，切片在页面上全部 400。full 目录里永远不会出现 .cNN，
+# 分开校验，别让 full 请求拿一个切片名来撞目录。
+NAME_FULL_RE = re.compile(r"^\d{2}-\d{2}-\d{2}\.mp4$")
+NAME_CLIP_RE = re.compile(r"^\d{2}-\d{2}-\d{2}(\.c\d{2,3})?\.mp4$")
+
 STATE = {
     "started_at": time.time(),
     "app_dir": ".",
@@ -344,6 +351,9 @@ def norm_cameras(raw):
             not in ("0", "false", "off", "no")
         # 缩时倍速：只认 1/2/4/8，别的值一律回落 1（见 clip_speed_of）
         out[-1]["clip_speed"] = clip_speed_of(c.get("clip_speed"))
+        # 每路切分方式：follow=跟随通用 clip_style；join/split 显式覆盖。
+        # split（活动切片）对这一路强制「录完即切」，即使通用选了定时批量。
+        out[-1]["clip_mode"] = runtime.clip_mode(c.get("clip_mode"))
         # 单路分片长度：只在显式给了正数时才写，0/缺失表示"跟随通用设置"。
         # 写进来的必须是夹取过的值，否则前端传个 5 秒会让录制器疯狂切文件。
         if c.get("segment_sec"):
@@ -414,6 +424,8 @@ def cameras():
             "condense": str(c.get("condense", True)).strip().lower()
                         not in ("0", "false", "off", "no"),
             "clip_speed": clip_speed_of(c.get("clip_speed")),
+            # 每路切分方式（follow/join/split），消费端 link 按它选导出路径
+            "clip_mode": runtime.clip_mode(c.get("clip_mode")),
             # 单路分片长度（秒）。0/缺省 = 跟随「通用设置」里的 record_segment_sec。
             # 理由：分片长度是**写进 ffmpeg 命令行的物理参数**，不是界面偏好；
             # 想让"改了立刻生效"真正成立，就得让它成为每路可配、可被录制器比对的值。
@@ -765,6 +777,57 @@ def _attach_durations(days):
     return days
 
 
+# 活动切片（0.9.38 split 产物）与其 idx 侧车的解析。
+# <HH-MM-SS>.cNN.mp4 的「覆盖源」不能再用文件名推：同一源分片里的多个片段
+# 文件名前缀相同，按「下一个文件起点」的旧算法互相把覆盖压成 1 秒，末片又
+# 被兜成整段 5 分钟。idx 里存着每个片段在源分片内的 (ss,to)，加上分片起点
+# 钟点才是绝对钟点窗。
+_CLIP_SLICE_RE = re.compile(r"^(.+)\.c\d+\.mp4$", re.IGNORECASE)
+_IDX_CACHE = {}          # idx 绝对路径 -> ((size, mtime_ns), windows)
+_IDX_LOCK = threading.Lock()
+
+
+def _clip_window(day_dir, name):
+    """活动切片片段的真实源时间窗 [起, 止]（当天钟点秒）。非切片返回 None。"""
+    m = _CLIP_SLICE_RE.match(name)
+    if not m:
+        return None
+    base = m.group(1)
+    idx = os.path.join(day_dir, base + ".idx.json")
+    try:
+        st = os.stat(idx)
+        key = (st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+    with _IDX_LOCK:
+        hit = _IDX_CACHE.get(idx)
+    if not hit or hit[0] != key:
+        wins = []
+        try:
+            with open(idx, "r", encoding="utf-8") as fh:
+                wins = json.load(fh).get("windows") or []
+        except (OSError, ValueError):
+            wins = []
+        with _IDX_LOCK:
+            if len(_IDX_CACHE) > 20000:
+                _IDX_CACHE.clear()
+            _IDX_CACHE[idx] = (key, wins)
+        hit = (key, wins)
+    entry = next((e for e in hit[1] if e.get("file") == name), None)
+    if not entry:
+        return None
+    q = base[:8].split("-")
+    if len(q) != 3:
+        return None
+    try:
+        ss = float(entry["ss"])
+        to = float(entry["to"])
+        start = int(q[0]) * 3600 + int(q[1]) * 60 + int(q[2])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return [round(max(0.0, start + ss), 2), round(min(86400.0, start + to), 2)]
+
+
 def recordings_payload():
     """磁盘上真实存在的录像：每路每天有哪些分片、多大。
 
@@ -785,6 +848,11 @@ def recordings_payload():
                 days[f[0]] = [merged[k] for k in sorted(merged)]
             cbase = os.path.join(root, "_clip", dname)
             for f in _scan_day_dirs(cbase).items():
+                # 活动切片：趁 p 还在，按 idx 侧车补真实源时间窗（w）
+                for x in f[1]:
+                    w = _clip_window(os.path.join(cbase, f[0]), x["n"])
+                    if w:
+                        x["w"] = w
                 merged = {x["n"]: x for x in cdays.get(f[0], [])}
                 merged.update({x["n"]: x for x in f[1]})
                 cdays[f[0]] = [merged[k] for k in sorted(merged)]
@@ -1077,6 +1145,8 @@ def set_link(body):
     cfg = runtime.load_config(STATE["var_dir"])
     if "link_mode" in body:
         cfg["link_mode"] = runtime.link_mode(body.get("link_mode"))
+    if "clip_style" in body:
+        cfg["clip_style"] = runtime.clip_style(body.get("clip_style"))
     if "link_interval_h" in body:
         cfg["link_interval_h"] = runtime.link_interval_h(body.get("link_interval_h"))
     if "record_segment_sec" in body:
@@ -1159,8 +1229,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
         try:
+            # end_headers 也会真正写 socket（flush 头缓冲）：页面刷新时浏览器
+            # 会掐掉十几个还没发完的 /api/recordings 响应，这里不接住的话
+            # ConnectionResetError 会一路冒到 do_GET 的兜底，日志被刷屏。
+            self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -1169,6 +1242,11 @@ class Handler(BaseHTTPRequestHandler):
         self._responded = False
         try:
             return self._do_get()
+        except (BrokenPipeError, ConnectionResetError):
+            # 客户端主动断开（刷新页面/切换画面时浏览器掐掉挂起的请求）。
+            # 正常现象，记日志只会把真问题从 800 条环形缓冲里挤出去。
+            self.close_connection = True
+            return
         except Exception as e:
             _record("GET %s 异常：%s%s" % (urlparse(self.path).path, _tb_where(), _fmt_exc(e)))
             if self._responded:          # 头已经发出去了（MJPEG/下载中途出错），不能再发
@@ -1418,7 +1496,8 @@ class Handler(BaseHTTPRequestHandler):
         if cam_rec is None:
             return self._send(400, {"ok": False, "error": "bad cam"})
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", day) or \
-                not re.match(r"^\d{2}-\d{2}-\d{2}\.mp4$", name):
+                not NAME_CLIP_RE.match(name):
+            # .cNN = 活动切片（0.9.38 起），诊断探针同样要能指到它
             return self._send(400, {"ok": False, "error": "bad day/name"})
         full = None
         for dname in cam_storage_dirs(cam_rec):
@@ -1505,11 +1584,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"ok": False, "error": "bad cam"})
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
             return self._send(400, {"ok": False, "error": "bad day"})
-        if not re.match(r"^\d{2}-\d{2}-\d{2}\.mp4$", name):
-            return self._send(400, {"ok": False, "error": "bad name"})
         kind = (q.get("kind") or ["full"])[0]
         if kind not in ("full", "clip"):
             return self._send(400, {"ok": False, "error": "bad kind"})
+        if not ((NAME_CLIP_RE if kind == "clip" else NAME_FULL_RE).match(name)):
+            return self._send(400, {"ok": False, "error": "bad name"})
         # cam 参数是摄像头 id；实际目录可能是名称（新）或 id（旧），逐个试探
         cam_rec = next((c for c in cameras() if c["id"] == cam), None)
         if cam_rec is None:
@@ -1586,6 +1665,9 @@ class Handler(BaseHTTPRequestHandler):
         self._responded = False
         try:
             return self._do_post()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True      # 同 do_GET：客户端断开不算异常
+            return
         except Exception as e:
             _record("POST %s 异常：%s%s" % (urlparse(self.path).path, _tb_where(), _fmt_exc(e)))
             if self._responded:

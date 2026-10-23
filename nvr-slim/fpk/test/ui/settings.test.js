@@ -89,7 +89,7 @@ ck("编辑·未保存提示", h.includes("编辑中 · 未保存"));
 ck("手风琴·默认展第一段（名称与码流）", get('SET.acc') === "base"
    && h.includes('data-k="main"') && !h.includes('data-cond="1"'));
 ck("手风琴·四段标题齐全", (h.match(/data-acc="(base|keep|condense|mask)"/g) || []).length === 4);
-ck("手风琴·收起段标题带当前值", h.includes("全时 3 天") && h.includes("已开启 · 1× · 10 天"));
+ck("手风琴·收起段标题带当前值", h.includes("全时 3 天") && h.includes("整段拼接 · 1× · 10 天"));
 ck("手风琴·删除收在编辑页底部", h.includes('data-delcam="') && h.includes("删除这个摄像头")
    && h.includes("已录的文件不会被删除"));
 run('SET.acc="keep"; renderCamTabs();');
@@ -123,7 +123,7 @@ ck("缩时·展开后有画质滑杆", h.includes('data-k="day.crf"'));
 ck("缩时·画质折叠行收起时显示当前档", src.includes('(SET.outOpen ? "" : esc(qualLine(p)))'));
 run('SET.acc="mask"; SET.adv=false; SET.outOpen=false; renderCamTabs();');
 h = body();
-ck("缩时·收起后明细消失只剩标题条", !h.includes('data-cond="1"') && h.includes("已开启 · 1× · 10 天"));
+ck("缩时·收起后明细消失只剩标题条", !h.includes('data-cond="1"') && h.includes("整段拼接 · 1× · 10 天"));
 ck("缩时·展开后有忽略区画布", h.includes("maskCv-ig"));
 ck("编辑·画布可画", !h.includes("maskstage locked"));
 
@@ -411,7 +411,7 @@ ck("回放·双层时间轴元素齐全", src.includes('id="tStart"') && src.inc
    && src.includes('id="fDur"') && src.includes('class="pt-c"'));
 ck("回放·按钮五键（去掉±10s）", src.includes('id="bSpeed"') && src.includes('id="bNext"')
    && src.includes('id="bLand"') && !src.includes('id="bBack"') && !src.includes('id="bFwd"'));
-ck("回放·倍速只有 1/2/4/8", get('SPEEDS.join(",")') === "1,2,4,8");
+ck("回放·倍速档位 1/2/4/8/16/32", get('SPEEDS.join(",")') === "1,2,4,8,16,32");
 ck("回放·全屏播放中隐藏控制", src.includes("fshide") && src.includes("state.land && state.playing"));
 ck("回放·进度条触控优化（命中区+drag 反馈）", /touch-action:none/.test(src) && src.includes(".p-bar.drag .p-knob"));
 ck("回放·上一段/下一段图标方向已修正", src.includes("M7 6v12M18 6l-8 6 8 6z")
@@ -610,6 +610,310 @@ ck("全屏·异常胶囊可点且不触发画面点击",
 ck("全屏·状态行不再重复名字（syncLiveSub 按 fs 裁剪）",
    src.includes("function syncLiveSub()") && src.includes("+ (state.lrFs ? \"\" : '<span class=\"sep\">|</span><span class=\"mono\">'"));
 ck("全屏·进出全屏都刷新状态行", src.includes("syncLiveSub();                      /* 全屏形态下状态行少一段，重刷 */"));
+
+/* ---- 27. 0.9.34：播放页分布时间轴（跟随选中时段 · 全宽色条 · 大触区跳播） ---- */
+ck("时间轴·结构与函数就绪", src.includes('id="tlane"')
+   && typeof get("renderTl") === "function" && typeof get("unionLen") === "function"
+   && typeof get("mergeBlocks") === "function" && typeof get("tlPlay") === "function");
+/* 回归（0.9.30 真机 bug）：容器必须是空架子——早退分支 innerHTML="" 会清掉
+   静态子元素，之后 renderTl 再引用它们就是 null 崩溃，loadDay 中途夭折。
+   标题行必须每次随 innerHTML 重建。 */
+ck("时间轴·容器无静态子元素（防 innerHTML 自毁）",
+   src.includes('<div class="tlane p-tl" id="tlane" style="display:none"></div>'));
+ck("时间轴·标题行随渲染重建，不引用静态节点",
+   src.includes('<div class="tl-head"><b>')
+   && !src.includes('getElementById("tlTitle")')
+   && !src.includes('getElementById("tlBack")'));
+ck("时间轴·并集去重：重叠区间只记一次", get("unionLen([[0,100],[50,150],[200,260]], 0, 300)") === 210);
+ck("时间轴·并集裁剪到窗口外不算", get("unionLen([[10,20],[250,400]], 0, 300)") === 60);
+ck("时间轴·空清单返回 0", get("unionLen([], 0, 100)") === 0);
+ck("时间轴·相邻分片合并为一块（缝 ≤1s）",
+   JSON.stringify(get("mergeBlocks([[0,100],[100.5,200],[300,400]], 0, 86400)")) === "[[0,200],[300,400]]");
+ck("时间轴·真空档不合并不跨记",
+   JSON.stringify(get("mergeBlocks([[0,100],[200,300]], 0, 86400)")) === "[[0,100],[200,300]]");
+ck("时间轴·密度分档：密=1/中=0.62/疏=0.34",
+   get("tlDens(0.10)") === 1 && get("tlDens(0.03)") === 0.62 && get("tlDens(0.01)") === 0.34);
+
+/* 数据：10:00–12:00 两段全时（连续无缝）+ 两个缩时片（源覆盖各 1 小时，
+   播放时长 20s / 30s）→ 全天视角下全时 7200s 无断录，缩时看完 50s、压缩 144× */
+run('state.camId="cam-01"; state.dayIdx=0; state.dayList=["2026-10-22"];'
+  + 'state.rec={segment_sec:3600,'
+  + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1048576},{n:"11-00-00.mp4",b:1048576}]}},'
+  + 'clips:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:4096,d:20},{n:"11-00-00.mp4",b:4096,d:30}]}}};'
+  + 'state.hourBlock=-1; renderTl();');
+let rc = get('document.getElementById("tlane").innerHTML');
+ck("时间轴·显示", get('document.getElementById("tlane").style.display') === "block");
+ck("时间轴·默认「全天分布」", rc.includes("全天分布"));
+ck("时间轴·全天态提示「点色块选中时段」", rc.includes("点色块选中时段") && !rc.includes("点色块跳播"));
+
+/* 0.9.36 顶部热力图 ↔ 底部 12 格双向联动 */
+ck("联动·全天态点色块选中所在 2 小时格（源码含选格逻辑）",
+   src.includes("const blk = Math.min(11, Math.max(0, Math.floor(t/7200)));")
+   && src.includes("state.hourBlock = blk;")
+   && src.includes("renderPlayerHeat();    /* 底部 12 格选中描边 */"));
+ck("联动·放大态头部有「‹ 全天」返回钮",
+   src.includes('<span class="tl-all" data-tlall')
+   && src.includes("if(all) all.onclick = ()=>{"));
+ck("联动·放大态提示切回「点色块跳播」", (()=>{
+  run('state.hourBlock=5; renderTl();');
+  const z = get('document.getElementById("tlane").innerHTML');
+  run('state.hourBlock=-1; renderTl();');
+  return z.includes("点色块跳播") && z.includes(">‹ 全天</span>");
+})());
+ck("时间轴·说明行在色条上方（tl-cap 结构，色条独占全宽）",
+   rc.includes('<div class="tl-cap"><span class="tl-lbl">')
+   && rc.includes('</span></div><span class="tl-track" data-tlkind='));
+ck("时间轴·只剩全时/缩时两行（真实时段行下线）",
+   rc.includes("全时录像") && rc.includes("缩时录像") && !rc.includes("真实时段"));
+ck("时间轴·无「回到全天」", !rc.includes("回到全天"));
+ck("时间轴·全时 2 时 0 分 · 无断录", rc.includes("2 时 0 分 · 无断录"));
+ck("时间轴·缩时看完仅需 50 秒", rc.includes("50 秒"));
+ck("时间轴·压缩倍率 144×", rc.includes("压缩 ≈144.0×"));
+ck("时间轴·24 小时刻度（00…24）", rc.includes("<span>00</span>") && rc.includes("<span>24</span>"));
+ck("时间轴·全时块绿色 / 缩时块琥珀带密度透明度",
+   rc.includes("background:var(--keep)")
+   && rc.includes("background:var(--warn);opacity:0.34"));
+/* 0.9.34：选中热力格（hourBlock=5 → 10:00–12:00）→ 时间轴放大到该窗口，
+   块位置按窗口折算，摘要改覆盖率口径 */
+run('state.hourBlock=5; renderTl();');
+let rz = get('document.getElementById("tlane").innerHTML');
+ck("时间轴·选中时段后标题带窗口钟点", rz.includes("10:00 – 12:00 分布"));
+ck("时间轴·放大后 30 分钟刻度（10:00…12:00）",
+   rz.includes("<span>10:00</span>") && rz.includes("<span>12:00</span>"));
+ck("时间轴·放大后全时按覆盖率", rz.includes("覆盖 100%"));
+ck("时间轴·块位置按窗口折算（10:00 → left:0.00%）", rz.includes("left:0.00%"));
+ck("时间轴·取消选中回到全天", (()=>{
+  run('state.hourBlock=-1; renderTl();');
+  return get('document.getElementById("tlane").innerHTML') === rc;
+})());
+ck("时间轴·色条贯穿全宽、加高方便点按",
+   src.includes(".p-tl{flex:0 0 auto;margin:2px 0 4px;padding:6px 12px 2px")
+   && src.includes(".p-tl .tl-track{height:20px}")
+   && src.includes(".tl-track{flex:1;height:18px"));
+/* 密度分档映射到块：疏 0.34 / 中 0.62 / 密 1（d = 播放秒/源秒） */
+run('state.rec={segment_sec:3600,'
+  + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1048576}]}},'
+  + 'clips:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:4096,d:100},{n:"11-00-00.mp4",b:4096,d:300}]}}};'
+  + 'renderTl();');
+rc = get('document.getElementById("tlane").innerHTML');
+ck("时间轴·密度深浅上轴（0.62 与 1 档）",
+   rc.includes("opacity:0.62") && rc.includes("opacity:1"));
+ck("时间轴·色块按 track 委托跳播（full/clip 各一条）",
+   (rc.match(/data-tlkind="full"/g) || []).length === 1
+   && (rc.match(/data-tlkind="clip"/g) || []).length === 1
+   && src.includes("el.querySelectorAll(\"[data-tlkind]\").forEach(tk=>{"));
+
+/* 断录统计：两段全时（10–11、12–13），中间 11–12 是真空档 */
+run('state.rec={segment_sec:3600,'
+  + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1048576},{n:"12-00-00.mp4",b:1048576}]}},'
+  + 'clips:{"cam-01":{}}}; renderTl();');
+rc = get('document.getElementById("tlane").innerHTML');
+ck("时间轴·断录段数进摘要", rc.includes("断录 1 段"));
+ck("时间轴·缺缩时显示「无缩时片段」", rc.includes("无缩时片段"));
+
+/* 全天视角下的缩时折算：09:30 起源跨 1 小时、播放 60s → 覆盖 3600s、
+   观看 60s、压缩 60×，块从 39.58% 处起画 */
+run('state.rec={segment_sec:3600,'
+  + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1048576}]}},'
+  + 'clips:{"cam-01":{"2026-10-22":[{n:"09-30-00.mp4",b:4096,d:60}]}}};'
+  + 'renderTl();');
+rc = get('document.getElementById("tlane").innerHTML');
+ck("时间轴·缩时折算观看 1 分 0 秒 · 压缩 60×", rc.includes("1 分 0 秒") && rc.includes("压缩 ≈60.0×"));
+ck("时间轴·块按源时刻落位（09:30 → left:39.58%）", rc.includes("left:39.58%"));
+
+/* 缺数据如实显示，不冒充 */
+run('state.rec={segment_sec:3600,'
+  + 'cameras:{"cam-01":{}},'
+  + 'clips:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:4096,d:20}]}}};'
+  + 'renderTl();');
+rc = get('document.getElementById("tlane").innerHTML');
+ck("时间轴·缺全时显示「无录像」（有缩时仍显示）", rc.includes("全时录像") && rc.includes("无录像"));
+
+/* 全天无任何录像 → 整块隐藏 */
+run('state.rec={segment_sec:3600, cameras:{"cam-01":{}}, clips:{"cam-01":{}}}; renderTl();');
+ck("时间轴·无任何录像整块隐藏", get('document.getElementById("tlane").style.display') === "none");
+
+/* 0.9.33 位置与形态：常驻播放器画面上方（p-top 之后、stage 之前），黑底适配 */
+ck("时间轴·组件在播放器内、画面上方",
+   src.indexOf('class="tlane p-tl" id="tlane"') >= 0
+   && src.indexOf('class="tlane p-tl" id="tlane"') < src.indexOf('<div class="stage" id="stage">'));
+ck("时间轴·播放器黑底适配",
+   src.includes(".p-tl .tl-track{background:rgba(255,255,255,.10)}")
+   && src.includes(".p-tl .tl-lbl{color:rgba(255,255,255,.45)}"));
+ck("时间轴·横屏/全屏整块隐藏",
+   src.includes(".phone.land .p-tl{display:none}")
+   && src.includes(".player.fshide .p-tl{opacity:0;pointer-events:none}"));
+ck("时间轴·openPlayer 接线（打开/切段刷新）",
+   src.includes("renderPlayerHeat();") && /renderPlayerHeat\(\);[\s\S]{0,80}?renderTl\(\);/.test(src));
+ck("时间轴·renderHeat 末尾接线联动", /renderTl\(\);\n\}/.test(src));
+
+/* ---- 27b. 0.9.33 回放页排版精简：CH 行并入 + 概览四格下线 ---- */
+ck("排版·CH/文件数并入摄像头名行（HTML）",
+   src.includes('<span class="hdr-sub" id="hdrSub">CH01 · 13 个录像文件</span>')
+   && !src.includes('<div class="hdr-sub" id="hdrSub">'));
+ck("排版·并入行小字弱化样式", src.includes(".camsel .hdr-sub{font-weight:400"));
+ck("排版·renderOverview 只剩名字 + CH/文件数",
+   src.includes('cam.ch + " · " + state.segs.length + " 个录像文件"')
+   && !src.includes("ovKeep") && !src.includes("ovPct")
+   && !src.includes("ovCnt") && !src.includes("ovSize"));
+ck("排版·概览四格 HTML/CSS 下线",
+   !src.includes('class="overview"') && !src.includes(".overview{")
+   && !src.includes("保留时长</div>"));
+
+/* ---- 28. 0.9.31：播放页内嵌热力格（画面下方 · 点格跳播 · 横屏隐藏） ---- */
+ck("播放热力·结构与函数就绪", src.includes('id="pHeat"')
+   && typeof get("renderPlayerHeat") === "function" && typeof get("pHeatJump") === "function");
+ck("播放热力·横屏全屏态整块隐藏", src.includes(".phone.land .p-heat{display:none}")
+   && src.includes(".player.fshide .p-heat{opacity:0;pointer-events:none}"));
+ck("播放热力·openPlayer 内接线（切段自动跟随）",
+   src.includes("setSegTitle(i);\n  renderPlayerHeat();"));
+
+/* 全天活动分布：当前播 12:00 起的片段（segIdx=2，落在第 6 格 12:00–14:00） */
+run('state.camId="cam-01"; state.dayIdx=0; state.dayList=["2026-10-22"];'
+  + 'state.pmode="full"; state.segIdx=2;'
+  + 'state.rec={segment_sec:3600,'
+  + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1},{n:"11-00-00.mp4",b:1},{n:"12-00-00.mp4",b:1},{n:"20-00-00.mp4",b:1}]}},'
+  + 'clips:{"cam-01":{}}};'
+  + 'state.activity = realSegs("cam-01","2026-10-22","full") || [];'
+  + 'state.segs = state.activity; renderPlayerHeat();');
+let ph = get('document.getElementById("pHeat").innerHTML');
+ck("播放热力·有活动才显示", get('document.getElementById("pHeat").style.display') === "block");
+ck("播放热力·标题提示选时段看分布", ph.includes("点格子选中时段 · 上方显示该时段分布"));
+ck("播放热力·选中格琥珀描边样式", src.includes(".ph-heat .phcell.sel{box-shadow:0 0 0 2px var(--warn)")
+   && src.includes(".ph-heat .phcell.sel.on{box-shadow:0 0 0 2px var(--warn),0 0 0 4px"));
+ck("播放热力·12 格齐全", (ph.match(/data-ph="/g) || []).length === 12);
+ck("播放热力·当前块高亮（第 6 格 12:00–14:00）", /class="phcell on" data-ph="6"/.test(ph));
+ck("播放热力·深色配色（活动绿 / 空格灰）",
+   ph.includes("rgba(53,201,140,") && ph.includes("rgba(255,255,255,.12)"));
+ck("播放热力·24 小时刻度", ph.includes("<span>00</span>") && ph.includes("<span>24</span>"));
+
+/* 无活动 → 整块隐藏，不摆空架子 */
+run('state.activity = []; renderPlayerHeat();');
+ck("播放热力·无活动整块隐藏", get('document.getElementById("pHeat").style.display') === "none"
+   && get('document.getElementById("pHeat").innerHTML') === "");
+
+/* 跳播：当前模式有片段 → 原模式跳；没有 → 自动切另一种模式 */
+run('state.activity = realSegs("cam-01","2026-10-22","full") || [];'
+  + 'state.segs = state.activity; state.segIdx=0; renderPlayerHeat();');
+let hit = get('(function(){ const a=6*7200; const o=state.segs.filter(s=>segA(s)<a+7200&&segB(s)>a).sort((p,q)=>segA(p)-segA(q))[0]; return o?Math.max(segA(o),a):null; })()');
+ck("播放热力·跳播定位到时段内首个片段起点", hit === 43200);
+ck("播放热力·跳播复用 tlPlay（切模式+定位一体）",
+   src.includes("if(has(state.segs)) return tlPlay(state.pmode, firstT(state.segs));")
+   && src.includes("if(has(alt)) return tlPlay(other, firstT(alt));"));
+ck("播放热力·两模式都没有如实提示",
+   src.includes('toast("toast", "该时段没有录像");'));
+
+/* 0.9.35：底部热力格 = 时段选择器——点格选中 → 时间轴放大到该窗口；
+   再点同一格取消回全天。空时段也照常选中（分布如实显示为空）。 */
+run('state.activity = realSegs("cam-01","2026-10-22","full") || [];'
+  + 'state.segs = state.activity; state.segIdx=0; state.hourBlock=-1;'
+  + 'renderPlayerHeat();');
+run('pHeatJump(5);');   /* 点第 5 格（10:00–12:00 有录像）→ 选中 + 跳播 */
+ck("选时段·点格后 hourBlock 选中", get("state.hourBlock") === 5);
+ph = get('document.getElementById("pHeat").innerHTML');
+ck("选时段·选中格带琥珀描边类", /phcell[^"]*sel[^"]*" data-ph="5"/.test(ph));
+let tzh = get('document.getElementById("tlane").innerHTML');
+ck("选时段·时间轴放大到 10:00–12:00", tzh.includes("10:00 – 12:00 分布"));
+ck("选时段·时间轴 30 分钟刻度", tzh.includes("<span>10:30</span>"));
+ck("选时段·点同一格取消选中回全天", (()=>{
+  run('pHeatJump(5);');
+  return get("state.hourBlock") === -1
+    && get('document.getElementById("tlane").innerHTML').includes("全天分布");
+})());
+ck("选时段·点空格也选中（分布如实为空）", (()=>{
+  run('pHeatJump(0);');   /* 第 0 格 00:00–02:00 无录像 */
+  const hb = get("state.hourBlock");
+  const th = get('document.getElementById("tlane").innerHTML');
+  run('state.hourBlock=-1; renderHeat(); renderPlayerHeat();');
+  return hb === 0 && th.includes("全天分布") === false && th.includes("无录像");
+})());
+
+/* ---- 29. 0.9.37：16×/32× 倍速档 + 热力图播放定位竖线 ---- */
+ck("倍速·档位含 16/32", src.includes("const SPEEDS = [1,2,4,8,16,32];"));
+ck("倍速·playbackRate 钳到浏览器上限 16", src.includes("const rate = Math.min(x, 16);"));
+ck("倍速·超 16 用跳秒补足（每秒 +x-16）",
+   src.includes("if(x > 16){") && src.includes("v.currentTime + (x - 16)"));
+ck("倍速·高速自动静音、回落恢复",
+   src.includes("if(x > 8 && !v.muted){ v.muted = true; speedAutoMuted = true; }")
+   && src.includes("else if(x <= 8 && speedAutoMuted){ v.muted = false; speedAutoMuted = false; }"));
+ck("倍速·loadedmetadata 同步钳制与静音",
+   src.includes("v.playbackRate = Math.min(state.speed || 1, 16);")
+   && src.includes("if((state.speed || 1) > 8) v.muted = true;"));
+ck("倍速·选档弹层共用 renderSpeedPop（6 档全渲染）", src.includes("SPEEDS.map(x =>"));
+
+ck("竖线·样式与结构就绪",
+   src.includes(".tl-cursor{position:absolute;top:-1px;bottom:-1px;width:2px;background:#ff5a5a;")
+   && src.includes('<i class="tl-cursor"></i>')
+   && typeof get("syncTlCursor") === "function");
+
+/* 纯函数断言（桩的 querySelector 是万能桩，style 断言只能查源码/算结果）：
+   全时 10:00–11:00 的文件，state.t=10:30 → 全天 frac=43.75% */
+run('state.hourBlock=-1;'
+  + 'state.segs=[{n:"10-00-00.mp4",s:36000,e:39600,b:1,file:"f1"}];'
+  + 'state.segIdx=0; state.t=37800;');
+ck("竖线·全天+全时：10:30 → frac 0.4375", get("tlCursorFrac()") === 0.4375);
+run('state.hourBlock=5;');
+ck("竖线·时段+全时：窗口内 frac 0.25", get("tlCursorFrac()") === 0.25);
+run('state.hourBlock=-1;'
+  + 'state.segs=[{n:"10-00-00.mp4",s:0,e:20,b:1,clip:true,src:36000,srcEnd:39600,file:"c1"}];'
+  + 'state.segIdx=0; state.t=10;');
+ck("竖线·缩时播放按源时刻（10s/20s → 源 10:30 → 0.4375）", get("tlCursorFrac()") === 0.4375);
+run('state.hourBlock=5;'
+  + 'state.segs=[{n:"20-00-00.mp4",s:72000,e:75600,b:1,file:"f2"}];'
+  + 'state.segIdx=0; state.t=72000;');
+ck("竖线·文件在窗口外返回 null（隐藏）", get("tlCursorFrac()") === null);
+ck("竖线·两轨同源同位（renderTl 每条 track 都带 .tl-cursor）",
+   src.includes('+ \'<i class="tl-cursor"></i></span></div>\';'));
+ck("竖线·接线：syncPlayer 轻量跟随 + renderTl 重建即摆位",
+   src.includes("syncTlCursor();          /* 热力图定位竖线跟随播放")
+   && src.includes("syncTlCursor();          /* 重建后立即摆到当前播放位置 */"));
+
+/* ---- 30. 0.9.38：切分方式（通用 + 每路） ---- */
+ck("通用·卡片有切分方式 chips（join/split）",
+   src.includes('data-clipstyle="join">整段拼接</button>')
+   && src.includes('data-clipstyle="split">活动切片</button>'));
+ck("通用·LK 默认整段拼接", get("LK.clipStyle") === "join");
+ck("通用·处理器写回 LK.clipStyle 并推服务端",
+   src.includes('LK.clipStyle = el.dataset.clipstyle === "split" ? "split" : "join";')
+   && src.includes("clip_style: LK.clipStyle"));
+ck("通用·服务端回读对齐（/api/link 与 /api/config 两条路）",
+   src.includes("if(ls.clip_style) LK.clipStyle = ls.clip_style;")
+   && src.includes("if(c.clip_style && c.clip_style !== LK.clipStyle) LK.clipStyle = c.clip_style;")
+   && src.includes('if(g.clipStyle) LK.clipStyle = g.clipStyle === "split" ? "split" : "join";'));
+
+ck("每路·默认 follow（跟随通用）",
+   get("defaultCamParams(null,0).clipMode") === "follow");
+ck("每路·编辑态三选 chips",
+   src.includes('[["follow","跟随通用"],["join","整段拼接"],["split","活动切片"]].map')
+   && src.includes("data-clipmode"));
+ck("每路·处理器写草稿", src.includes('draftSet("clipMode", el.dataset.clipmode);'));
+ck("每路·推送与服务端回读",
+   src.includes("clip_mode: p.clipMode")
+   && src.includes('["follow","join","split"].indexOf(src.clip_mode) >= 0 ? src.clip_mode : "follow"'));
+ck("每路·只读摘要显示生效值",
+   src.includes('roRow("切分方式", clipModeLabel(p.clipMode, true))'));
+
+run('LK.clipStyle = "join";');
+ck("标签·split/join 文案", get('clipModeLabel("split")') === "活动切片"
+   && get('clipModeLabel("join")') === "整段拼接");
+ck("标签·follow 展开通用值", get('clipModeLabel("follow")') === "跟随通用"
+   && get('clipModeLabel("follow", true)') === "跟随通用 · 整段拼接");
+run('LK.clipStyle = "split";');
+ck("标签·follow 跟随切换后的通用值",
+   get('clipModeLabel("follow", true)') === "跟随通用 · 活动切片");
+run('LK.clipStyle = "join";');
+
+/* ===== 31. 0.9.39：切片真实覆盖窗 + 红色定位样式 ===== */
+ck("覆盖窗·活动切片优先用 idx 侧车",
+   src.includes("if(Array.isArray(f.w) && f.w.length === 2)")
+   && src.includes("st = +f.w[0]; en = Math.max(st + 1, +f.w[1]);"));
+ck("覆盖窗·整段拼接保留旧算法兜底",
+   src.includes("const next = i+1 < files.length ? toS(files[i+1].n) : Math.min(86400, st + segLen);"));
+ck("竖线·红色光晕",
+   src.includes(".tl-cursor{position:absolute;top:-1px;bottom:-1px;width:2px;background:#ff5a5a;")
+   && src.includes("box-shadow:0 0 6px rgba(255,80,80,.9)"));
+ck("播放当前时刻·红色",
+   src.includes(".p-times .pt-c{flex:1;text-align:center;font-size:12.5px;font-weight:600;color:#ff6b6b}"));
 
 console.log("设置页 " + (pass + fail) + " 项：通过 " + pass + "，失败 " + fail);
 process.exit(fail ? 1 : 0);

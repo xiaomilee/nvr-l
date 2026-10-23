@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.28"
+VERSION = "0.9.41"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -39,6 +39,10 @@ DEFAULTS = {
     "link_mode": "live",              # live=录完即压 | scheduled=定时批量
     "link_interval_h": 6,             # 定时模式间隔，1~24 小时
     "link_max_queue": 200,            # 待处理上限，超出则暂缓入队（背压）
+    # ---- 缩时片段切分方式（通用默认值，每路可单独覆盖） ----
+    # join  = 整段拼接：一个分片的活动区间拼成一个片段（流复制、无损、关键帧切点）
+    # split = 活动切片：每个活动区间单独成片、重编码精确到帧，热力图定位更细
+    "clip_style": "join",
     # ---- 服务端口 ----
     # 安装向导里选定后写在这里；TRIM_SERVICE_PORT 只是 manifest 的静态默认值，
     # 用户改过端口就以本字段为准。范围见 PORT_LIMITS。
@@ -59,7 +63,8 @@ LINK_INTERVAL_LIMITS = (1, 24)
 
 # 离散取值的键：只认白名单，别让 true/false 混进来顶掉 "auto"/"off"
 _ENUM_KEYS = {"gpu": ("auto", "qsv", "off"), "scan_mode": ("now", "m15", "h1", "d1"),
-              "process_mode": ("fast", "fine")}
+              "process_mode": ("fast", "fine"),
+              "clip_style": ("join", "split")}
 
 
 def coerce(key, value):
@@ -236,6 +241,21 @@ def probe_record_dir(path, create=True):
 
 def link_mode(v):
     return v if v in ("live", "scheduled") else "live"
+
+
+# 每路切分方式的白名单："follow" 表示跟随通用 clip_style，不单独写枚举键
+CLIP_MODES = ("follow", "join", "split")
+CLIP_STYLE_LABEL = {"join": "整段拼接", "split": "活动切片"}
+
+
+def clip_style(v):
+    """通用切分方式：只认 join/split，其它回落 join（历史行为）。"""
+    return v if v in ("join", "split") else "join"
+
+
+def clip_mode(v):
+    """每路切分方式：只认白名单，其它回落 follow。"""
+    return v if v in CLIP_MODES else "follow"
 
 
 def segment_sec(v):

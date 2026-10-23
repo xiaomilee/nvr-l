@@ -22,6 +22,7 @@
 import json
 import os
 import subprocess
+import time
 
 import ffmpeg_cmd
 import pixdiff
@@ -382,10 +383,37 @@ def _export_one(ffmpeg, src, out, ss, to, timeout=900, speed=1.0):
     try:
         r = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
+        return _export_copy(ffmpeg, src, out, ss, to, speed, timeout, str(e))
+    if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+        return True, ""
+    return _export_copy(ffmpeg, src, out, ss, to, speed, timeout,
+                        (r.stderr or b"").decode("utf-8", "replace").strip()[-300:])
+
+
+def _export_copy(ffmpeg, src, out, ss, to, speed, timeout, err, force=False):
+    """倍速重编码失败后的免编码器兜底（itsscale 转封装）。
+
+    speed>1 才需要这层重试：speed==1 的主路径本来就是 -c copy，再跑
+    copy_speed_cmd 是同一个命令。但 _export_precise 的回落链是
+    QSV→x264→本函数——x264 也挂了（ffmpeg 缺 libx264，LGPL 构建）时
+    必须有人接住，所以那种调用带 force=True 无条件执行。0.9.38 真机
+    活动切片零输出的另一个元凶就是整条链全落在缺编码器的 ffmpeg 上。
+    """
+    try:
+        sp = float(speed or 1.0)
+    except (TypeError, ValueError):
+        sp = 1.0
+    if sp <= 1.0 and not force:
+        return False, err
+    cmd = ffmpeg_cmd.copy_speed_cmd(ffmpeg, src, out, ss, to, speed=sp)
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
         return False, str(e)
-    if r.returncode != 0 or not os.path.isfile(out):
-        return False, (r.stderr or b"").decode("utf-8", "replace").strip()[-300:]
-    return True, ""
+    if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+        return True, ""
+    return False, ((r.stderr or b"").decode("utf-8", "replace").strip()[-300:]
+                   or err)
 
 
 def concat_cmd(ffmpeg, list_file, out):
@@ -456,6 +484,118 @@ def _unlink(p):
         os.remove(p)
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------- 活动切片
+#
+# 0.9.38：split 模式。与 write_one（整段拼接）并存，同一套判定结果
+# res["windows"]，只是导出方式不同：
+#   join  多区间 concat 成一个文件（-c copy，关键帧切点，±1 个 GOP）
+#   split 每个区间单独成片（重编码，帧级切点），外加一份 .idx.json 侧车
+#         记录「片段 ↔ 真实时刻」映射，热力图/跳播按它对齐全天时间轴。
+
+# QSV 失败的负缓存：第一次编不动（会话满/驱动坏/没透传）之后 10 分钟内
+# 直接走 libx264，不再每片都白跑一次编码器初始化
+_HW_FAIL = {}
+
+
+def _hw_available(ffmpeg, hw, now=None):
+    if hw != "qsv":
+        return False
+    now = now or time.time()
+    bad = _HW_FAIL.get(ffmpeg)
+    if bad and now - bad < 600:
+        return False
+    return True
+
+
+def _hw_fail(ffmpeg):
+    _HW_FAIL[ffmpeg] = time.time()
+
+
+def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
+    """单区间精确导出：QSV → libx264 → 转封装 三级回落。
+
+    第三级是兜底里的兜底：软编也失败（ffmpeg 缺 libx264、盘满）时，
+    用 itsscale + -c copy 把片段交出来——不经过任何编码器，任何 ffmpeg
+    都能跑；切点退回关键帧，粗一点总比没有强，错误原样带回去。
+    """
+    # 入口时硬编可用才尝试 QSV；失败立刻进负缓存，本轮直接落到软编
+    attempts = [("qsv", True)] if _hw_available(ffmpeg, hw) else []
+    attempts.append(("x264", False))
+    err = ""
+    for codec, use_hw in attempts:
+        cmd = ffmpeg_cmd.precise_cmd(ffmpeg, src, out, ss, to,
+                                     hw="qsv" if use_hw else "none",
+                                     speed=speed)
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            err = str(e)
+            continue
+        if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+            return True, "", codec
+        err = (r.stderr or b"").decode("utf-8", "replace").strip()[-300:]
+        if use_hw:
+            _hw_fail(ffmpeg)          # 记下失败，本进程内一段时间不再试硬编
+    # 终极兜底：转封装 + 时间戳缩放（无编码器依赖，任何 ffmpeg 都能跑）
+    ok, err2 = _export_copy(ffmpeg, src, out, ss, to, speed, timeout, err,
+                            force=True)
+    return ok, err2, "copy"
+
+
+def write_split(ffmpeg, src, out_base, windows, tmpdir,
+                hw="qsv", timeout=900, speed=1.0):
+    """把若干区间各自切成独立片段 + 侧车索引。
+
+    out_base：不带扩展名的输出前缀（…/_clip/<cam>/<date>/<HH-MM-SS>），
+    产物 <out_base>.c01.mp4、.c02.mp4… 与 <out_base>.idx.json。
+    片段名带 .cNN 后缀且按序号排序后仍按时间升序，回放页现有的
+    目录扫描不用改一行就能按正确的先后次序列出来。
+
+    幂等：idx 已存在就不再重切（item_key 的参数指纹管"该不该重跑"，
+    这里只管"别把切好的覆盖掉"）。
+    """
+    windows = list(windows or [])
+    if not windows:
+        return {"ok": False, "reason": "no-window"}
+    out_dir = os.path.dirname(out_base) or "."
+    idx_path = out_base + ".idx.json"
+    os.makedirs(out_dir, exist_ok=True)
+    if os.path.isfile(idx_path):
+        return {"ok": True, "reason": "exists", "parts": 0, "files": []}
+
+    speed = max(1.0, float(speed or 1.0))
+    files, entries = [], []
+    for i, (ss, to) in enumerate(windows):
+        out = "%s.c%02d.mp4" % (out_base, i + 1)
+        ok, err, codec = _export_precise(ffmpeg, src, out, ss, to, hw,
+                                         speed=speed, timeout=timeout)
+        if not ok:
+            # 半途失败：已写出的片段一并清掉，别留半套产物让回放页猜
+            for q in files:
+                _unlink(q)
+            _unlink(idx_path)
+            return {"ok": False, "reason": "part-failed", "error": err, "index": i}
+        files.append(out)
+        entries.append({"i": i + 1, "file": os.path.basename(out),
+                        "ss": round(float(ss), 3), "to": round(float(to), 3),
+                        "codec": codec})
+    meta = {"src": os.path.basename(src),
+            "speed": speed,
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "windows": entries}
+    try:
+        tmp = idx_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, idx_path)
+    except OSError as e:
+        for q in files:
+            _unlink(q)
+        return {"ok": False, "reason": "idx", "error": str(e)}
+    return {"ok": True, "reason": "split", "parts": len(files),
+            "files": files, "codecs": [e["codec"] for e in entries]}
 
 
 # ---------------------------------------------------------------- 编排

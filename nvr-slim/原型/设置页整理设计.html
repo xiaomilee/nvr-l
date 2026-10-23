@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NVR-L 设置页整理设计稿 v1.2</title>
+<style>
+:root{
+  --bg:#f4f5f7; --surface:#fff; --line:#e8eaef; --text:#1b1e24; --muted:#6a7280; --faint:#9aa1ac;
+  --primary:#2f6bff; --primary-soft:#ecf1ff; --keep:#1f9d63; --keep-soft:#e9f7ef;
+  --warn:#b26a00; --warn-soft:#fdf3e0; --danger:#d43b3b; --danger-soft:#fdeced;
+  --fill:#f2f4f8; --track:#e3e7ee;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#dfe3ea;color:var(--text);
+  font:15px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  padding:28px 20px 70px}
+.mono{font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;font-variant-numeric:tabular-nums}
+h1{font-size:20px;margin:0 0 4px}
+.sub1{color:var(--muted);font-size:13px;margin-bottom:20px;max-width:900px;line-height:1.7}
+.frames{display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start}
+.frame{display:flex;flex-direction:column;gap:11px;width:390px}
+.fcap{font-size:14px;font-weight:600}
+.fcap small{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:3px}
+
+/* ---------- 手机框 ---------- */
+.phone{position:relative;width:390px;height:780px;background:var(--bg);
+  border-radius:34px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 0 0 9px #12151a,0 0 0 11px #2a2f38,0 18px 44px rgba(15,20,35,.3)}
+.ph-in{flex:1;overflow:hidden;display:flex;flex-direction:column;position:relative}
+
+/* ---------- 页头 ---------- */
+.hd{padding:16px 18px 8px;flex:0 0 auto;background:var(--bg)}
+.hd .row{display:flex;align-items:flex-start;gap:10px}
+.hd .t{font-size:21px;font-weight:700;letter-spacing:-.2px}
+.hd .s{font-size:11.5px;color:var(--muted);margin-top:3px}
+.hd .r{margin-left:auto;display:flex;gap:8px}
+.iconbtn{width:34px;height:34px;border-radius:50%;background:var(--fill);display:grid;place-items:center;border:none}
+.iconbtn svg{width:17px;height:17px;stroke:var(--muted);fill:none;stroke-width:2;stroke-linecap:round}
+
+/* ---------- 分区容器 ---------- */
+.scroll{flex:1;overflow:auto;padding:4px 14px 16px}
+.zone{background:var(--surface);border-radius:16px;margin-bottom:10px;
+  box-shadow:0 1px 2px rgba(20,30,60,.05)}
+.zh{display:flex;align-items:center;gap:10px;padding:13px 14px}
+.zh .ico{width:30px;height:30px;border-radius:9px;background:var(--fill);display:grid;place-items:center;flex:0 0 auto}
+.zh .ico svg{width:16px;height:16px;stroke:var(--muted);fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.zh .txt{flex:1;min-width:0}
+.zh .txt b{font-size:14px;font-weight:600;display:block}
+.zh .txt span{font-size:11px;color:var(--faint);display:block;margin-top:2px}
+.zh .chev{font-size:11.5px;color:var(--primary);white-space:nowrap}
+.zh .cnt{font-size:11.5px;color:var(--faint)}
+
+/* 折叠摘要 */
+.foldbody{padding:0 14px 13px}
+.sumline{font-size:12px;color:var(--muted);line-height:1.75}
+.sumline b{color:var(--text);font-weight:600}
+.sumline code{font-size:11px;background:var(--fill);padding:1px 5px;border-radius:5px}
+
+/* ---------- 摄像头行 ---------- */
+.camrow{display:flex;align-items:center;gap:11px;padding:11px 14px;border-top:1px solid var(--line)}
+.camrow:first-of-type{border-top:none}
+.avatar{width:38px;height:38px;border-radius:11px;background:#eef1f6;display:grid;place-items:center;flex:0 0 auto;position:relative}
+.avatar svg{width:19px;height:19px;stroke:#7c8493;fill:none;stroke-width:1.7;stroke-linejoin:round}
+.avatar i{position:absolute;right:-2px;bottom:-2px;width:10px;height:10px;border-radius:50%;
+  background:var(--keep);border:2px solid var(--surface)}
+.avatar i.off{background:#c3c8d1}
+.camrow .meta{flex:1;min-width:0}
+.camrow .meta .t{font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}
+.camrow .meta .s{font-size:11px;color:var(--faint);margin-top:3px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.camrow .meta .s em{font-style:normal;color:var(--line)}
+.tchip{font-size:10.5px;padding:1.5px 7px;border-radius:99px;background:var(--primary-soft);
+  color:var(--primary);font-weight:600;white-space:nowrap}
+.tchip.off{background:var(--fill);color:var(--faint);font-weight:400}
+.camrow .go{color:var(--faint);font-size:16px}
+
+/* ---------- 通用：设置行 ---------- */
+.srow{padding:12px 0;border-top:1px solid var(--line)}
+.srow:first-child{border-top:none}
+.srow .top{display:flex;align-items:baseline;gap:8px}
+.srow .n{font-size:13.5px;color:var(--text)}
+.srow .v{margin-left:auto;font-size:12.5px;font-weight:600;color:var(--text)}
+.srow .h{font-size:11px;color:var(--faint);line-height:1.65;margin-top:5px}
+.chips{display:flex;gap:7px;margin-top:9px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:9px;
+  padding:7px 12px;font-size:12px;font-family:inherit}
+.chip.on{border-color:var(--primary);background:var(--primary-soft);color:var(--primary);font-weight:600}
+.sw{width:44px;height:26px;border-radius:99px;background:#d8dce4;position:relative;flex:0 0 auto}
+.sw i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,.2);transition:.16s}
+.sw.on{background:var(--keep)}
+.sw.on i{left:21px}
+.swrow{display:flex;align-items:flex-start;gap:12px;padding:11px 0;border-top:1px solid var(--line)}
+.swrow .n{font-size:13.5px}
+.swrow .h{display:block;font-size:11px;color:var(--faint);margin-top:3px;line-height:1.6}
+.swrow .sw{margin-left:auto}
+
+/* ---------- 分区标题（编辑页内） ---------- */
+.part{background:var(--surface);border-radius:16px;margin-bottom:10px;overflow:hidden}
+.part .ph{display:flex;align-items:center;gap:9px;padding:13px 14px}
+.part .ph .idx{width:22px;height:22px;border-radius:7px;background:var(--fill);color:var(--muted);
+  font-size:11px;font-weight:700;display:grid;place-items:center;flex:0 0 auto}
+.part .ph b{font-size:13.5px}
+.part .ph .st{font-size:11px;color:var(--faint)}
+.part .ph .chev{margin-left:auto;font-size:11.5px;color:var(--primary)}
+.part .pb{padding:0 14px 14px}
+.part.locked{opacity:.55}
+
+/* ---------- 总闸条 ---------- */
+.master{display:flex;align-items:center;gap:12px;padding:13px 14px;border-radius:12px;
+  background:linear-gradient(180deg,#f7f9ff,#f2f5fd);border:1px solid #e2e9fb}
+.master .tx b{font-size:13.5px;display:block}
+.master .tx span{font-size:11px;color:var(--muted);display:block;margin-top:2px;line-height:1.5}
+.master .sw{margin-left:auto}
+
+/* ---------- 影响预估 ---------- */
+.impact{display:flex;gap:0;margin-top:10px;border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.impact .c{flex:1;padding:9px 10px;text-align:center;border-left:1px solid var(--line)}
+.impact .c:first-child{border-left:none}
+.impact .c .kv{font-size:14px;font-weight:700;letter-spacing:-.3px}
+.impact .c .kl{font-size:10px;color:var(--faint);margin-top:2px}
+
+/* ---------- 折叠的进阶 ---------- */
+.adv{margin-top:12px;border-top:1px dashed var(--line);padding-top:11px}
+.advhead{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.advhead b{color:var(--text);font-weight:600;font-size:13px}
+.advhead .n{font-size:10.5px;color:var(--faint);background:var(--fill);padding:1px 6px;border-radius:99px}
+.advhead .chev{margin-left:auto;font-size:11.5px;color:var(--primary)}
+.slider{width:100%;-webkit-appearance:none;height:3px;border-radius:99px;background:var(--track);margin-top:12px}
+.slider::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;
+  background:#fff;border:2px solid var(--primary);box-shadow:0 1px 3px rgba(20,30,60,.25)}
+.tuned{font-size:10px;color:var(--warn);background:var(--warn-soft);padding:1px 5px;border-radius:5px;margin-left:6px}
+.deflink{font-size:10.5px;color:var(--primary);margin-left:6px}
+
+/* ---------- 底部固定动作栏 ---------- */
+.actbar{flex:0 0 auto;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);
+  border-top:1px solid var(--line);padding:10px 14px calc(10px + env(safe-area-inset-bottom));
+  display:flex;align-items:center;gap:8px}
+.actbar .dirty{font-size:11px;color:var(--warn);white-space:nowrap}
+.btn{border:none;border-radius:10px;padding:11px 15px;font-size:13px;font-family:inherit;font-weight:600}
+.btn.ghost{background:var(--fill);color:var(--muted);font-weight:400}
+.btn.primary{background:var(--primary);color:#fff;margin-left:auto}
+.btn.dangerline{background:var(--surface);color:var(--danger);border:1px solid #f3cfd2}
+
+/* ---------- 诊断区 ---------- */
+.dcard{border:1px solid var(--line);border-radius:13px;padding:12px;margin-bottom:9px}
+.dcard .dh{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;margin-bottom:9px}
+.dcard .dh .tg{font-size:10.5px;font-weight:400;color:var(--faint)}
+.dcard .dh .rt{margin-left:auto;font-size:11px;color:var(--faint);font-weight:400}
+.bar-disk{height:8px;border-radius:99px;background:var(--track);overflow:hidden;margin:9px 0 7px;display:flex}
+.bar-disk i{display:block;height:100%}
+.bar-disk .used{background:var(--primary);width:56%}
+.bar-disk .keep{background:#9dbaff;width:14%}
+.dline{display:flex;font-size:11.5px;color:var(--muted);padding:3px 0}
+.dline b{margin-left:auto;color:var(--text);font-weight:600}
+.pathchip{display:flex;align-items:center;gap:6px;background:var(--fill);border-radius:8px;
+  padding:6px 9px;margin-top:6px;font-size:11px;word-break:break-all}
+.pathchip code{flex:1;font-size:10.5px}
+.pathchip span{color:var(--primary);font-size:10.5px;white-space:nowrap}
+
+.recline{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px dashed var(--line)}
+.recline:first-of-type{border-top:none}
+.recline i{width:7px;height:7px;border-radius:50%;background:var(--keep);flex:0 0 auto}
+.recline i.warn{background:var(--warn)}
+.recline b{font-size:12px;font-weight:600;width:64px;flex:0 0 auto}
+.recline span{font-size:11px;color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recline button{border:1px solid var(--line);background:var(--surface);border-radius:7px;
+  padding:3px 8px;font-size:10.5px;color:var(--muted);font-family:inherit}
+.envi{display:flex;gap:7px;flex-wrap:wrap}
+.envchip{font-size:10.5px;padding:4px 8px;border-radius:8px;background:var(--keep-soft);color:#177a4c}
+.envchip.bad{background:var(--warn-soft);color:var(--warn)}
+.logbox{background:#1b2028;border-radius:10px;padding:9px 10px;height:132px;overflow:auto;margin-top:2px}
+.logbox pre{margin:0;font-family:"Cascadia Mono",Consolas,monospace;font-size:10px;line-height:1.75;color:#b9c3d1;white-space:pre-wrap}
+.logbox .e{color:#ff9d8a}
+.logbox .w{color:#ffcf80}
+.logbtns{display:flex;gap:7px;margin-top:8px}
+.logbtns button{flex:1;border:1px solid var(--line);background:var(--surface);border-radius:8px;
+  padding:7px;font-size:11.5px;color:var(--muted);font-family:inherit}
+.logbtns button.danger{color:var(--danger);border-color:#f3cfd2}
+.dangerzone{margin-top:9px;padding-top:10px;border-top:1px solid var(--line)}
+.dangerzone .dbtn{width:100%;border:1px solid var(--line);background:var(--surface);border-radius:9px;
+  padding:10px;font-size:12px;color:var(--muted);font-family:inherit;margin-top:7px;text-align:left;padding-left:12px}
+.dangerzone .dbtn.warn{color:var(--warn);border-color:#f0dcb8}
+
+/* ---------- 浮层（确认） ---------- */
+.mask{position:absolute;inset:0;background:rgba(14,18,26,.42);display:grid;place-items:center;padding:26px}
+.sheet{width:100%;background:var(--surface);border-radius:18px;padding:18px 16px 14px;box-shadow:0 18px 40px rgba(10,15,30,.3)}
+.sheet .ic{width:38px;height:38px;border-radius:11px;background:var(--warn-soft);display:grid;place-items:center;margin-bottom:11px}
+.sheet .ic svg{width:19px;height:19px;stroke:var(--warn);fill:none;stroke-width:2;stroke-linecap:round}
+.sheet h4{margin:0 0 6px;font-size:15px}
+.sheet p{margin:0;font-size:12px;color:var(--muted);line-height:1.7}
+.sheet .keep{background:var(--fill);border-radius:9px;padding:8px 10px;font-size:11px;color:var(--muted);margin-top:10px;line-height:1.65}
+.sheet .row{display:flex;gap:8px;margin-top:14px}
+.sheet .row button{flex:1;border:none;border-radius:10px;padding:11px;font-size:13px;font-family:inherit;font-weight:600}
+.sheet .row .no{background:var(--fill);color:var(--muted);font-weight:400}
+.sheet .row .yes{background:var(--warn);color:#fff}
+
+/* ---------- 直播页小帧 ---------- */
+.livegrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px 12px 0}
+.lv{position:relative;border-radius:10px;overflow:hidden;aspect-ratio:16/10;
+  background:linear-gradient(160deg,#20262f,#141920)}
+.lv span{position:absolute;left:7px;bottom:6px;font-size:9.5px;color:#dbe3ec}
+.lv i{position:absolute;right:7px;top:6px;width:6px;height:6px;border-radius:50%;background:#ff5f56}
+.tabbar{display:flex;border-top:1px solid var(--line);background:var(--surface);padding:7px 0 9px;flex:0 0 auto}
+.tabbar div{flex:1;text-align:center;font-size:10px;color:var(--faint)}
+.tabbar div.on{color:var(--primary);font-weight:600}
+
+/* ---------- 存储明细（诊断） ---------- */
+.sthead{display:flex;align-items:flex-end;gap:7px}
+.sthead .big{font-size:22px;font-weight:700;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+.sthead .unit{font-size:11.5px;color:var(--faint);padding-bottom:3px}
+.sthead .rt{margin-left:auto;font-size:10px;color:var(--faint);padding-bottom:3px}
+.stbar-big{height:9px;border-radius:99px;background:var(--track);overflow:hidden;display:flex;margin:10px 0 8px}
+.stbar-big i{display:block;height:100%}
+.stbar-big .f{background:var(--primary)}
+.stbar-big .c{background:#9dbaff}
+.stbar-big .o{background:#e8ecf3;flex:1}
+.legend{display:flex;gap:13px;font-size:10.5px;color:var(--muted);flex-wrap:wrap}
+.legend span{display:flex;align-items:center;gap:5px}
+.legend i{width:8px;height:8px;border-radius:2px;display:block}
+.legend b{color:var(--text)}
+.strow{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px dashed var(--line)}
+.strow:first-of-type{border-top:none;margin-top:4px}
+.strow .nm{font-size:11.5px;width:52px;flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stbar{flex:1;height:6px;border-radius:99px;background:var(--track);display:flex;overflow:hidden}
+.stbar i{height:100%}
+.stbar .f{background:var(--primary)}
+.stbar .c{background:#9dbaff}
+.strow .vv{font-size:10.5px;font-weight:600;width:56px;text-align:right;font-variant-numeric:tabular-nums}
+.strow .vv em{display:block;font-style:normal;font-weight:400;color:var(--faint);font-size:9px;margin-top:1px}
+.stnote{display:flex;align-items:center;gap:7px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line);
+  font-size:10px;color:var(--faint);line-height:1.6}
+.stnote .btnmini{margin-left:auto;border:1px solid var(--line);background:var(--surface);border-radius:7px;
+  padding:4px 9px;font-size:10px;color:var(--primary);font-family:inherit;white-space:nowrap}
+
+/* ---------- 直播：状态体系 ---------- */
+.lrtile2{position:relative;aspect-ratio:16/9;border-radius:6px;overflow:hidden;
+  background:linear-gradient(160deg,#252c37,#141920);box-shadow:inset 0 0 0 1px rgba(255,255,255,.045)}
+.lrtile2 .sc{position:absolute;inset:0;
+  background:radial-gradient(120% 95% at 32% 22%,#3b4553 0%,#1d232c 58%,#11151b 100%)}
+.lrtile2 .sc::after{content:"";position:absolute;left:16%;right:16%;bottom:0;height:44%;
+  background:linear-gradient(transparent,rgba(255,255,255,.06))}
+.rectag{position:absolute;left:6px;top:6px;display:flex;align-items:center;gap:4px;font-size:8.5px;
+  font-weight:600;letter-spacing:.05em;padding:2px 6px;border-radius:4px;background:rgba(178,32,40,.78);color:#fff}
+.rectag i{width:5px;height:5px;border-radius:50%;background:#fff}
+.rectag.idle{background:rgba(10,14,20,.6);color:#c4ccd8;font-weight:400}
+.rectag.off{background:rgba(10,14,20,.6);color:#8b93a1;font-weight:400}
+.tt2{position:absolute;right:6px;top:6px;font-size:9px;color:#c6cfdb;text-shadow:0 1px 2px #000;font-variant-numeric:tabular-nums}
+.tn2{position:absolute;left:6px;bottom:5px;font-size:9.5px;color:#fff;background:rgba(0,0,0,.44);
+  padding:1px 6px;border-radius:4px;max-width:74%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tn2 em{font-style:normal;color:rgba(255,255,255,.5);margin-left:4px}
+.tst{position:absolute;right:6px;bottom:5px;font-size:8.5px;padding:1px 5px;border-radius:4px;
+  background:rgba(10,14,20,.62);color:#ffd08a;border:1px solid rgba(255,208,138,.32)}
+.tst.bad{color:#ff9d8a;border-color:rgba(255,157,138,.4)}
+.tst.ok{color:#7fe0ae;border-color:rgba(127,224,174,.3)}
+.lrtile2.sel{box-shadow:inset 0 0 0 2px var(--primary)}
+.lrtile2.sel .tn2{background:var(--primary)}
+.lrtile2.dead .sc{filter:grayscale(1) brightness(.42)}
+.ctr2{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:7px;color:#a7b0bd;font-size:10px;text-align:center;padding:0 8px}
+.ctr2 svg{width:20px;height:20px;stroke:#8b93a1;fill:none;stroke-width:1.7}
+.ctr2 .retry{margin-top:2px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);
+  color:#dfe6ef;border-radius:6px;padding:3px 9px;font-size:9.5px;font-family:inherit}
+.spin2{width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,.16);border-top-color:#8fb0ff}
+.pausewall{position:absolute;inset:0;background:rgba(6,9,14,.46);display:grid;place-items:center;z-index:6}
+.pausewall .c{width:58px;height:58px;border-radius:50%;background:rgba(255,255,255,.15);display:grid;place-items:center}
+.pausewall svg{width:25px;height:25px;fill:#fff;margin-left:3px}
+.pausewall .lbl{position:absolute;bottom:46px;font-size:10px;color:rgba(255,255,255,.6);letter-spacing:.1em}
+.lvbar{display:flex;align-items:center;gap:9px;padding:9px 13px calc(10px + env(safe-area-inset-bottom));
+  background:#0b0d10;color:rgba(255,255,255,.55);font-size:10.5px;flex:0 0 auto}
+.lvbar .pl{display:flex;align-items:center;gap:5px;height:26px;padding:0 11px;border-radius:13px;
+  border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.09);color:#e8ecf3;font-size:11px}
+.lvbar .pl i{width:6px;height:6px;border-radius:50%;background:#34d399}
+.lvbar .pl.pz i{background:#8b93a1}
+.lvbar .liveb{display:flex;align-items:center;gap:5px;background:rgba(34,181,115,.18);color:#5ee1a1;
+  border-radius:6px;padding:2px 7px;font-size:10px;font-weight:500}
+.lvbar .liveb i{width:5px;height:5px;border-radius:50%;background:#34d399}
+.lvbar .sp{margin-left:auto}
+.lvtopsub{display:flex;align-items:center;gap:5px;font-size:10px;color:rgba(255,255,255,.5);margin-top:2px}
+.lvtopsub .dot{width:5px;height:5px;border-radius:50%;background:#34d399}
+.lvtopsub .dot.warn{background:#f5a623}
+.lrbtn2{height:29px;padding:0 10px;border-radius:8px;background:rgba(255,255,255,.12);color:#e8ecf3;
+  font-size:11px;display:flex;align-items:center;gap:4px}
+.lrbtn2 svg{width:12px;height:12px;fill:currentColor}
+.statstrip{display:flex;background:#0f1319;border-bottom:1px solid rgba(255,255,255,.06)}
+.statstrip .c{flex:1;padding:8px 4px;text-align:center;border-left:1px solid rgba(255,255,255,.06)}
+.statstrip .c:first-child{border-left:none}
+.statstrip .c .v{font-size:12px;font-weight:600;color:#e8ecf3;font-variant-numeric:tabular-nums}
+.statstrip .c .v em{font-style:normal;font-size:9px;font-weight:400;color:rgba(255,255,255,.45);margin-left:2px}
+.statstrip .c .k{font-size:9px;color:rgba(255,255,255,.38);margin-top:2px}
+.statecards{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:390px}
+.statecard .cap{font-size:10.5px;color:var(--muted);margin-top:5px;line-height:1.5}
+.statecard .cap b{color:var(--text)}
+.statecard .box{position:relative;border-radius:8px;overflow:hidden;height:104px}
+
+/* ---------- 首页列数 / 连续播放 / 全屏横屏 ---------- */
+.laypop{position:absolute;right:14px;background:#1b2028;border-radius:11px;padding:6px;display:flex;gap:5px;
+  box-shadow:0 12px 28px rgba(0,0,0,.45);z-index:9}
+.laypop button{border:none;background:transparent;color:#cfd8e3;font-size:11px;font-family:inherit;
+  border-radius:7px;padding:6px 10px;display:flex;align-items:center;gap:5px}
+.laypop button.on{background:var(--primary);color:#fff;font-weight:600}
+.snapago{position:absolute;right:6px;bottom:5px;font-size:8.5px;color:rgba(255,255,255,.75)}
+.snapago::before{content:"◷ ";font-size:8px}
+.livehint2{font-size:10.5px;color:var(--faint);text-align:center;padding:11px 4px 2px;line-height:1.6}
+.wallbar{display:flex;align-items:center;gap:9px;padding:9px 13px 10px;background:var(--surface);
+  border-top:1px solid var(--line);flex:0 0 auto}
+.wallbar .play{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;height:42px;border-radius:12px;
+  background:var(--primary);color:#fff;font-size:13.5px;font-weight:600;font-family:inherit;border:none}
+.wallbar .play svg{width:15px;height:15px;fill:#fff}
+.wallbar .stop{flex:1;display:flex;align-items:center;justify-content:center;gap:7px;height:42px;border-radius:12px;
+  background:var(--fill);color:var(--text);font-size:13.5px;font-weight:600;font-family:inherit;border:none}
+.wallbar .stop svg{width:13px;height:13px}
+.wallbar .wallstat{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--keep);white-space:nowrap}
+.wallbar .wallstat i{width:5px;height:5px;border-radius:50%;background:var(--keep);display:block}
+.phone.land{width:760px;height:390px;border-radius:26px}
+.fsTop{position:absolute;left:0;right:0;top:0;display:flex;align-items:center;gap:10px;
+  padding:12px 16px;background:linear-gradient(rgba(0,0,0,.6),transparent);z-index:4}
+.fsExit{display:flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:8px;border:none;
+  background:rgba(255,255,255,.14);color:#fff;font-size:11.5px;font-family:inherit}
+.fsExit svg{width:14px;height:14px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round}
+.fsState{display:flex;align-items:center;gap:7px;font-size:11px;color:rgba(255,255,255,.72);margin-left:auto}
+.fsState b{color:#fff;font-weight:600}
+.fsState .dot{width:6px;height:6px;border-radius:50%;background:#34d399;box-shadow:0 0 6px rgba(52,211,153,.8)}
+.fsState .sep{color:rgba(255,255,255,.22)}
+.fsBar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:11px;
+  padding:12px 16px;background:linear-gradient(transparent,rgba(0,0,0,.72) 55%);z-index:4}
+.fsBtn{display:flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:8px;border:none;
+  background:rgba(255,255,255,.14);color:#fff;font-size:11.5px;font-family:inherit}
+.fsBtn svg{width:13px;height:13px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round}
+.fsLive{display:flex;align-items:center;gap:5px;background:rgba(34,181,115,.2);color:#5ee1a1;
+  border-radius:6px;padding:2px 7px;font-size:10.5px}
+.fsLive i{width:5px;height:5px;border-radius:50%;background:#34d399;display:block}
+
+/* ---------- 注释 ---------- */
+.notes{margin-top:34px;max-width:1180px;background:var(--surface);border-radius:16px;padding:20px 22px}
+.notes h2{font-size:15px;margin:0 0 14px}
+.note{display:flex;gap:11px;padding:10px 0;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);line-height:1.75}
+.note:first-of-type{border-top:none}
+.note .n{flex:0 0 auto;width:19px;height:19px;border-radius:50%;background:var(--primary-soft);
+  color:var(--primary);font-size:10.5px;font-weight:700;display:grid;place-items:center;margin-top:2px}
+.note b{color:var(--text)}
+.note code{font-size:11px;background:var(--fill);padding:1px 5px;border-radius:5px}
+.badge{display:inline-block;font-size:10px;padding:1px 6px;border-radius:99px;background:var(--primary-soft);color:var(--primary);margin-right:5px}
+</style>
+</head>
+<body>
+
+<h1>NVR-L 设置页整理 · 设计稿 v1.2</h1>
+<div class="sub1">
+  按需求重排：<b>设置页分三区</b>（通用折叠 / 摄像头 / 诊断与日志折叠）、<b>直播页底部信息栏迁入诊断</b>、<b>每路录制状态迁入诊断</b>、
+  <b>摄像头编辑页按「基础 → 保留 → 缩时 → 区域」四段折叠</b>，缩时参数分「常用 / 进阶」两层，并用总闸 + 确认 + 固定动作栏三步防误操作。<br>
+  <b>v1.2</b>：存储条去掉灰色「其余可用」（容量共享，按路摊余量无意义）；直播首页在刷新齿轮旁新增<b>单列 / 双列</b>布局按钮（记忆选择）、底部新增<b>连续播放</b>按钮（原地开播不换页）；点画面进<b>单路全屏横屏</b>，可暂停、可退出全屏且状态可见。
+</div>
+
+<div class="frames">
+
+  <!-- ================= 帧 1：设置首页 ================= -->
+  <div class="frame">
+    <div class="fcap">① 设置首页 · 三区结构
+      <small>通用收起、摄像头展开、诊断收起；一屏看得到全部摄像头</small></div>
+    <div class="phone"><div class="ph-in">
+      <div class="hd">
+        <div class="row">
+          <div>
+            <div class="t">设置</div>
+            <div class="s">4 路摄像头 · 3 个分区</div>
+          </div>
+        </div>
+      </div>
+      <div class="scroll">
+
+        <!-- 通用：折叠 -->
+        <div class="zone">
+          <div class="zh">
+            <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2l.4 2.7h4l.4-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></svg></div>
+            <div class="txt"><b>通用</b><span>录像总开关 · 清理 · 压制衔接 · 外观</span></div>
+            <span class="chev">展开 ⌄</span>
+          </div>
+          <div class="foldbody">
+            <div class="sumline">
+              录像 <b>已启用</b> · 每天 <b>03:00</b> 清理过期 · <b>即刻压制</b> · 分片 <b>5 分钟</b><br>
+              目录 <code>/vol1/@appshare/nvr-output</code>
+            </div>
+          </div>
+        </div>
+
+        <!-- 摄像头：主体 -->
+        <div class="zone">
+          <div class="zh">
+            <div class="ico"><svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 015.5 6h9A2.5 2.5 0 0117 8.5v7a2.5 2.5 0 01-2.5 2.5h-9A2.5 2.5 0 013 15.5z"/><path d="M17 10.5l4-2.2v7.4l-4-2.2"/></svg></div>
+            <div class="txt"><b>摄像头</b><span>每路独立参数 · 点一行进行设置</span></div>
+            <span class="cnt">4 台</span>
+          </div>
+
+          <div class="camrow">
+            <div class="avatar"><svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 015.5 6h9A2.5 2.5 0 0117 8.5v7a2.5 2.5 0 01-2.5 2.5h-9A2.5 2.5 0 013 15.5z"/><path d="M17 10.5l4-2.2v7.4l-4-2.2"/></svg><i></i></div>
+            <div class="meta">
+              <div class="t">车库入口 <span class="tchip">缩时 2× · 7 天</span></div>
+              <div class="s"><span>CH01</span><em>|</em><span>1080P</span><em>|</em><span>录制中</span></div>
+            </div>
+            <span class="go">›</span>
+          </div>
+
+          <div class="camrow">
+            <div class="avatar"><svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 015.5 6h9A2.5 2.5 0 0117 8.5v7a2.5 2.5 0 01-2.5 2.5h-9A2.5 2.5 0 013 15.5z"/><path d="M17 10.5l4-2.2v7.4l-4-2.2"/></svg><i></i></div>
+            <div class="meta">
+              <div class="t">后院 <span class="tchip">缩时 1× · 14 天</span></div>
+              <div class="s"><span>CH02</span><em>|</em><span>1080P</span><em>|</em><span>录制中</span></div>
+            </div>
+            <span class="go">›</span>
+          </div>
+
+          <div class="camrow">
+            <div class="avatar"><svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 015.5 6h9A2.5 2.5 0 0117 8.5v7a2.5 2.5 0 01-2.5 2.5h-9A2.5 2.5 0 013 15.5z"/><path d="M17 10.5l4-2.2v7.4l-4-2.2"/></svg><i class="off"></i></div>
+            <div class="meta">
+              <div class="t">客厅 <span class="tchip off">仅全时</span></div>
+              <div class="s"><span>CH03</span><em>|</em><span>1080P</span><em>|</em><span>已停用</span></div>
+            </div>
+            <span class="go">›</span>
+          </div>
+
+          <div class="camrow">
+            <div class="avatar"><svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 015.5 6h9A2.5 2.5 0 0117 8.5v7a2.5 2.5 0 01-2.5 2.5h-9A2.5 2.5 0 013 15.5z"/><path d="M17 10.5l4-2.2v7.4l-4-2.2"/></svg><i></i></div>
+            <div class="meta">
+              <div class="t">门口 <span class="tchip">缩时 4× · 7 天</span></div>
+              <div class="s"><span>CH04</span><em>|</em><span>720P</span><em>|</em><span>录制中</span></div>
+            </div>
+            <span class="go">›</span>
+          </div>
+
+          <div style="padding:10px 14px 13px;border-top:1px solid var(--line)">
+            <button class="btn ghost" style="width:100%">＋ 添加摄像头</button>
+          </div>
+        </div>
+
+        <!-- 诊断与日志：折叠 -->
+        <div class="zone">
+          <div class="zh">
+            <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M7 15l3.4-4 2.8 2.2L18 7"/></svg></div>
+            <div class="txt"><b>诊断与日志</b><span>存储 · 每路录制状态 · 环境自检 · 运行日志</span></div>
+            <span class="chev">展开 ⌄</span>
+          </div>
+          <div class="foldbody">
+            <div class="sumline">
+              <b>3 / 4 路在录</b> · 剩余 <b>1.8 TB</b> / 共 4.0 TB · 最近 <b style="color:var(--danger)">1 条错误</b>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <div class="tabbar">
+        <div>◉<br>直播</div>
+        <div>▤<br>回放</div>
+        <div class="on">⚙<br>设置</div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ================= 帧 2：摄像头编辑 · 基础 ================= -->
+  <div class="frame">
+    <div class="fcap">② 摄像头设置 · 四段折叠（默认只开第一段）
+      <small>手风琴：一次只展开一段，其余收起；底部保存栏常驻</small></div>
+    <div class="phone"><div class="ph-in">
+      <div class="hd">
+        <div class="row">
+          <div>
+            <div class="t" style="font-size:17px;display:flex;align-items:center;gap:8px">
+              <span style="width:26px;height:26px;border-radius:50%;background:var(--fill);display:grid;place-items:center;font-size:14px;color:var(--muted)">‹</span>
+              车库入口
+            </div>
+            <div class="s">CH01 · 仅这一路的参数</div>
+          </div>
+          <div class="r"><span class="tchip" style="background:var(--warn-soft);color:var(--warn)">编辑中</span></div>
+        </div>
+      </div>
+
+      <div class="scroll">
+
+        <div class="part">
+          <div class="ph"><span class="idx">1</span><b>名称与码流</b><span class="st" style="margin-left:auto;color:var(--primary)">收起 ⌃</span></div>
+          <div class="pb">
+            <div class="srow" style="padding-top:0">
+              <div class="top"><span class="n">名称</span></div>
+              <div style="border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:13px;margin-top:7px">车库入口</div>
+            </div>
+            <div class="srow">
+              <div class="top"><span class="n">主码流 · 录像</span><span class="v" style="font-size:10.5px;color:var(--keep)">已连通</span></div>
+              <div class="mono" style="font-size:10.5px;color:var(--muted);margin-top:6px;word-break:break-all">rtsp://192.168.2.108:554/stream1</div>
+            </div>
+            <div class="srow">
+              <div class="top"><span class="n">子码流 · 预览</span></div>
+              <div class="mono" style="font-size:10.5px;color:var(--faint);margin-top:6px;word-break:break-all">rtsp://192.168.2.108:554/stream2</div>
+            </div>
+            <div class="swrow" style="border-top:1px solid var(--line);margin-top:6px">
+              <div><span class="n">该摄像头启用</span><span class="h">关闭后不再录像、不出现在直播页，配置保留</span></div>
+              <div class="sw on"><i></i></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="part">
+          <div class="ph"><span class="idx">2</span><b>保留与分片</b>
+            <span class="st">全时 7 天 · 5 分钟</span>
+            <span class="chev">展开 ⌄</span></div>
+        </div>
+
+        <div class="part">
+          <div class="ph"><span class="idx">3</span><b>缩时压制</b>
+            <span class="st">已开启 · 2× · 7 天</span>
+            <span class="chev">展开 ⌄</span></div>
+        </div>
+
+        <div class="part">
+          <div class="ph"><span class="idx">4</span><b>检测忽略区</b>
+            <span class="st">已选 6 格</span>
+            <span class="chev">展开 ⌄</span></div>
+        </div>
+
+        <div class="part" style="padding:12px 14px">
+          <div class="sumline" style="font-size:11.5px">合计占用 ≈ <b>82 GB</b>（全时 64 + 缩时 18）· 剩余 1.8 TB</div>
+        </div>
+
+        <div style="padding:2px 2px 12px">
+          <button class="btn dangerline" style="width:100%;font-weight:400">删除这个摄像头</button>
+        </div>
+      </div>
+
+      <div class="actbar">
+        <span class="dirty">● 已改 1 项未保存</span>
+        <button class="btn ghost">取消</button>
+        <button class="btn primary">保存</button>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ================= 帧 3：摄像头编辑 · 缩时压制 ================= -->
+  <div class="frame">
+    <div class="fcap">③ 缩时压制展开 · 总闸 + 常用 + 进阶
+      <small>重点：总开关是总闸；常用 3 项直接给，进阶 8 项收起来</small></div>
+    <div class="phone"><div class="ph-in">
+      <div class="hd">
+        <div class="row">
+          <div>
+            <div class="t" style="font-size:17px;display:flex;align-items:center;gap:8px">
+              <span style="width:26px;height:26px;border-radius:50%;background:var(--fill);display:grid;place-items:center;font-size:14px;color:var(--muted)">‹</span>
+              缩时压制
+            </div>
+            <div class="s">车库入口 · CH01</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <!-- 总闸 -->
+        <div class="master">
+          <div class="tx"><b>缩时压制</b><span>关闭后只录全时，不再产出缩时片段</span></div>
+          <div class="sw on"><i></i></div>
+        </div>
+
+        <!-- 影响预估 -->
+        <div class="impact">
+          <div class="c"><div class="kv">2×</div><div class="kl">输出倍速</div></div>
+          <div class="c"><div class="kv">≈ 24</div><div class="kl">段 / 天</div></div>
+          <div class="c"><div class="kv">18 GB</div><div class="kl">占空间 / 天</div></div>
+          <div class="c"><div class="kv">7 天</div><div class="kl">保留</div></div>
+        </div>
+
+        <!-- 常用三项 -->
+        <div class="part" style="margin-top:10px">
+          <div class="ph" style="padding-bottom:8px"><b style="font-size:12.5px">常用</b>
+            <span class="st" style="margin-left:auto">这 3 项决定 90% 的效果</span></div>
+          <div class="pb">
+            <div class="srow" style="padding-top:4px">
+              <div class="top"><span class="n">输出倍速</span><span class="v">2×</span></div>
+              <div class="chips">
+                <button class="chip">1×</button>
+                <button class="chip on">2×</button>
+                <button class="chip">4×</button>
+                <button class="chip">8×</button>
+              </div>
+              <div class="h">2× = 10 秒事件压成 5 秒。倍速 &gt; 1 需重编码，CPU 会明显上升；空闲时建议先 2× 观察一天。</div>
+            </div>
+            <div class="srow">
+              <div class="top"><span class="n">缩时片段保留</span><span class="v">7 天</span></div>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+                <button class="btn ghost" style="padding:7px 13px">−</button>
+                <span class="mono" style="font-size:15px;font-weight:600">7 天</span>
+                <button class="btn ghost" style="padding:7px 13px">＋</button>
+                <span class="h" style="margin:0 0 0 auto">全时保留不受影响</span>
+              </div>
+            </div>
+            <div class="srow">
+              <div class="top"><span class="n">灵敏度</span><span class="v">标准（推荐）</span></div>
+              <div class="chips">
+                <button class="chip">低</button>
+                <button class="chip on">标准</button>
+                <button class="chip">高</button>
+              </div>
+              <div class="h">树影、雨雪多选「低」；要抓远处小目标选「高」。</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 进阶折叠 -->
+        <div class="part">
+          <div class="ph"><b style="font-size:12.5px">进阶判读参数</b>
+            <span class="st" style="margin-left:6px;color:var(--warn)">已调 1 项</span>
+            <span class="chev">展开 ⌄</span></div>
+          <div class="pb">
+            <div class="sumline" style="font-size:11.5px">
+              引擎 自动 · 画面 彩色 · 门槛 24 · 最短事件 2 秒 · 模糊 1 · 抽样 2 帧/秒 · 采样 5 秒 · 静默合并 20 秒
+            </div>
+          </div>
+        </div>
+
+        <div class="part" style="padding:11px 14px">
+          <button class="btn ghost" style="width:100%;font-weight:400;color:var(--muted)">恢复这一路的默认参数</button>
+        </div>
+        <div style="height:6px"></div>
+      </div>
+
+      <div class="actbar">
+        <span class="dirty" style="color:var(--faint)">最后保存 12:05</span>
+        <button class="btn ghost">取消</button>
+        <button class="btn primary">保存</button>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ================= 帧 4：总闸关闭确认 ================= -->
+  <div class="frame">
+    <div class="fcap">④ 关总闸 / 恢复默认 · 必须确认
+      <small>关闭缩时、复默认、删摄像头这三件事都要过一道确认</small></div>
+    <div class="phone"><div class="ph-in" style="filter:saturate(.4) blur(1.1px)">
+      <div class="hd">
+        <div class="row"><div><div class="t" style="font-size:17px">缩时压制</div><div class="s">车库入口 · CH01</div></div></div>
+      </div>
+      <div class="scroll">
+        <div class="master" style="background:var(--fill)">
+          <div class="tx"><b>缩时压制</b><span>关闭后只录全时，不再产出缩时片段</span></div>
+          <div class="sw"><i></i></div>
+        </div>
+        <div class="impact">
+          <div class="c"><div class="kv">2×</div><div class="kl">输出倍速</div></div>
+          <div class="c"><div class="kv">≈ 24</div><div class="kl">段 / 天</div></div>
+          <div class="c"><div class="kv">18 GB</div><div class="kl">占空间 / 天</div></div>
+          <div class="c"><div class="kv">7 天</div><div class="kl">保留</div></div>
+        </div>
+        <div class="part"><div class="ph"><span class="idx">3</span><b>缩时压制</b><span class="chev">展开 ⌄</span></div></div>
+      </div>
+    </div>
+    <div class="mask">
+      <div class="sheet">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 9v5M12 17.5v.5"/><path d="M10.3 4.2L3.4 16a2 2 0 001.7 3h13.8a2 2 0 001.7-3L13.7 4.2a2 2 0 00-3.4 0z"/></svg></div>
+        <h4>关闭「车库入口」的缩时压制？</h4>
+        <p>关闭后这一路只录全时录像，不再切出缩时片段；判定、倍速、忽略区参数会保留但不生效，随时可以再打开。</p>
+        <div class="keep">已有的 7 天缩时片段<b>不会被删除</b>，按原保留周期自然过期。</div>
+        <div class="row">
+          <button class="no">保持开启</button>
+          <button class="yes">仍然关闭</button>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- ================= 帧 5：诊断与日志 ================= -->
+  <div class="frame">
+    <div class="fcap">⑤ 诊断与日志 · 展开（含每路占用）
+      <small>存储总账 + 每路明细 + 每路录制状态；统计按需重算，不跟录像实时跑</small></div>
+    <div class="phone"><div class="ph-in">
+      <div class="hd">
+        <div class="row">
+          <div>
+            <div class="t" style="font-size:17px;display:flex;align-items:center;gap:8px">
+              <span style="width:26px;height:26px;border-radius:50%;background:var(--fill);display:grid;place-items:center;font-size:14px;color:var(--muted)">‹</span>
+              诊断与日志
+            </div>
+            <div class="s">出问题先看这里</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <!-- 存储总账 -->
+        <div class="dcard">
+          <div class="dh">存储与保留<span class="rt">统计于 13:20 · 非实时</span></div>
+          <div class="sthead">
+            <span class="mono big">2.2</span><span class="unit">TB 已用 / 共 4.0 TB</span>
+            <span class="rt">剩余 1.8 TB</span>
+          </div>
+          <div class="stbar-big">
+            <i class="f" style="width:78%"></i>
+            <i class="c" style="width:22%"></i>
+          </div>
+          <div class="legend">
+            <span><i style="background:var(--primary)"></i>全时 <b>1.71 TB · 78%</b></span>
+            <span><i style="background:#9dbaff"></i>缩时 <b>0.49 TB · 22%</b></span>
+          </div>
+
+          <!-- 每路占用 -->
+          <div style="margin-top:11px;padding-top:10px;border-top:1px solid var(--line)">
+            <div style="display:flex;align-items:baseline;font-size:11px;color:var(--faint)">
+              <span>每路占用</span><span style="margin-left:auto">全时 / 缩时</span>
+            </div>
+            <div class="strow">
+              <span class="nm">车库入口</span>
+              <span class="stbar"><i class="f" style="width:84%"></i><i class="c" style="width:16%"></i></span>
+              <span class="vv">512 G<em>431 / 81</em></span>
+            </div>
+            <div class="strow">
+              <span class="nm">后院</span>
+              <span class="stbar"><i class="f" style="width:84%"></i><i class="c" style="width:16%"></i></span>
+              <span class="vv">784 G<em>661 / 123</em></span>
+            </div>
+            <div class="strow">
+              <span class="nm">客厅</span>
+              <span class="stbar"><i class="f" style="width:100%"></i></span>
+              <span class="vv">72 G<em>72 / —</em></span>
+            </div>
+            <div class="strow">
+              <span class="nm">门口</span>
+              <span class="stbar"><i class="f" style="width:65%"></i><i class="c" style="width:35%"></i></span>
+              <span class="vv">842 G<em>548 / 294</em></span>
+            </div>
+          </div>
+
+          <div class="dline" style="margin-top:9px">保留策略 <b>全时 3~7 天 / 缩时 7~14 天</b></div>
+          <div class="dline">循环覆盖 <b>超出后删最旧日期</b></div>
+          <div class="pathchip"><code class="mono">/vol1/@appshare/nvr-output</code><span>在文件管理打开</span></div>
+          <div class="stnote">
+            <span>按「摄像头 / 日期」目录汇总，每 30 分钟最多重算一次；打开本页且缓存过期才扫盘，直播与回放不触发。</span>
+            <button class="btnmini">立即重算</button>
+          </div>
+        </div>
+
+        <!-- 每路录制状态 -->
+        <div class="dcard">
+          <div class="dh">每路录制状态<span class="tg">进程 / 最新分片 / 诊断</span><span class="rt">3 / 4 在录</span></div>
+          <div class="recline"><i></i><b>车库入口</b><span>在录 · 最新 13:50_05m.mp4</span><button>诊断</button></div>
+          <div class="recline"><i></i><b>后院</b><span>在录 · 最新 13:50_05m.mp4</span><button>诊断</button></div>
+          <div class="recline"><i class="warn"></i><b>客厅</b><span>已停用 · 停用前最后一个分片 12:04</span><button>诊断</button></div>
+          <div class="recline"><i></i><b>门口</b><span>在录 · 最新 13:50_05m.mp4</span><button>诊断</button></div>
+          <div class="h" style="font-size:10.5px;color:var(--faint);margin-top:8px;line-height:1.65">
+            点「诊断」就地展开：ffprobe 读流 + 试录 8 秒，直接给出「是摄像头还是 ffmpeg 的问题」。
+          </div>
+        </div>
+
+        <!-- 环境 -->
+        <div class="dcard">
+          <div class="dh">环境自检<span class="rt">正常</span></div>
+          <div class="envi">
+            <span class="envchip">ffmpeg 7.1</span>
+            <span class="envchip">像素判读可用</span>
+            <span class="envchip">目录可写</span>
+            <span class="envchip">端口 18080</span>
+            <span class="envchip bad">磁盘 55% 已用</span>
+          </div>
+        </div>
+
+        <!-- 日志 -->
+        <div class="dcard">
+          <div class="dh">运行日志<span class="tg">密码已脱敏</span><span class="rt">最近 200 行</span></div>
+          <div class="logbox"><pre>13:50:04 <span style="color:#7fd1a8">[link]</span> 车库入口 分片完成 05m.mp4 128MB
+13:50:05 <span style="color:#7fd1a8">[link]</span> 入队压制 clip/车库入口/2026-10-22
+13:50:31 <span class="w">[warn]</span> 客厅 摄像头已停用，跳过
+13:51:02 <span class="e">[err ]</span> 门口 重连 (1/3)：Connection timed out
+13:51:12 <span style="color:#7fd1a8">[link]</span> 门口 重连成功</pre></div>
+          <div class="logbtns">
+            <button>刷新</button><button>复制</button><button class="danger">清除</button>
+          </div>
+        </div>
+
+        <!-- 危险区 -->
+        <div class="dcard dangerzone" style="border:none;padding-top:0">
+          <div class="dh" style="margin-bottom:6px">维护<span class="tg">会影响正在进行的录制</span></div>
+          <button class="dbtn">导出诊断包（凭据已脱敏）</button>
+          <button class="dbtn warn">重启服务 · 需确认</button>
+        </div>
+        <div style="height:4px"></div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ================= 帧 6：直播首页 · 快照态 ================= -->
+  <div class="frame">
+    <div class="fcap">⑥ 直播首页 · 快照态（双列）
+      <small>齿轮旁新增列数按钮；底部「连续播放」一键就地开播，不换页</small></div>
+    <div class="phone" style="height:760px"><div class="ph-in">
+      <div class="hd">
+        <div class="row">
+          <div>
+            <div class="t" style="font-size:17px">实时预览</div>
+            <div class="s"><span style="color:var(--keep)">● 4 台在线</span> · 快照 · 10 秒刷新</div>
+          </div>
+          <div class="r">
+            <button class="iconbtn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2l.4 2.7h4l.4-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></svg></button>
+            <button class="iconbtn" style="background:var(--primary-soft)">
+              <svg viewBox="0 0 24 24" style="stroke:var(--primary)"><rect x="3" y="4" width="7.5" height="16" rx="1.6"/><rect x="13.5" y="4" width="7.5" height="16" rx="1.6"/></svg>
+            </button>
+            <button class="iconbtn"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M21 16v3a2 2 0 01-2 2h-3M8 21H5a2 2 0 01-2-2v-3"/></svg></button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 列数弹层（点第二颗按钮） -->
+      <div class="laypop" style="top:60px">
+        <button><svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2"><rect x="4" y="3" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg>单列</button>
+        <button class="on"><svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2"><rect x="3" y="3" width="8" height="18" rx="1.5"/><rect x="13" y="3" width="8" height="18" rx="1.5"/></svg>双列</button>
+      </div>
+
+      <div class="scroll" style="padding:10px 12px 12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+          <div class="lrtile2" style="border-radius:12px">
+            <div class="sc"></div>
+            <div class="rectag"><i></i>REC</div>
+            <div class="tt2 mono">13:51:07</div>
+            <div class="tn2">车库入口<em>CH01</em></div>
+            <div class="snapago">2 秒前</div>
+          </div>
+          <div class="lrtile2" style="border-radius:12px">
+            <div class="sc"></div>
+            <div class="rectag"><i></i>REC</div>
+            <div class="tt2 mono">13:51:03</div>
+            <div class="tn2">后院<em>CH02</em></div>
+            <div class="snapago">6 秒前</div>
+          </div>
+          <div class="lrtile2 dead" style="border-radius:12px">
+            <div class="sc"></div>
+            <div class="rectag off">已停用</div>
+            <div class="tt2 mono">12:04:38</div>
+            <div class="ctr2"><svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 015.5 6h9A2.5 2.5 0 0117 8.5v7a2.5 2.5 0 01-2.5 2.5h-9A2.5 2.5 0 013 15.5z"/><path d="M3 3l18 18"/></svg><span>未启用</span></div>
+            <div class="tn2">客厅<em>CH03</em></div>
+          </div>
+          <div class="lrtile2" style="border-radius:12px">
+            <div class="sc"></div>
+            <div class="rectag"><i></i>REC</div>
+            <div class="tt2 mono">13:51:05</div>
+            <div class="tn2">门口<em>CH04</em></div>
+            <div class="snapago">3 秒前</div>
+          </div>
+        </div>
+        <div class="livehint2">快照每 10 秒刷新 · 点任意画面进入单路全屏横屏播放</div>
+      </div>
+
+      <div class="wallbar">
+        <button class="play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>连续播放 · 4 路</button>
+      </div>
+      <div class="tabbar">
+        <div class="on">◉<br>直播</div>
+        <div>▤<br>回放</div>
+        <div>⚙<br>设置</div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ================= 帧 7：直播首页 · 连续播放 ================= -->
+  <div class="frame">
+    <div class="fcap">⑦ 连续播放中（同一页）
+      <small>快照墙原地变成实时流，不跳页；按钮变「回到快照」</small></div>
+    <div class="phone" style="height:760px"><div class="ph-in">
+      <div class="hd">
+        <div class="row">
+          <div>
+            <div class="t" style="font-size:17px">实时预览</div>
+            <div class="s"><span style="color:var(--keep)">● 连续播放</span> · 4 路 · 合计 2.4 Mbps</div>
+          </div>
+          <div class="r">
+            <button class="iconbtn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2l.4 2.7h4l.4-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></svg></button>
+            <button class="iconbtn" style="background:var(--primary-soft)">
+              <svg viewBox="0 0 24 24" style="stroke:var(--primary)"><rect x="3" y="4" width="7.5" height="16" rx="1.6"/><rect x="13.5" y="4" width="7.5" height="16" rx="1.6"/></svg>
+            </button>
+            <button class="iconbtn"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M21 16v3a2 2 0 01-2 2h-3M8 21H5a2 2 0 01-2-2v-3"/></svg></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="scroll" style="padding:10px 12px 12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+          <div class="lrtile2" style="border-radius:12px">
+            <div class="sc"></div>
+            <div class="rectag"><i></i>直播中</div>
+            <div class="tt2 mono">13:51:07</div>
+            <div class="tn2">车库入口<em>CH01</em></div>
+          </div>
+          <div class="lrtile2" style="border-radius:12px">
+            <div class="sc"></div>
+            <div class="rectag"><i></i>直播中</div>
+            <div class="tt2 mono">13:51:03</div>
+            <div class="tn2">后院<em>CH02</em></div>
+          </div>
+          <div class="lrtile2" style="border-radius:12px">
+            <div class="sc"></div>
+            <div class="rectag"><i></i>直播中</div>
+            <div class="tt2 mono">13:51:05</div>
+            <div class="tn2">草坪<em>CH05</em></div>
+            <div class="tst">快照 · 10s</div>
+          </div>
+          <div class="lrtile2 dead" style="border-radius:12px">
+            <div class="sc"></div>
+            <div class="rectag"><i></i>直播中</div>
+            <div class="ctr2"><svg viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg><span>无画面 · 超时</span><button class="retry">重试</button></div>
+            <div class="tn2">门口<em>CH04</em></div>
+          </div>
+        </div>
+        <div class="livehint2">单路失败只影响这一格 · 点「重试」重连该路，其余继续播</div>
+      </div>
+
+      <div class="wallbar">
+        <button class="stop"><svg viewBox="0 0 24 24" style="fill:currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>回到快照</button>
+        <span class="wallstat"><i></i>实时 · 已播 12 分钟</span>
+      </div>
+      <div class="tabbar">
+        <div class="on">◉<br>直播</div>
+        <div>▤<br>回放</div>
+        <div>⚙<br>设置</div>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ================= 帧 8：单路全屏横屏 ================= -->
+  <div class="frame" style="width:760px">
+    <div class="fcap">⑧ 点画面 → 单路全屏横屏（真全屏）
+      <small>可暂停、可退出全屏，播放状态一直可见；轻点画面显示/隐藏控制条</small></div>
+    <div class="phone land"><div class="ph-in" style="background:#000">
+      <div style="position:absolute;inset:0;background:radial-gradient(120% 100% at 40% 30%,#3c4655 0%,#1b212a 60%,#0d1117 100%)"></div>
+
+      <!-- 顶部：退出全屏 + 状态 -->
+      <div class="fsTop">
+        <button class="fsExit"><svg viewBox="0 0 24 24"><path d="M9 4H5a1 1 0 00-1 1v4M15 4h4a1 1 0 011 1v4M20 15v4a1 1 0 01-1 1h-4M9 20H5a1 1 0 01-1-1v-4"/></svg>退出全屏</button>
+        <div class="fsState">
+          <span class="dot"></span><b>直播中</b>
+          <span class="sep">|</span><span class="mono">车库入口 · CH01</span>
+          <span class="sep">|</span><span class="mono">0.62 Mbps · 延迟 1.2 s</span>
+          <span class="sep">|</span><span class="mono" style="color:#ffb3ae">● REC 全时</span>
+        </div>
+      </div>
+
+      <!-- 暂停态：居中播放键 -->
+      <div style="position:absolute;inset:0;display:grid;place-items:center">
+        <div style="width:64px;height:64px;border-radius:50%;background:rgba(10,14,20,.55);display:grid;place-items:center">
+          <svg viewBox="0 0 24 24" style="width:28px;height:28px;fill:#fff;margin-left:3px"><path d="M8 5v14l11-7z"/></svg>
+        </div>
+      </div>
+
+      <!-- 底部控制条（轻点浮现） -->
+      <div class="fsBar">
+        <button class="fsBtn"><svg viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></svg>暂停</button>
+        <span class="fsLive"><i></i>实时</span>
+        <span class="mono" style="font-size:12px;color:#e8ecf3">13:51:07</span>
+        <span style="font-size:11px;color:rgba(255,255,255,.45)">已暂停 · 画面冻结在最后一帧</span>
+        <button class="fsBtn" style="margin-left:auto"><svg viewBox="0 0 24 24"><path d="M9 4H5a1 1 0 00-1 1v4M15 4h4a1 1 0 011 1v4M20 15v4a1 1 0 01-1 1h-4M9 20H5a1 1 0 01-1-1v-4"/></svg>退出全屏</button>
+      </div>
+    </div></div>
+  </div>
+
+  <!-- ================= 帧 9：状态样张 ================= -->
+  <div class="frame" style="width:390px">
+    <div class="fcap">⑨ 八种状态 · 一眼区分
+      <small>首页卡片、连续播放、单路全屏共用同一套四角信息位</small></div>
+    <div class="statecards">
+      <div class="statecard">
+        <div class="box lrtile2" style="aspect-ratio:auto;height:104px">
+          <div class="sc"></div><div class="rectag"><i></i>REC</div>
+          <div class="tt2 mono">13:51:07</div><div class="tn2">车库入口<em>CH01</em></div>
+        </div>
+        <div class="cap"><b>录制中</b>：四角信息，画面无遮罩</div>
+      </div>
+      <div class="statecard">
+        <div class="box lrtile2" style="aspect-ratio:auto;height:104px">
+          <div class="sc"></div><div class="rectag idle">仅预览</div>
+          <div class="tt2 mono">13:51:07</div><div class="tn2">客厅<em>CH03</em></div>
+        </div>
+        <div class="cap"><b>仅预览</b>：缩时关闭 / 未录像，灰标签</div>
+      </div>
+      <div class="statecard">
+        <div class="box lrtile2" style="aspect-ratio:auto;height:104px">
+          <div class="sc"></div><div class="rectag off">已停用</div>
+          <div class="ctr2"><svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 015.5 6h9A2.5 2.5 0 0117 8.5v7a2.5 2.5 0 01-2.5 2.5h-9A2.5 2.5 0 013 15.5z"/><path d="M3 3l18 18"/></svg><span>未启用</span></div>
+        </div>
+        <div class="cap"><b>已停用</b>：整格灰化，不再"等待第一帧"</div>
+      </div>
+      <div class="statecard">
+        <div class="box lrtile2" style="aspect-ratio:auto;height:104px">
+          <div class="sc"></div><div class="rectag"><i></i>REC</div>
+          <div class="ctr2"><span class="spin2"></span><span>连接中…</span></div>
+          <div class="tst">0.8 秒</div>
+        </div>
+        <div class="cap"><b>连接中</b>：转圈 + 已等时长，6 秒转下一态</div>
+      </div>
+      <div class="statecard">
+        <div class="box lrtile2" style="aspect-ratio:auto;height:104px">
+          <div class="sc"></div><div class="rectag"><i></i>直播中</div>
+          <div class="tt2 mono">13:51:03</div><div class="tn2">后院<em>CH02</em></div>
+          <div class="tst">快照 · 10s</div>
+        </div>
+        <div class="cap"><b>回落快照</b>：流起不来但图能拉，琥珀标说明</div>
+      </div>
+      <div class="statecard">
+        <div class="box lrtile2 dead" style="aspect-ratio:auto;height:104px">
+          <div class="sc"></div><div class="rectag"><i></i>直播中</div>
+          <div class="ctr2"><svg viewBox="0 0 24 24"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg><span>无画面 · 超时</span><button class="retry">重试</button></div>
+        </div>
+        <div class="cap"><b>无画面</b>：给原因 + 单格重试</div>
+      </div>
+      <div class="statecard">
+        <div class="box lrtile2" style="aspect-ratio:auto;height:104px">
+          <div class="sc"></div><div class="rectag"><i></i>直播中</div>
+          <div class="tt2 mono">13:51:07</div><div class="tn2">车库入口<em>CH01</em></div>
+        </div>
+        <div class="cap"><b>连续播放中</b>：卡片右上「直播中」，无播放浮层</div>
+      </div>
+      <div class="statecard">
+        <div class="box lrtile2" style="aspect-ratio:auto;height:104px">
+          <div class="sc"></div>
+          <div style="position:absolute;inset:0;background:rgba(6,9,14,.45);display:grid;place-items:center">
+            <div style="width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.16);display:grid;place-items:center">
+              <svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:#fff;margin-left:2px"><path d="M8 5v14l11-7z"/></svg>
+            </div>
+          </div>
+          <div class="tst" style="right:6px;bottom:5px">已暂停</div>
+        </div>
+        <div class="cap"><b>已暂停</b>：整墙一并冻结，右下角标「已暂停」</div>
+      </div>
+    </div>
+  </div>
+
+
+</div>
+
+<!-- ================= 注释 ================= -->
+<div class="notes">
+  <h2>逐条说明</h2>
+
+  <div class="note"><b class="n">1</b><div>
+    <b>设置页只留三个分区，顺序固定：通用 → 摄像头 → 诊断与日志。</b>
+    通用和诊断默认<b>收起</b>，各自只露一行真实摘要（通用：录像是否启用、清理时刻、压制模式、分片长度、目录；诊断：几路在录、剩余空间、未读错误数）。
+    摄像头是日常改动对象，永远默认展开、始终在中间，不受另外两块展开影响而上下跳。
+  </div></div>
+
+  <div class="note"><b class="n">2</b><div>
+    <b>摄像头行本身就是「状态 + 入口」，不再是「点开才有信息」。</b>
+    每行直接给出四件事：在线点、名称、通道/分辨率/是否在录、缩时摘要胶囊（<code>缩时 2× · 7 天</code> / <code>仅全时</code> / <code>已停用</code>）。
+    每路的关键差异一眼可比，不用逐个点开。删除按钮从行内（原来紧挨着名称）移到编辑页最底部，行内只留一个 <code>›</code>，从源头消掉"点错删除"。
+  </div></div>
+
+  <div class="note"><b class="n">3</b><div>
+    <b>编辑页改为「四段手风琴」，一次只展开一段：</b>
+    ① 名称与码流 ② 保留与分片 ③ 缩时压制 ④ 检测忽略区。
+    展开一段时其它段自动收起，折叠状态下标题行右侧始终显示该段当前值（<code>全时 7 天 · 5 分钟</code>、<code>已开启 · 2× · 7 天</code>、<code>已选 6 格</code>）——收起不等于失明。
+    好处是每一屏只面对一类参数，滑块不会紧挨着开关，纵向滚动从 3 屏缩到 1 屏多。
+  </div></div>
+
+  <div class="note"><b class="n">4</b><div>
+    <b>缩时压制分三层：总闸 → 常用 → 进阶。</b>
+    总闸单独一条带底色的条（不是普通开关行），开关右侧只有一句后果说明；下面是四格<b>影响预估</b>（倍速 / 段/天 / GB每天 / 保留），改任何参数都实时变，动手前先看到代价。
+    常用只放 3 项：<b>输出倍速、缩时保留、灵敏度</b>——这三项覆盖绝大多数使用场景（占参数数量 3/11，覆盖 90% 效果）。
+    其余 8 项（引擎、画面类型、像素差门槛、最短事件、模糊半径、抽样帧、日夜采样、静默合并）全部收进「进阶判读参数」，收起时用一行摘要横向列出全部当前值，展开后每项单独一行滑块。
+  </div></div>
+
+  <div class="note"><b class="n">5</b><div>
+    <b>防误操作，四处硬约束：</b>
+    <span class="badge">a</span>关总闸 / 恢复默认 / 删除摄像头三个动作都必须过确认浮层，且浮层里写清"什么会变、什么不会变"（例如"已有 7 天缩时片段不会被删除"）。
+    <span class="badge">b</span>底部动作栏常驻不随内容滚走，左侧永远显示「已改 N 项未保存」或「最后保存 HH:MM」；有未保存改动时返回会拦一道。
+    <span class="badge">c</span>偏离默认值的进阶项标 <code>已调</code>，单项旁给「恢复默认」，整页底部才有"恢复这一路默认"，避免一键清掉全部调参。
+    <span class="badge">d</span>倍速 &gt; 1 时就地提示 CPU 上升，不弹窗打断，但文字要具体（"10 秒事件压成 5 秒"）。
+  </div></div>
+
+  <div class="note"><b class="n">6</b><div>
+    <b>诊断与日志承接三样东西：</b>
+    直播页底部那条「存储剩余/总量/保留策略 + 目录」整条搬进来，扩成一张存储卡（已用/总容量 + 全时·缩时堆叠条 + <b>每路占用明细</b> + 目录可点）；
+    通用设置「录制」卡里的<b>每路录制状态</b>整块搬进来，一行一路（圆点 / 名称 / 状态与最新分片 / 就地诊断），失败时下面直接给中文下一步建议、ffmpeg 原文收进折叠；
+    原有的环境自检、运行日志、导出诊断包一并留在这张页里。
+    直播页因此少一条 42px 的常驻底栏，四宫格画面高度直接受益。
+  </div></div>
+
+  <div class="note"><b class="n">7</b><div>
+    <b>危险动作在诊断页里单独隔开：</b>「重启服务」和「清除日志」放进最底部「维护」区，用细线与上面的只读信息分开，重启走确认，清除日志按钮用红色描边。诊断页 90% 的时间只是"看"，不该让危险按钮混在查看路径里。
+  </div></div>
+
+  <div class="note"><b class="n">8</b><div>
+    <b>不改的部分：</b>通用里的「录制总开关 / 清理时刻 / 目录 / 压制衔接 / 外观」内容一条不动，只是收进折叠区；
+    参数名、取值范围、服务端字段全部沿用现有实现（<code>judge.*</code> / <code>clipSpeed</code> / <code>clipDays</code> / <code>masks.ignore</code>），本次只做信息架构与交互层重排，不动判定引擎。
+  </div></div>
+
+  <div class="note"><b class="n">9</b><div>
+    <b>存储只画「录像构成」，不再出现灰色的"其余可用"。</b>
+    容量是全盘共享的，按路去摊"这路还能用多少"没有意义，所以：
+    总条只由<b>全时（深蓝）+ 缩时（浅蓝）</b>两段组成，按已用体积归一（78% / 22%），剩余容量用顶部一行文字表达（<code>剩余 1.8 TB</code>，共 4.0 TB）；
+    每路那一条同样归一 —— 分子是全时 / 缩时字节，分母是<b>这一路自己的总量</b>，所以每行都是满格两段，读的是"这路里全时和缩时各占多少"（车库 84% / 16%、门口 65% / 35%）。
+    想比谁占得多就看右侧总量数字与行排序，不靠条长跨行比较。
+    <br><b>成本控制：</b>统计只按「摄像头 / 日期」两级目录聚合（4 路 × 30 天 ≈ 120 个目录），结果带时间戳缓存，<b>30 分钟内最多重算一次</b>；
+    只有打开诊断页且缓存过期才触发，直播、回放、其它设置页都不触发。页面写明「统计于 13:20 · 非实时」，旁边「立即重算」由用户自己按。
+    接口：<code>GET /api/storage/usage</code>（命中缓存即回，含每路 full/clip 字节与统计时刻）、<code>POST /api/storage/usage/refresh</code>（强制重算，按钮转"统计中…"）。
+  </div></div>
+
+  <div class="note"><b class="n">10</b><div>
+    <b>首页列数按钮放在刷新间隔齿轮右边，选择要记住。</b>
+    齿轮管"多久刷一张"，旁边新增一颗布局按钮，点开两个选项：<b>单列 / 双列</b>（当前项主色高亮）。
+    单列 = 老样子，大画面、看得清；双列 = 一屏看到 4 路，适合巡看。切换立即生效并写入本地配置（<code>live.cols</code>），下次打开、重装配置保留都还是这个选择。
+    摄像头数量为 1 时按钮自动隐藏（单列/双列没区别）。
+  </div></div>
+
+  <div class="note"><b class="n">11</b><div>
+    <b>「连续播放」是一个按钮，不是一次跳转。</b>
+    首页底部一条主色按钮「▶ 连续播放 · 4 路」，按下后<b>当前这面快照墙原地换成实时流</b>：卡片上的快照 img 换成子码流，快照轮询对这些卡片暂停，按钮变成「■ 回到快照」，右侧显示「实时 · 已播 12 分钟」。
+    整个过程不切页面、不重建列表、滚动位置不丢 —— 以前点任意一张图就直接进全屏播放层，想"四路一起动起来看看"反而没有入口。
+    某一路流起不来时只有那一格回落快照/报错，其余继续播（帧 ⑦ 第 4 格演示）。
+  </div></div>
+
+  <div class="note"><b class="n">12</b><div>
+    <b>点某张画面 → 单路全屏横屏播放（帧 ⑧）。</b>
+    真全屏 API + 横屏锁定（不支持的 WebView 退回画面旋转铺满），进入即播；轻点画面显示/隐藏控制条：
+    左侧「暂停」、中间「● 实时 + 时钟」、右侧「退出全屏」，顶部还有常驻的「退出全屏」和一行状态
+    （<code>直播中 · 车库入口 CH01 · 0.62 Mbps · 延迟 1.2s · ● REC 全时</code>）——用户随时知道"在播 / 已暂停、哪一路、在不在录"。
+    暂停时画面冻结在最后一帧、中央出现播放键，状态行变「已暂停 · 画面冻结在最后一帧」；再点播放继续。退出全屏回到首页原来的位置与列数。
+  </div></div>
+
+  <div class="note"><b class="n">13</b><div>
+    <b>状态信息统一成「四个角」，首页卡片 / 连续播放 / 单路全屏共用一套：</b>
+    左上 = 录制态（<code>REC</code> 红 / <code>仅预览</code> 灰 / <code>已停用</code> / 连续播放时写 <code>直播中</code>），右上 = 时间戳，
+    左下 = 名称 + 通道号，右下 = <b>只在异常时出现</b>的状态标签（快照回落 / 已暂停 / 无画面）。
+    异常分三级：连接中转圈计时（0.8 秒，6 秒升级）→ 回落快照（琥珀「快照 · 10s」，不冒充实时）→ 无画面（压暗 + 原因 + 单格「重试」）。
+    正常画面不加任何遮罩，避免状态层比画面还抢眼。
+  </div></div>
+
+  <div class="note"><b class="n">14</b><div>
+    <b>暂停的形态也跟着改了：</b>首页连续播放时按「回到快照」= 整墙冻结成快照轮询（这是最自然的暂停）；单路全屏里按「暂停」= 冻结当前帧并给一个居中播放键。
+    不再出现"每格各压一个大播放图标"的画面（以前宫格四格就是四个图标，既挡画面又像四路各自暂停）。
+  </div></div>
+</div>
+
+</body>
+</html>

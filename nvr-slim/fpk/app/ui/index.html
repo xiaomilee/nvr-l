@@ -85,6 +85,8 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .campick .cp .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .campick .cempty{padding:16px 10px;text-align:center;font-size:12px;color:var(--faint)}
 .hdr-sub{font-size:12.5px;color:var(--faint);margin-top:1px}
+/* 0.9.33 CH/文件数并入摄像头名行：小字弱化，压住大字号基线 */
+.camsel .hdr-sub{font-weight:400;margin-top:3px;white-space:nowrap}
 .iconbtn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:var(--text2);flex:0 0 auto}
 /* 标题占满剩余宽度，按钮排到右侧 —— 直播页现在有 3 颗按钮，
    原来"第一颗 margin-left:auto"的写法会把第三颗挤出屏幕 */
@@ -124,11 +126,8 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .dchip.on .k{opacity:.75}
 
 /* 概览 */
-.overview{display:flex;gap:0;background:var(--surface);padding:0 16px 12px}
-.ov{flex:1;padding:8px 0 0}
-.ov .l{font-size:11.5px;color:var(--faint)}
-.ov .v{font-size:16px;font-weight:600;letter-spacing:-.3px;margin-top:1px}
-.ov .v.g{color:var(--keep)}
+/* 0.9.33 概览四格（保留时长/占全天/片段数/体积）整体下线：信息与
+   时间轴摘要、诊断页重复，回放页少一层占位更聚焦 */
 
 /* 热力条 */
 .heatwrap{background:var(--surface);padding:2px 16px 14px;border-bottom:1px solid var(--line)}
@@ -136,6 +135,38 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .hcell{flex:1;border-radius:5px;background:var(--fill);position:relative;transition:.12s}
 .hcell.on{box-shadow:0 0 0 2px var(--primary);z-index:1}
 .heatlbl{display:flex;justify-content:space-between;font-size:10.5px;color:var(--faint2);margin-top:5px}
+/* 全天分布时间轴：全时/缩时 同一刻度看分布（0.9.33 起常驻播放器画面上方；
+   0.9.34 说明行移到色条上方，色条贯穿全宽、加高方便点按跳播） */
+.tlane{margin-top:12px}
+.tl-head{display:flex;align-items:baseline;gap:8px;margin-bottom:7px}
+.tl-head b{font-size:12px;color:var(--text2);font-weight:600}
+.tl-hint{margin-left:auto;font-size:10px;color:var(--faint2)}
+.tl-all{font-size:10.5px;color:var(--primary);padding:2px 6px;margin:-2px 0 -2px auto;cursor:pointer}
+.tlrow{display:block;margin-bottom:7px}
+.tl-cap{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:3px}
+.tl-lbl{flex:none;font-size:10.5px;color:var(--muted)}
+.tl-track{flex:1;height:18px;border-radius:4px;background:var(--fill);position:relative;overflow:hidden;display:block}
+.tl-block{position:absolute;top:0;bottom:0;border-radius:3px;min-width:3px}
+.tl-block.fb{background:var(--keep)}
+/* 当前播放文件定位竖线：全时/缩时两条轨同源同位，随 timeupdate 轻量移动。
+   0.9.39 应用户要求改红色 + 光晕，与播放控件当前时刻同色。 */
+.tl-cursor{position:absolute;top:-1px;bottom:-1px;width:2px;background:#ff5a5a;
+  box-shadow:0 0 6px rgba(255,80,80,.9);pointer-events:none;display:none;z-index:2}
+.tl-val{font-size:10.5px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:72%;font-variant-numeric:tabular-nums}
+.tl-ticks{display:flex;justify-content:space-between;font-size:10px;color:var(--faint2);margin:3px 0 0;font-variant-numeric:tabular-nums}
+/* 0.9.33 时间轴进播放器：黑底适配；0.9.34 左右贴边贯穿全宽、色条加高到
+   20px 方便手指点按；横屏/全屏整块隐藏不占播放空间 */
+.p-tl{flex:0 0 auto;margin:2px 0 4px;padding:6px 12px 2px;border-bottom:1px solid rgba(255,255,255,.07)}
+.p-tl .tl-track{height:20px}
+.p-tl .tl-head{margin-bottom:5px}
+.p-tl .tl-head b{color:rgba(255,255,255,.55)}
+.p-tl .tl-track{background:rgba(255,255,255,.10)}
+.p-tl .tl-lbl{color:rgba(255,255,255,.45)}
+.p-tl .tl-val{color:rgba(255,255,255,.55)}
+.p-tl .tl-ticks{color:rgba(255,255,255,.32);margin-top:2px}
+.phone.land .p-tl{display:none}
+.player.fshide .p-tl{opacity:0;pointer-events:none}
+.player .p-tl{transition:opacity .25s ease}
 .heatcap{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-bottom:8px}
 .heatcap b{color:var(--text2);font-weight:600;font-size:12px}
 .heatcap .sp{margin-left:auto}
@@ -188,7 +219,7 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .p-times{display:flex;align-items:baseline;font-size:11.5px;color:rgba(255,255,255,.66);margin-bottom:1px}
 .p-times i{font-style:normal;font-size:9px;color:rgba(255,255,255,.38);margin:0 3px}
 .p-times .pt-s b,.p-times .pt-e b{font-weight:500}
-.p-times .pt-c{flex:1;text-align:center;font-size:12.5px;font-weight:600;color:#fff}
+.p-times .pt-c{flex:1;text-align:center;font-size:12.5px;font-weight:600;color:#ff6b6b}
 /* 进度条：命中区 34px 高（轨道只有 4px，难点拖就是这么来的），touch-action 掐掉页面滚动手势 */
 .p-bar{height:34px;display:flex;align-items:center;position:relative;margin:0 -2px;touch-action:none}
 .p-track{position:relative;height:4px;width:100%;border-radius:3px;background:rgba(255,255,255,.18)}
@@ -231,6 +262,19 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .p-menu button:active{background:rgba(255,255,255,.08)}
 .p-menu .pm-hint{font-size:10px;color:rgba(255,255,255,.36);padding:2px 10px 7px;line-height:1.5}
 .p-swipe{text-align:center;font-size:10.5px;color:rgba(255,255,255,.34);margin-top:10px}
+/* 0.9.31 播放页内嵌热力格：非全屏时位于画面下方（stage 随之变矮、画面下移），
+   深色配色，正在播放的 2 小时格高亮；横屏全屏态整体隐藏 */
+.p-heat{flex:0 0 auto;background:#000;padding:7px 16px 5px;border-top:1px solid rgba(255,255,255,.07)}
+.ph-cap{font-size:10.5px;color:rgba(255,255,255,.4);margin-bottom:6px}
+.ph-heat .phcell{flex:1;height:24px;border-radius:5px;border:none;padding:0;min-width:0}
+.ph-heat .phcell.on{box-shadow:0 0 0 2px rgba(92,141,255,.95);z-index:1}
+.ph-heat .phcell.sel{box-shadow:0 0 0 2px var(--warn);z-index:1}
+.ph-heat .phcell.sel.on{box-shadow:0 0 0 2px var(--warn),0 0 0 4px rgba(92,141,255,.95)}
+.ph-lbl{display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,.32);
+  margin-top:5px;font-variant-numeric:tabular-nums}
+.phone.land .p-heat{display:none}
+.player.fshide .p-heat{opacity:0;pointer-events:none}
+.player .p-heat{transition:opacity .25s ease}
 
 /* 横屏（全屏）：播放中控制整体淡出，暂停/轻点画面即浮现 */
 .phone.land{--pw:844px;--ph:390px}
@@ -977,9 +1021,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         <div class="hdr-row">
           <div>
             <div class="camsel" id="camSel"><span id="camSelName">车库入口</span>
+              <span class="hdr-sub" id="hdrSub">CH01 · 13 个录像文件</span>
               <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
             </div>
-            <div class="hdr-sub" id="hdrSub">CH01 · 已处理 3 / 4 路</div>
           </div>
           <button class="iconbtn" id="btnScan">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
@@ -998,13 +1042,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       </div>
 
       <div class="dates" id="dates"></div>
-
-      <div class="overview">
-        <div class="ov"><div class="l">保留时长</div><div class="v g" id="ovKeep">1:42:38</div></div>
-        <div class="ov"><div class="l">占全天</div><div class="v" id="ovPct">7.1%</div></div>
-        <div class="ov"><div class="l">片段数</div><div class="v" id="ovCnt">14</div></div>
-        <div class="ov"><div class="l">体积</div><div class="v" id="ovSize">287 MB</div></div>
-      </div>
 
       <div class="heatwrap">
         <div class="heatcap">
@@ -1054,6 +1091,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         </button>
       </div>
 
+      <!-- 0.9.33 全天分布时间轴：从回放页移入播放器、画面上方，只留
+           全时/缩时两条分布（真实时段基准行去掉）；横屏/全屏隐藏 -->
+      <div class="tlane p-tl" id="tlane" style="display:none"></div>
+
       <div class="stage" id="stage">
         <!-- 双 video 交替：一个在播、另一个预加载下一段。切段时旧帧留在屏幕上，
              新段就绪后才互换，避免每切一次就黑屏闪一下。 -->
@@ -1068,6 +1109,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
         <div class="qchip" id="qchip"><span class="dot" style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:block"></span>预览 480p</div>
         <div class="pcenter"><div class="ring" id="ring"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></div></div>
       </div>
+
+      <!-- 0.9.31 非全屏时的热力格：全天活动分布随播随看，点格跳到该时段；
+           横屏/全屏态整体隐藏，正在播的 2 小时格高亮 -->
+      <div class="p-heat" id="pHeat" style="display:none"></div>
 
       <div class="p-ctrl">
         <!-- 双层时间轴：上行=钟点（缩时按源时刻），下行=本文件播放进度。
@@ -1351,6 +1396,9 @@ function defaultCamParams(cam, i){
        clipSpeed>1 时导出走重编码压时间轴（2× = 播放时间缩短一半） */
     condense: true,
     clipSpeed: 1,
+    /* 切分方式：follow=跟随通用设置；join=整段拼接；split=活动切片
+       （对这一路强制「录完即切」，即使通用选了定时批量） */
+    clipMode: "follow",
     /* 保留周期：全时录像按天、缩时片段按天，各自独立 */
     fullDays: 3,
     clipDays: 10,
@@ -1378,7 +1426,7 @@ const state = {
   segIdx:-1,
   t:0,
   playing:false,
-  speed:1,          // 回放倍速（1/2/4/8×），作用于 playbackRate 与画布段推进
+  speed:1,          // 回放倍速（1/2/4/8/16/32×），playbackRate 上限 16、超出跳秒补足
   land:false,
   rot:false,        /* 方向锁不住时，画面转了 90° 兜底 */
   maskTool:"ignore",
@@ -1458,6 +1506,7 @@ const LK = {
   mode:"live",
   intervalH:6,        // 1~24
   segSec:300,         // 分片长度
+  clipStyle:"join",   // 通用切分方式：join=整段拼接 | split=活动切片（每路可用 clipMode 覆盖）
   pending:0,          // 待处理数 —— 以 /api/link 返回为准，不再本地编数
   done:0,
   silent:0,
@@ -1474,6 +1523,7 @@ function applyLink(ls){
   LK.mode = ls.mode || LK.mode;
   LK.intervalH = ls.interval_h || LK.intervalH;
   LK.segSec = ls.segment_sec || LK.segSec;
+  if(ls.clip_style) LK.clipStyle = ls.clip_style;
   LK.pending = ls.pending || 0;
   if(ls.counters){
     LK.done = ls.counters.done || 0;
@@ -1936,29 +1986,275 @@ function renderHeat(){
   clear.onclick = ()=>{ state.hourBlock = -1; renderHeat(); renderClips(); };
   document.getElementById("heatTitle").textContent =
     state.hourBlock >= 0 ? pad(state.hourBlock*2)+":00 – "+pad(state.hourBlock*2+2)+":00" : "全天活动";
+  renderTl();
+}
+
+/* ================= 时段对比时间轴 =================
+   两根左端对齐、同一 24h 刻度的时间轴（0.9.30 引入；0.9.33 起常驻
+   播放器画面上方，固定全天视角，真实时段基准行与缩放态下线）：
+   全时录像（绿块分布，空档=断录）/ 缩时录像（琥珀块，颜色深浅=播放
+   密度：同样覆盖 1 小时压得越短颜色越深）。
+   - 色块可点直接跳播（当前模式没有就自动切另一种模式）；
+   - 全时块按相邻合并（gap≤1s 视为连续），缩时逐片成块；
+   - 数据各自取自当天真实清单，缺哪种就如实显示「无」。 */
+function unionLen(spans, a, b){
+  const xs = spans.map(x=>[Math.max(a, x[0]), Math.min(b, x[1])])
+    .filter(x=>x[1] > x[0]).sort((p,q)=>p[0]-q[0]);
+  let tot = 0, curE = -1;
+  xs.forEach(x=>{
+    const s = Math.max(x[0], curE);
+    if(x[1] > s){ tot += x[1] - s; curE = x[1]; }   // 重叠部分只记一次
+  });
+  return tot;
+}
+
+/* 合并相邻/重叠区间为色块（裁剪到窗口）：全时逐文件区间合并后，
+   空档才是真实的断录；相邻分片之间 ≤1s 的缝视为连续 */
+function mergeBlocks(spans, a, b){
+  const xs = spans.map(x=>[Math.max(a, x[0]), Math.min(b, x[1])])
+    .filter(x=>x[1] > x[0]).sort((p,q)=>p[0]-q[0]);
+  const out = [];
+  xs.forEach(x=>{
+    const last = out[out.length-1];
+    if(last && x[0] - last[1] <= 1) last[1] = Math.max(last[1], x[1]);
+    else out.push([x[0], x[1]]);
+  });
+  return out;
+}
+
+/* 压缩密度 → 缩时块透明度：d = 播放秒 / 源秒，越大说明该段画面变化越多 */
+function tlDens(d){
+  return d > 0.06 ? 1 : d > 0.02 ? 0.62 : 0.34;
+}
+
+/* 时间轴点块跳播：跨界也按点击时刻找到覆盖它的那个片段。
+   当前模式不同就先切过去（按钮态同步），再在清单里定位播放 */
+function tlPlay(kind, t){
+  if(state.pmode !== kind){
+    state.pmode = kind;
+    document.querySelectorAll("[data-pmode]").forEach(x=>x.classList.toggle("on", x.dataset.pmode===kind));
+    loadDay();
+  }
+  const idx = state.segs.findIndex(s=> t >= segA(s) - 0.5 && t < segB(s));
+  if(idx >= 0) openPlayer(idx);
+}
+
+function renderTl(){
+  const el = document.getElementById("tlane");
+  if(!el) return;
+  const fulls = realSegs(state.camId, curDay(), "full") || [];
+  const clips = realSegs(state.camId, curDay(), "clip") || [];
+  if(!fulls.length && !clips.length){ el.style.display = "none"; el.innerHTML = ""; return; }
+  /* 0.9.34 恢复跟随选中的时段：回放页热力条选中某个 2 小时格（hourBlock）
+     后，时间轴放大到该窗口看片段级分布；未选中则显示全天。 */
+  const zoom = state.hourBlock >= 0;
+  const a = zoom ? state.hourBlock*7200 : 0;
+  const b = zoom ? a + 7200 : 86400;
+  const real = b - a;
+
+  /* 全时/缩时的覆盖都不能直接用 segA/segB —— realSegs 会把相邻文件首尾
+     桥接（上一片的终点=下一片的起点），清单里缺文件造成的真断录会被
+     抹平。这里用「文件起点序列 + 分片长度」还原：某段没有文件，块就
+     在 起点+segLen 处停住，空档如实留在轴上。 */
+  const segLen = Math.max(10, Math.min(3600, +((state.rec || {}).segment_sec || LK.segSec || 300)));
+  const fstarts = [...new Set(fulls.map(s=>s.s))].sort((p,q)=>p-q);
+  const fblocks = fstarts.map((st,i)=>
+    [st, i+1 < fstarts.length ? Math.min(st+segLen, fstarts[i+1]) : st+segLen]);
+  const fb = mergeBlocks(fblocks, a, b);
+  const fullCov = unionLen(fblocks, a, b);
+  let gaps = 0;
+  for(let i=1;i<fb.length;i++) if(fb[i][0] - fb[i-1][1] > 1) gaps++;
+
+  /* 缩时：逐片成块（裁剪到窗口），密度随片携带 */
+  let clipCov = 0, watch = 0;
+  const cb = [];
+  const cstarts = [...new Set(clips.map(c=>segA(c)))].sort((p,q)=>p-q);
+  const byStart = {};
+  clips.forEach(c=>{ byStart[segA(c)] = c; });
+  cstarts.forEach((st,i)=>{
+    const en = i+1 < cstarts.length ? Math.min(st+segLen, cstarts[i+1]) : st+segLen;
+    const ca = Math.max(st, a), cz = Math.min(en, b);
+    if(cz <= ca) return;
+    const span = Math.max(0.001, en - st);
+    const ov = cz - ca;
+    clipCov += ov;
+    const c = byStart[st];
+    watch += Math.max(0, c.e - c.s) * ov / span;
+    cb.push({s:ca, e:cz, d:Math.max(0, c.e - c.s)/span});
+  });
+
+  const blocksHtml = (blocks, kind)=>blocks.map(x=>
+    '<span class="tl-block" data-t0="' + x[0] + '" data-t1="' + x[1] + '"'
+    + ' style="left:' + ((x[0]-a)/real*100).toFixed(2) + '%;width:'
+    + Math.max(0.5, (x[1]-x[0])/real*100).toFixed(2) + '%'
+    + (kind === "full" ? ';background:var(--keep)' : ';background:var(--warn);opacity:' + tlDens(x.d))
+    + '"></span>').join("");
+  /* 0.9.34 行结构：说明行（名称左 · 摘要右）在上，色条独占一整行贯穿全宽，
+     高度 20px 方便手指点按跳播 */
+  const row = (lbl, kind, inner, val)=>'<div class="tlrow">'
+    + '<div class="tl-cap"><span class="tl-lbl">' + lbl + '</span>'
+    + '<span class="tl-val">' + val + '</span></div>'
+    + '<span class="tl-track" data-tlkind="' + kind + '">' + inner
+    + '<i class="tl-cursor"></i></span></div>';
+
+  const fullVal = fullCov > 0
+    ? (zoom ? durText(fullCov) + " · 覆盖 " + Math.round(fullCov/real*100) + "%"
+            : durText(fullCov) + (gaps ? " · 断录 " + gaps + " 段" : " · 无断录"))
+    : "无录像";
+  const clipVal = clipCov <= 0 ? "无缩时片段"
+    : watch > 0 ? durText(watch) + " · 压缩 ≈" + (clipCov/watch).toFixed(1) + "×"
+    : durText(clipCov) + " · 无成片";
+  const ticks = zoom
+    ? [0,1,2,3,4].map(i=>hm(a + i*1800))
+    : [0,4,8,12,16,20,24].map(h=>String(h).padStart(2,"0"));
+
+  /* 标题行也一并重建：容器必须是「空架子」，早退分支的 innerHTML="" 才不会
+     把自己的骨架清掉（0.9.30 的教训，见 0.9.32 评审）。 */
+  el.innerHTML =
+    '<div class="tl-head"><b>' + (zoom ? hm(a) + " – " + hm(b) + " 分布" : "全天分布") + '</b>'
+      + '<span class="tl-all" data-tlall' + (zoom ? "" : ' style="display:none"') + '>‹ 全天</span>'
+      + '<span class="tl-hint">' + (zoom ? "点色块跳播" : "点色块选中时段") + '</span></div>'
+    + row("全时录像", "full", blocksHtml(fb, "full"), fullVal)
+    + row("缩时录像", "clip", blocksHtml(cb.map(c=>{ const x=[c.s, c.e]; x.d = c.d; return x; }), "clip"), clipVal)
+    + '<div class="tl-ticks">' + ticks.map(t=>"<span>" + t + "</span>").join("") + '</div>';
+
+  /* 0.9.36 顶部热力图 ↔ 底部 12 格双向联动：
+     全天视图点色块 → 选中点击处所在 2 小时格（底部格子琥珀描边、
+     自己放大到该窗口）+ 跳播到点击时刻；放大视图点色块 → 窗口内
+     精确跳播。 */
+  el.querySelectorAll("[data-tlkind]").forEach(tk=>{
+    const kind = tk.dataset.tlkind;
+    tk.onclick = e=>{
+      const r = tk.getBoundingClientRect();
+      const t = a + Math.max(0, Math.min(1, (e.clientX - r.left)/Math.max(1, r.width))) * real;
+      if(!zoom){
+        const blk = Math.min(11, Math.max(0, Math.floor(t/7200)));
+        if(state.hourBlock !== blk){
+          state.hourBlock = blk;
+          renderPlayerHeat();    /* 底部 12 格选中描边 */
+          renderHeat();          /* 回放页热力条同步 + 尾部 renderTl（自己重建成放大态） */
+        }
+      }
+      tlPlay(kind, t);
+    };
+  });
+  const all = el.querySelector("[data-tlall]");
+  if(all) all.onclick = ()=>{
+    state.hourBlock = -1;
+    renderPlayerHeat();
+    renderHeat();          /* 尾部 renderTl 回全天 */
+  };
+  el.style.display = "block";
+  syncTlCursor();          /* 重建后立即摆到当前播放位置 */
+}
+
+/* 当前播放文件的定位竖线：全时/缩时两条轨同源同位。
+   位置口径与 syncPlayer 的 srcNow 一致——全时按钟点、缩时按源时刻
+   （播放坐标按片内占比映射回源时间），全天/选中时段两种窗口通用；
+   当前文件与窗口无交集时隐藏。timeupdate 频繁触发，这里只改样式
+   不重建 DOM。 */
+function tlCursorFrac(){
+  const seg = state.segs[state.segIdx];
+  if(!seg) return null;
+  const p = Math.max(0, Math.min(1, (state.t - seg.s) / Math.max(0.2, seg.e - seg.s)));
+  const ct = seg.clip && seg.src != null
+    ? seg.src + p * Math.max(1, seg.srcEnd - seg.src) : state.t;
+  const zoom = state.hourBlock >= 0;
+  const a = zoom ? state.hourBlock*7200 : 0;
+  const b = zoom ? a + 7200 : 86400;
+  const frac = (ct - a) / (b - a);
+  return (frac < 0 || frac > 1) ? null : frac;
+}
+function syncTlCursor(){
+  const el = document.getElementById("tlane");
+  if(!el) return;
+  const cursors = el.querySelectorAll(".tl-cursor");
+  if(!cursors.length) return;
+  const frac = tlCursorFrac();
+  if(frac === null){ cursors.forEach(c=>c.style.display = "none"); return; }
+  cursors.forEach(c=>{
+    c.style.display = "block";
+    c.style.left = (frac*100).toFixed(2) + "%";
+  });
+}
+
+/* ================= 播放页内嵌热力格 =================
+   0.9.31：把回放页的热力格搬进播放器非全屏画面下方——视频是
+   inset:0 + contain 铺满 stage 居中，热力格插在 stage 和控制区之间，
+   stage 变矮、画面随之下移，竖屏下大片死黑区被利用起来。
+   - 数据吃 state.activity（当前模式的真实清单），与回放页热力条同源同口径；
+   - 正在播放的片段落在哪个 2 小时格，哪格高亮（随上/下一段自动跟随）；
+   - 点格跳播：当前模式该格有片段就直接跳，没有则尝试另一种模式，
+     两种都没有如实提示「该时段没有录像」；横屏/全屏态整块隐藏。 */
+function renderPlayerHeat(){
+  const box = document.getElementById("pHeat");
+  if(!box) return;
+  const segs = state.activity || [];
+  const per = new Array(12).fill(0);
+  segs.forEach(s=>{
+    const sa = Math.max(0, segA(s));
+    const sb = Math.min(86400, Math.max(sa + 1, segB(s)));
+    const i0 = Math.min(11, Math.floor(sa / 7200));
+    const i1 = Math.min(11, Math.floor(Math.max(sa, sb - 0.01) / 7200));
+    for(let i = i0; i <= i1; i++){
+      const blkEnd = (i+1)*7200;
+      per[i] += Math.max(0, Math.min(sb, blkEnd) - Math.max(sa, i*7200));
+    }
+  });
+  if(!per.some(v=>v > 0)){ box.style.display = "none"; box.innerHTML = ""; return; }
+  const cur = state.segs[state.segIdx];
+  const curBlock = cur ? Math.min(11, Math.max(0, Math.floor(segA(cur)/7200))) : -1;
+  const max = Math.max(...per, 1);
+  box.innerHTML =
+    '<div class="ph-cap">点格子选中时段 · 上方显示该时段分布</div>'
+    + '<div class="heat ph-heat">' + per.map((v,i)=>
+        '<button class="phcell' + (i===curBlock ? " on" : "")
+        + (i===state.hourBlock ? " sel" : "") + '" data-ph="' + i + '"'
+        + ' style="background:' + (v <= 0 ? "rgba(255,255,255,.12)"
+            : "rgba(53,201,140," + (0.22 + v/max*0.72).toFixed(2) + ")") + '"></button>').join("")
+    + '</div>'
+    + '<div class="ph-lbl"><span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span></div>';
+  box.style.display = "block";
+  box.querySelectorAll("[data-ph]").forEach(btn=>{
+    btn.onclick = ()=> pHeatJump(+btn.dataset.ph);
+  });
+}
+
+function pHeatJump(i){
+  /* 0.9.35：底部热力格 = 时段选择器——点某格先选中（琥珀描边），上方
+     时间轴随之放大到该 2 小时窗口显示全时/缩时分布；再点同一格取消
+     选中回全天。选中与跳播并存：该时段有录像就顺带跳到首段，没有则
+     只提示（空时段的分布照常显示）。 */
+  const toggle = state.hourBlock === i;
+  state.hourBlock = toggle ? -1 : i;
+  renderHeat();          /* 回放页热力条同步 + 尾部 renderTl 联动（时间轴缩放） */
+  renderPlayerHeat();    /* 选中态描边（正在播的蓝描边不受影响） */
+  if(toggle) return;
+  const a = i*7200;
+  const has = (list)=> list.some(s=>segA(s) < a+7200 && segB(s) > a);
+  const firstT = (list)=>{
+    const o = list.filter(s=>segA(s) < a+7200 && segB(s) > a).sort((p,q)=>segA(p)-segA(q))[0];
+    return o ? Math.max(segA(o), a) : null;   /* o 本身就是片段，别再取 .s */
+  };
+  if(has(state.segs)) return tlPlay(state.pmode, firstT(state.segs));
+  const other = state.pmode === "full" ? "clip" : "full";
+  const alt = other === "full"
+    ? (realSegs(state.camId, curDay(), "full") || [])
+    : (realSegs(state.camId, curDay(), "clip") || []);
+  if(has(alt)) return tlPlay(other, firstT(alt));
+  toast("toast", "该时段没有录像");
 }
 
 /* ================= 概览 ================= */
+/* 0.9.33 只剩两件事：摄像头名 + 「CH · N 个录像文件」（并入名行） */
 function renderOverview(){
   const cam = CAMERAS.find(c=>c.id===state.camId);
   const nameEl = document.getElementById("camSelName");
   if(nameEl) nameEl.textContent = cam ? cam.name : "还没有摄像头";
-  if(!cam){
-    document.getElementById("ovKeep").textContent = "—";
-    document.getElementById("ovPct").textContent = "—";
-    document.getElementById("ovCnt").textContent = "0";
-    document.getElementById("ovSize").textContent = "—";
-    document.getElementById("hdrSub").textContent = "还没有摄像头 · 去设置页添加一台";
-    return;
-  }
-  let keep = 0, bytes = 0;
-  state.segs.forEach(sg=>{ keep += Math.max(1, segB(sg) - segA(sg)); bytes += sg.bytes || 0; });
-  document.getElementById("ovKeep").textContent = hms(keep);
-  document.getElementById("ovPct").textContent = (keep/86400*100).toFixed(1) + "%";
-  document.getElementById("ovCnt").textContent = state.segs.length;
-  document.getElementById("ovSize").textContent =
-    bytes >= 1073741824 ? (bytes/1073741824).toFixed(1) + " GB" : (bytes/1048576).toFixed(0) + " MB";
-  document.getElementById("hdrSub").textContent = cam.ch + " · " + state.segs.length + " 个录像文件";
+  const sub = document.getElementById("hdrSub");
+  if(sub) sub.textContent = !cam
+    ? "还没有摄像头 · 去设置页添加一台"
+    : cam.ch + " · " + state.segs.length + " 个录像文件";
 }
 
 /* ================= 缩略图 ================= */
@@ -2210,6 +2506,8 @@ function openPlayer(i, keepSrc){
      而不是把整个应用退出掉。热切换（wasOn=true）不重复压。 */
   if(!wasOn) pushLayer("player");
   setSegTitle(i);
+  renderPlayerHeat();          /* 热力格高亮跟随当前片段，切段自动刷新 */
+  renderTl();                  /* 0.9.33 时间轴在画面上方，随播放数据刷新 */
   const sceneEl = document.getElementById("scene");
 
   if(!seg.file){
@@ -2251,8 +2549,10 @@ function openPlayer(i, keepSrc){
 }
 
 function safePlay(v){
-  const p = v.play();
-  if(p && p.catch) p.catch(()=>{ /* 自动播放被拦时由用户点播放，不算错误 */ });
+  try{
+    const p = v.play();
+    if(p && p.catch) p.catch(()=>{ /* 自动播放被拦时由用户点播放，不算错误 */ });
+  }catch(e){ /* 播放能力缺失时静默，不影响选段逻辑 */ }
 }
 
 /* 交换 A/B：把已经就绪的 nxtVid 推到前台。
@@ -2339,9 +2639,12 @@ document.getElementById("bPlay").onclick = ()=>{
   }
   syncPlayer();
 };
-/* 倍速：1/2/4/8×，作用于 <video>.playbackRate；
-   画布占位段（无真实文件）由播放循环按 state.speed 推进。 */
-const SPEEDS = [1,2,4,8];
+/* 倍速：1/2/4/8/16/32×，作用于 <video>.playbackRate；
+   画布占位段（无真实文件）由播放循环按 state.speed 推进。
+   浏览器 playbackRate 上限 16：>16 的部分由补速定时器每秒跳秒补足
+   （32× = 16× 倍速 + 每秒再跳 16 秒），高速档自动静音。 */
+const SPEEDS = [1,2,4,8,16,32];
+let speedBoostTimer = null, speedAutoMuted = false;
 function renderSpeedPop(){
   const pop = document.getElementById("speedPop");
   pop.innerHTML = SPEEDS.map(x =>
@@ -2354,7 +2657,20 @@ function renderSpeedPop(){
 }
 function setSpeed(x){
   state.speed = x;
-  videoEls().forEach(v=>{ try{ v.playbackRate = x; }catch(e){} });
+  const rate = Math.min(x, 16);   // 浏览器硬上限
+  videoEls().forEach(v=>{
+    try{ v.playbackRate = rate; }catch(e){}
+    if(x > 8 && !v.muted){ v.muted = true; speedAutoMuted = true; }       // 高速静音
+    else if(x <= 8 && speedAutoMuted){ v.muted = false; speedAutoMuted = false; }
+  });
+  if(speedBoostTimer){ clearInterval(speedBoostTimer); speedBoostTimer = null; }
+  if(x > 16){
+    speedBoostTimer = setInterval(()=>{
+      const v = activeVideo();
+      if(!v || v.paused || switching) return;
+      try{ if(v.duration) v.currentTime = Math.min(v.duration, v.currentTime + (x - 16)); }catch(e){}
+    }, 1000);
+  }
   renderSpeedPop();
   toast("toast", "倍速 " + x + "×");
 }
@@ -2446,8 +2762,12 @@ videoEls().forEach(v=>{
   v.addEventListener("pause", ()=>{
     if(v === curVid && state.videoSeg && state.playing && !v.ended){ state.playing = false; syncPlayer(); }
   });
-  /* 新载入的段套用当前倍速（换 src 后浏览器会重置回 1×） */
-  v.addEventListener("loadedmetadata", ()=>{ try{ v.playbackRate = state.speed || 1; }catch(e){} });
+  /* 新载入的段套用当前倍速（换 src 后浏览器会重置回 1×）；
+     高速档（>8×）补静音（setSpeed 只对在场的 video 生效，换元素后要补） */
+  v.addEventListener("loadedmetadata", ()=>{
+    try{ v.playbackRate = Math.min(state.speed || 1, 16); }catch(e){}
+    if((state.speed || 1) > 8) v.muted = true;
+  });
 });
 
 /* 播完一段 → 接下一段。若下一段已预加载好就走热切换（观感连续），
@@ -2533,6 +2853,7 @@ function syncPlayer(){
   document.getElementById("osdTime").textContent = clipMode
     ? (curDay() + " " + hms(srcNow) + " · 缩时")
     : (curDay() + " " + hms(state.t));
+  syncTlCursor();          /* 热力图定位竖线跟随播放（连播切段由 renderTl 重建接管） */
 }
 
 /* 进度条拖动 */
@@ -2744,6 +3065,9 @@ function pushCfg(){
                 link 调度靠 condense 决定这一路入不入队 */
              condense: p.condense !== false,
              clip_speed: p.clipSpeed || 1,
+             /* 每路切分方式：follow=跟随通用；join/split 显式覆盖。
+                link 消费端按它选导出路径（拼接 vs 活动切片） */
+             clip_mode: p.clipMode || "follow",
              /* 单路分片长度：0 表示跟随通用设置。必须真的推上去 ——
                 它是 ffmpeg 命令行的物理参数，只存在 localStorage 等于没设。 */
              segment_sec: p.segSec || 0,
@@ -2760,6 +3084,7 @@ function pushCfg(){
                     所以「改分片长度没反应」其实是推都没推。 */
                  record_segment_sec: LK.segSec,
                  link_mode: LK.mode,
+                 clip_style: LK.clipStyle,
                  link_interval_h: LK.intervalH,
                  concurrency: GS.conc,
                  /* 必须是枚举值：以前推的是 !!GS.gpu 布尔，后端把 "auto" 顶成了
@@ -2788,6 +3113,7 @@ function applyServerCfg(c){
     if(s && s !== LK.segSec) LK.segSec = s;
   }
   if(c.link_mode && c.link_mode !== LK.mode) LK.mode = c.link_mode;
+  if(c.clip_style && c.clip_style !== LK.clipStyle) LK.clipStyle = c.clip_style;
   if(c.link_interval_h){
     const h = +c.link_interval_h;
     if(h && h !== LK.intervalH) LK.intervalH = h;
@@ -2845,6 +3171,7 @@ function applyServerCams(list){
     if(src.clip_days != null) p.clipDays = src.clip_days;
     if(src.condense != null) p.condense = !(src.condense === false || src.condense === "false");
     if(src.clip_speed != null) p.clipSpeed = [1,2,4,8].indexOf(+src.clip_speed) >= 0 ? +src.clip_speed : 1;
+    if(src.clip_mode != null) p.clipMode = ["follow","join","split"].indexOf(src.clip_mode) >= 0 ? src.clip_mode : "follow";
     if(src.segment_sec != null) p.segSec = +src.segment_sec || 0;
     if(src.masks) p.masks = normMasks(src.masks);
     p.judge = normJudge(p.judge, null);
@@ -3693,6 +4020,17 @@ function cardLink(){
       + '</div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">' + linkHint() + '</div>'
     + '</div>'
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">缩时片段切分方式</span><span class="v">'
+        + (LK.clipStyle==="split" ? "活动切片" : "整段拼接") + '</span></div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (LK.clipStyle==="join"?"on":"") + '" data-clipstyle="join">整段拼接</button>'
+        + '<button class="chip ' + (LK.clipStyle==="split"?"on":"") + '" data-clipstyle="split">活动切片</button>'
+      + '</div>'
+      + '<div class="h">整段拼接：一个分片的活动区间拼成一个片段，流复制零损失，切点按关键帧（误差约 1~2 秒）。'
+        + '活动切片：每个活动区间单独成片、重编码精确到帧，热力图与跳播定位更细，也能省掉片段内的静止段；'
+        + '编码开销更高，建议有核显的机器使用。每路可在摄像头设置里单独覆盖。</div>'
+    + '</div>'
     + (LK.mode==="scheduled" ? '<div class="srow">'
       + '<div class="top"><span class="n">每隔多久压一次</span><span class="v">' + LK.intervalH + ' 小时</span></div>'
       + '<div class="stepper"><button data-linkh="-1">−</button><span class="val">' + LK.intervalH + ' 小时</span><button data-linkh="1">+</button></div>'
@@ -4073,7 +4411,8 @@ function renderCamRead(c, p){
       + '<h4>缩时压制 <em>' + (p.condense !== false ? "已开启" : "已关闭") + '</em></h4>'
       + roRow("功能开关", p.condense !== false ? "开启" : "关闭 · 只录全时")
       + (p.condense !== false
-        ? roRow("缩时片段保留", p.clipDays + " 天")
+        ? roRow("切分方式", clipModeLabel(p.clipMode, true))
+          + roRow("缩时片段保留", p.clipDays + " 天")
           + roRow("输出倍速", (p.clipSpeed || 1) + "×")
         : "")
     + '</div>'
@@ -4136,6 +4475,12 @@ function qualLine(p){
   const isN = p.profile === "night", pr = isN ? p.night : p.day;
   return (p.mode === "fast" ? "流复制" : "重编码") + " · " + (isN ? "夜间" : "白天")
     + " · CRF " + pr.crf + " · " + pr.fps + "fps · " + pr.scale + "% · 降噪 " + DN_NAMES[pr.dn];
+}
+
+/* 切分方式的显示名。eff=true 时把 follow 展开成通用值（读态/摘要用） */
+function clipModeLabel(m, eff){
+  if(eff && (m || "follow") === "follow") return "跟随通用 · " + (LK.clipStyle === "split" ? "活动切片" : "整段拼接");
+  return m === "split" ? "活动切片" : m === "join" ? "整段拼接" : "跟随通用";
 }
 
 function renderCamEdit(c, p){
@@ -4204,6 +4549,17 @@ function renderCamEdit(c, p){
       + '<div class="c"><div class="kv">' + p.clipDays + ' 天</div><div class="kl">保留</div></div>'
     + '</div>'
     + '<div class="' + (on ? "" : "dim") + '">'
+      + '<div class="srow">'
+        + '<div class="top"><span class="n">切分方式</span>'
+          + '<span class="v">' + clipModeLabel(p.clipMode) + '</span></div>'
+        + '<div class="chips">'
+          + [["follow","跟随通用"],["join","整段拼接"],["split","活动切片"]].map(([v,l])=>
+              '<button class="chip ' + ((p.clipMode||"follow")===v?"on":"") + '" data-clipmode="' + v + '">' + l + '</button>').join("")
+        + '</div>'
+        + '<div class="h">跟随通用 = 用「通用设置 · 录制与压制衔接」里的切分方式。'
+          + '活动切片对这一路<b>强制「录完即切」</b>（即使通用选了定时批量），每个活动区间单独成片、重编码精确到帧，'
+          + '热力图与跳播定位更细；编码开销更高，建议有核显的机器或重点机位使用。</div>'
+      + '</div>'
       + '<div class="srow">'
         + '<div class="top"><span class="n">输出倍速</span><span class="v">' + speed + '×</span></div>'
         + '<div class="chips">'
@@ -4300,7 +4656,9 @@ function renderCamEdit(c, p){
         "全时 " + p.fullDays + " 天 · " + segLabel(p.segSec || LK.segSec),
         bodyKeep, openAcc === "keep")
     + camAcc("condense", 3, "缩时压制",
-        (on ? ("已开启 · " + speed + "× · " + p.clipDays + " 天") : '<span style="color:var(--faint)">已关闭 · 只录全时</span>'),
+        (on ? (clipModeLabel(p.clipMode, true).replace("跟随通用 · ", "")
+               + " · " + speed + "× · " + p.clipDays + " 天")
+             : '<span style="color:var(--faint)">已关闭 · 只录全时</span>'),
         bodyCond, openAcc === "condense")
     + camAcc("mask", 4, "检测忽略区",
         "已选 " + maskCnt + " 格", bodyMask, openAcc === "mask")
@@ -5054,6 +5412,15 @@ function bindSettings(body){
       LK.nextBatch = nextLinkAt(); renderCamTabs(); saveCfgSoon();
     };
   });
+  body.querySelectorAll("[data-clipstyle]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.clipStyle = el.dataset.clipstyle === "split" ? "split" : "join";
+      renderCamTabs(); saveCfgSoon();
+      toast("toast2", LK.clipStyle === "split"
+        ? "通用切分改为活动切片 · 每个活动区间单独成片、帧级切点"
+        : "通用切分改为整段拼接 · 流复制零损失");
+    };
+  });
   body.querySelectorAll("[data-linkseg]").forEach(el=>{
     el.onclick = ()=>{
       LK.segSec = +el.dataset.linkseg; renderCamTabs();
@@ -5176,6 +5543,13 @@ function bindSettings(body){
       renderCamTabs();
     };
   });
+  /* 切分方式：follow=跟随通用 / join=整段拼接 / split=活动切片（草稿态） */
+  body.querySelectorAll("[data-clipmode]").forEach(el=>{
+    el.onclick = ()=>{
+      draftSet("clipMode", el.dataset.clipmode);
+      renderCamTabs();
+    };
+  });
   /* 判读条件：引擎 / 画面类型 / 灵敏度 三组 chips */
   body.querySelectorAll("[data-engine]").forEach(el=>{
     el.onclick = ()=>{ draftSet("judge.engine", el.dataset.engine); renderCamTabs(); };
@@ -5274,6 +5648,7 @@ function saveCfg(){
       gen: {
         enabled: REC.enabled, dir: REC.dir, cleanupAt: REC.cleanupAt,
         linkMode: LK.mode, intervalH: LK.intervalH, segSec: LK.segSec,
+        clipStyle: LK.clipStyle,
         gpu: GS.gpu, conc: GS.conc, nightOnly: GS.nightOnly, lowPrio: GS.lowPrio
       }
     }));
@@ -5329,6 +5704,7 @@ function loadCfg(){
   if(g.linkMode) LK.mode = g.linkMode;
   if(g.intervalH) LK.intervalH = g.intervalH;
   if(g.segSec) LK.segSec = g.segSec;
+  if(g.clipStyle) LK.clipStyle = g.clipStyle === "split" ? "split" : "join";
   ["gpu","conc","nightOnly","lowPrio"].forEach(k=>{ if(g[k] !== undefined) GS[k] = g[k]; });
 
   if(!CAMERAS.length){ state.camId = null; }
@@ -5461,9 +5837,16 @@ function realSegs(camId, day, kind){
     let acc = 0;
     return files.map((f,i)=>{
       const dur = Math.max(0.2, +f.d || 0);
-      const st = toS(f.n);                    // 源时刻：分片文件名就是起点钟点
-      const next = i+1 < files.length ? toS(files[i+1].n) : Math.min(86400, st + segLen);
-      const en = Math.max(st + 1, next);      // 覆盖到下一片开始（末片按分片长度兜底）
+      /* 覆盖窗：活动切片（.cNN，同一源分片可能出好几个片段）用服务端从
+         .idx.json 解出的真实源时间窗；整段拼接才按「下一个文件起点」推。 */
+      let st, en;
+      if(Array.isArray(f.w) && f.w.length === 2){
+        st = +f.w[0]; en = Math.max(st + 1, +f.w[1]);
+      }else{
+        st = toS(f.n);                        // 源时刻：分片文件名就是起点钟点
+        const next = i+1 < files.length ? toS(files[i+1].n) : Math.min(86400, st + segLen);
+        en = Math.max(st + 1, next);          // 覆盖到下一片开始（末片按分片长度兜底）
+      }
       const seg = { s: acc, e: acc + dur, src: st, srcEnd: en, dur,
                     level:.5, reason:"缩时片段", hits:0,
                     bytes:f.b || 0, file:url(f.n), clip:true, name:f.n };
@@ -5495,7 +5878,7 @@ function applyPlaybackVisibility(){
   const hasCam = !!(camDays && Object.keys(camDays).length)
               || !!(clipDays && Object.keys(clipDays).length);
   const show = !!hasCam;
-  [".modebar","#dates",".overview",".heatwrap",".listhead","#clips"].forEach(sel=>{
+  [".modebar","#dates",".heatwrap",".listhead","#clips"].forEach(sel=>{
     const el = document.querySelector(sel);
     if(el) el.style.display = show ? "" : "none";
   });
