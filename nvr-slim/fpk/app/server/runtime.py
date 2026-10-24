@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.55"
+VERSION = "0.9.56"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
