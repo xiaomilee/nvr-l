@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.41"
+VERSION = "0.9.55"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -30,7 +30,13 @@ DEFAULTS = {
     # 这是「不常改」的配置，界面默认只读，要点「修改」才展开编辑，
     # 保存时由 /api/dir/check 真实探测存在性与写权限。
     "record_dir": "/vol1/@appshare/nvr-output",  # 录像与缩时片段根目录：fnOS 自动建目录+授权的共享目录
-    "cleanup_at": "03:00",            # 每天清理过期录像的时刻
+    "cleanup_at": "03:00",            # 每天清理过期录像的时刻（也是归档裁剪时刻）
+    # ---- 归档裁剪（Aqara 式三层存储：全时短留 > 归档长留 > 台账永久） ----
+    # 夜间任务固定顺序：先归档（临期全时里的活动窗口裁进 _archive），后清理
+    # （顺序反了明天过期的日期就来不及归档，会被当普通过期目录删掉）。
+    "archive_enable": True,           # 夜间任务是否做归档裁剪
+    "archive_days": 90,               # 归档片段保留天数（_archive）
+    "archive_batch": 120,             # 单次归档最多裁多少个分片（跨夜分批消化）
     # ---- 录制（由本应用拉主码流落盘，不再依赖飞牛 NVR 的目录） ----
     "record_enable": True,
     "record_segment_sec": 300,        # 分片时长 60~900 秒
@@ -43,6 +49,12 @@ DEFAULTS = {
     # join  = 整段拼接：一个分片的活动区间拼成一个片段（流复制、无损、关键帧切点）
     # split = 活动切片：每个活动区间单独成片、重编码精确到帧，热力图定位更细
     "clip_style": "join",
+    # ---- 缩时方案（Aqara 式标记与视频解耦） ----
+    # virtual     = 虚拟缩时：判定只写活动台账（_ledger/），不产出视频文件；
+    #               回放靠时间轴标记 + 全时视频按需 seek（零常驻编码）
+    # materialize = 物化切片：既有 join/split 导出照旧，台账同步双写（统一地基）
+    # off         = 只录全时，不判定
+    "condense_mode": "virtual",
     # ---- 服务端口 ----
     # 安装向导里选定后写在这里；TRIM_SERVICE_PORT 只是 manifest 的静态默认值，
     # 用户改过端口就以本字段为准。范围见 PORT_LIMITS。
@@ -64,7 +76,8 @@ LINK_INTERVAL_LIMITS = (1, 24)
 # 离散取值的键：只认白名单，别让 true/false 混进来顶掉 "auto"/"off"
 _ENUM_KEYS = {"gpu": ("auto", "qsv", "off"), "scan_mode": ("now", "m15", "h1", "d1"),
               "process_mode": ("fast", "fine"),
-              "clip_style": ("join", "split")}
+              "clip_style": ("join", "split"),
+              "condense_mode": ("virtual", "materialize", "off")}
 
 
 def coerce(key, value):

@@ -72,7 +72,7 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .camsel.open svg{transform:rotate(180deg)}
 
 /* 回放页摄像头下拉 */
-.campick{position:absolute;left:12px;right:12px;top:58px;z-index:30;display:none;
+.campick{position:absolute;left:12px;right:12px;top:50px;z-index:30;display:none;
   background:var(--surface);border:1px solid var(--line);border-radius:15px;padding:6px;
   box-shadow:0 14px 36px rgba(10,14,22,.26)}
 .campick.on{display:block}
@@ -298,6 +298,7 @@ body.fsmode .phone{
   margin:0!important;border-radius:0!important;
   transform:none!important;box-shadow:none!important;
   background:#000;z-index:9000;
+  transition:none!important;
 }
 body.fsmode .hdr,body.fsmode .tabbar,body.fsmode .wallbar{display:none!important}
 body.fsmode .toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%)}
@@ -310,33 +311,47 @@ body.rot .phone{
   transform:translate(-50%,-50%) rotate(90deg)!important;
   transform-origin:center center!important;
 }
+/* 全屏 + 旋转叠加时提高特异性，并显式解除 body.fsmode 的 inset:0!important
+   造成的过约束（left+right+width 同时指定，部分 webview 解析结果不一致），
+   同时关掉 .phone 的宽高过渡（旋转瞬间会看到拉伸） */
+body.fsmode.rot .phone{
+  left:50%!important;top:50%!important;right:auto!important;bottom:auto!important;
+  width:100vh!important;height:100vw!important;
+  transform:translate(-50%,-50%) rotate(90deg)!important;
+  transform-origin:center center!important;
+  transition:none!important;
+}
 body.rot{background:#000}
-/* 旋转兜底时整个容器被转了 90°，退出按钮如果跟着容器走，文字也会躺倒。
-   它挂在 body 上（不在 .phone 内），所以这里把它摆到「用户眼中的右上角」
-   —— 也就是屏幕物理的右上角，按钮自身再反向转 90° 抵消。
 
-   关键在于**定位和旋转分开**：外层 #fsExit 只负责摆位置，内层 span 负责转。
-   如果把 rotate 直接加在定位元素上，right/bottom 锚定的是变换前的盒子，
-   旋转后宽高对调、按钮会被推出视口（实测跑到 y=791 之外）。 */
-body.rot #fsExit{
-  top:10px!important;right:10px!important;left:auto!important;bottom:auto!important;
-  transform:none!important;
+/* 全屏工具组（退出全屏 / 旋转）：**挂在 .phone 内部**，跟着容器一起转。
+   之前挂在 body 上、再手写反向旋转补偿，旋转后整组跑到用户视角的左上角，
+   胶囊还被挤成两行（真机截图）。放进 .phone 后永远落在用户视角右上角，
+   文字也不用补偿——固定定位在 transform 祖先内是以该祖先为包含块的。 */
+#fsTools{
+  position:fixed;top:calc(8px + env(safe-area-inset-top));right:10px;z-index:9999;
+  display:none;align-items:center;gap:8px;
 }
-body.rot #fsExit span{display:inline-block;transform:rotate(90deg)}
-body.rot #fsExit svg{transform:rotate(90deg)}
+#fsTools.on{display:flex}
+#fsTools button{
+  height:40px;min-width:40px;padding:0 14px;border-radius:20px;
+  border:1px solid rgba(255,255,255,.2);background:rgba(14,18,26,.62);color:#fff;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  font-family:inherit;font-size:12.5px;font-weight:600;line-height:1;white-space:nowrap;
+  cursor:pointer;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  box-shadow:0 3px 14px rgba(0,0,0,.4);transition:transform .12s,background .12s;
+}
+#fsTools button:active{transform:scale(.95);background:rgba(14,18,26,.92)}
+#fsTools button.ico{width:40px;padding:0}
+#fsTools svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#fsTools button[hidden]{display:none}
 
-/* 退出全屏按钮：全屏期间常驻右上角，任何情况下都能点 */
-#fsExit{
-  display:none;position:fixed;top:calc(10px + env(safe-area-inset-top));right:12px;z-index:9999;
-  align-items:center;gap:6px;padding:8px 12px;border-radius:999px;
-  background:rgba(20,22,28,.78);color:#fff;border:1px solid rgba(255,255,255,.22);
-  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
-  font-size:12.5px;font-weight:600;line-height:1;cursor:pointer;
-  box-shadow:0 4px 16px rgba(0,0,0,.4);
+/* 全屏自诊断角标：默认隐藏，排障时 URL 加 ?fsdiag=1 打开（截图即可定位） */
+#fsDiag{
+  display:none;position:fixed;left:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:9998;
+  font-size:9px;line-height:1.2;color:rgba(255,255,255,.55);pointer-events:none;
+  font-variant-numeric:tabular-nums;text-shadow:0 1px 2px rgba(0,0,0,.85);
 }
-#fsExit.on{display:flex}
-#fsExit svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-#fsExit:active{transform:scale(.95)}
+#fsDiag.on{display:block}
 
 /* ---------- 底部 tab ---------- */
 .tabbar{flex:0 0 auto;height:58px;background:var(--surface);border-top:1px solid var(--line);
@@ -898,7 +913,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .stbar-big{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--track)}
 .stbar-big i{display:block;height:100%}
 .stbar-big .f{background:var(--primary)}
-.stbar-big .c{background:#9dbaff}
+.stbar-big .c{background:#5c8fd6}   /* 归档（比全时深一档） */
+.stbar-big .k{background:#9dbaff}   /* 缩时（原 .c 色） */
 .legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:7px;font-size:10.5px;color:var(--muted)}
 .legend span{display:flex;align-items:center;gap:5px}
 .legend i{width:8px;height:8px;border-radius:2px;display:block}
@@ -908,7 +924,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .strow .stbar{flex:1;display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--track)}
 .strow .stbar i{display:block;height:100%}
 .strow .stbar .f{background:var(--primary)}
-.strow .stbar .c{background:#9dbaff}
+.strow .stbar .c{background:#5c8fd6}
+.strow .stbar .k{background:#9dbaff}
 .strow .vv{flex:0 0 auto;min-width:78px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text2)}
 .strow .vv em{display:block;font-style:normal;font-size:9px;color:var(--faint)}
 .dline{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.6}
@@ -927,6 +944,170 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
   font-size:10.5px;display:inline-flex;align-items:center}
 .envchip.ok{background:var(--keep-soft);color:#15794a}
 .envchip.bad{background:var(--warn-soft);color:var(--warn-fg)}
+/* ---------- 回放页（Aqara 式垂直时间轴） ----------
+   24h 全天竖排，1 小时 = 60px；蓝轨 = 有画面，橙条 = 台账活动。
+   P0 先做「看得见、点得准」：拖动滚动 + 点标记/点事件跳转提示；
+   真正的 seek 连播随 P1 的常驻画面区一起落地。 */
+.vtl{position:relative;height:1500px}
+.vtl .vhour{position:absolute;left:0;right:0;border-top:1px solid var(--line);font-size:9.5px;color:var(--faint);padding:2px 0 0 6px;pointer-events:none}
+.vtl .vtrack{position:absolute;left:46px;width:24px;border-radius:3px;background:var(--track)}
+.vtl .vavail{position:absolute;left:46px;width:24px;border-radius:3px;background:var(--primary);opacity:.82}
+.vtl .vavail.arch{opacity:.4}
+/* 活动时段块：与蓝轨同列的橙色块，全时/活动筛选下都常亮（v0.9.48：
+   用户反馈全时模式看不到活动标记 —— 之前只在活动筛选时点亮，被蓝轨压住了） */
+.vtl .vevspan{position:absolute;left:46px;width:24px;border-radius:3px;background:var(--warn);opacity:.85;z-index:2;pointer-events:none}
+.vtlcard.actmode .vtrack,.vtlcard.actmode .vavail{opacity:.16}
+.vtlcard.actmode .vavail.arch{opacity:.1}
+/* Aqara 式横线标注：细橙线一枚 = 一个（组）事件，点线弹标注气囊，点空白处跳播；
+   命中区 16px 高保证指尖可点，线只画 2px（与时刻线同粗细级） */
+.vtl .vmark{position:absolute;left:80px;right:8px;height:16px;margin-top:-8px;cursor:pointer;z-index:3}
+.vtl .vmark i{display:block;width:28px;height:2px;border-radius:2px;background:var(--warn);margin-top:7px}
+.vtl .vmark.grp i{width:46px}
+.vtl .vmark.on i{background:var(--primary)}
+/* 标注气囊：点横线弹出，随轨道滚动，列表行/播放钮直接跳播 */
+.vbubble{position:absolute;left:76px;z-index:6;min-width:190px;max-width:272px;background:var(--surface);
+  border:1px solid var(--line);border-radius:13px;padding:10px 12px;
+  box-shadow:0 14px 36px rgba(10,14,22,.26);cursor:default}
+.vbubble .bt{font-size:13px;font-weight:600;color:var(--text)}
+.vbubble .bi{font-size:11.5px;color:var(--muted);margin-top:2px}
+.vbubble .row{display:flex;align-items:center;gap:8px;padding:6px 8px;margin:2px -8px 0;border-radius:8px;font-size:12px;cursor:pointer;color:var(--text)}
+.vbubble .row:active{background:var(--hover)}
+.vbubble .row b{font-variant-numeric:tabular-nums}
+.vbubble .row .d{margin-left:auto;font-size:10.5px;color:var(--primary);white-space:nowrap}
+.vbubble .go{margin-top:8px;width:100%;height:30px;border-radius:9px;border:0;background:var(--primary);
+  color:#fff;font-size:12px;font-weight:600;cursor:pointer;padding:0}
+/* 固定时刻线：钉在滚动视口自下而上 2/3 高度（top 由 JS 按 vtlscroll 实测位置设置），
+   1px 红色细线无光晕只盖住轨道区，播放时时间轴内容在它下面向上滚（Aqara 式）；
+   左侧时刻文字与线互相居中——线正好对准数字的中腰 */
+.vnowline{position:absolute;left:0;right:0;pointer-events:none;z-index:5;margin-top:-1px}
+.vnowline i{display:block;width:34px;height:1px;background:var(--danger);border-radius:1px;margin-left:41px}
+.vnowline em{position:absolute;left:2px;top:0;transform:translateY(-50%);font-style:normal;font-weight:600;font-size:9px;
+  color:var(--danger);background:var(--surface);border-radius:4px;padding:1px 3px;font-variant-numeric:tabular-nums}
+/* 回放页菜单栏：更矮更轻（仅回放页，不动其它页的 .hdr） */
+#page-play .hdr{padding:3px 16px 7px}
+.vtlzoom{display:flex;align-items:center;gap:3px;margin-left:auto}
+.vtlzoom button{width:26px;height:24px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text2);font-size:15px;line-height:1;cursor:pointer;padding:0}
+.vtlzoom button:active{background:var(--fill)}
+.vtlzoom b{font-size:10.5px;color:var(--muted);min-width:34px;text-align:center;font-weight:600}
+/* 回放页固定布局：画面区/控制条固定，时间轴卡吃满剩余高度（vtlscroll 内部滚动）。
+   不用整页滚动——固定高 flex 列里 pstage 会被压扁（实测 205px→68px）。 */
+.vtlcard{margin:10px 12px 12px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 12px 6px;flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
+.vtlscroll{flex:1;min-height:0;overflow-y:auto;border-radius:10px;background:var(--fill);touch-action:pan-y;scrollbar-width:none}
+.vtlscroll::-webkit-scrollbar{display:none}
+/* 日期下拉按钮（原在 hdropt 内，现直接在菜单栏行尾，去掉了文件跳转按钮） */
+.daybtn{display:flex;align-items:center;gap:5px;font-size:15px;font-weight:600;color:var(--text);
+  background:none;border:0;padding:6px 2px;cursor:pointer;white-space:nowrap}
+#page-play .hdr-row .daybtn{margin-left:auto}
+.daybtn svg{width:14px;height:14px;stroke:var(--faint);fill:none;stroke-width:2.4;stroke-linecap:round}
+/* 日期下拉：右侧对齐弹出 */
+.daypick{position:absolute;right:12px;top:48px;z-index:30;display:none;min-width:150px;max-height:340px;
+  overflow-y:auto;background:var(--surface);border:1px solid var(--line);border-radius:15px;padding:6px;
+  box-shadow:0 14px 36px rgba(10,14,22,.26)}
+.daypick.on{display:block}
+.daypick .dp{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:10px;font-size:13px;cursor:pointer}
+.daypick .dp:active{background:var(--hover)}
+.daypick .dp.on{background:var(--fill);color:var(--primary);font-weight:600}
+.daypick .dp .w{margin-left:auto;font-size:11px;color:var(--faint)}
+/* 回放页常驻画面区（P1）：默认 16:9，双 video A/B 热切换。
+   实际画幅由 --vasp 覆盖（元数据到了就按摄像机的真实宽高比，避免 4:3 摄像头
+   在 16:9 框里上下留黑边） */
+.pstage{position:relative;margin:10px 12px 0;aspect-ratio:var(--vasp,16/9);background:#000;border-radius:14px;overflow:hidden;flex:0 0 auto}
+.pstage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .18s;background:#000}
+.pstage video.on{opacity:1}
+.pstage .pbig{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:rgba(0,0,0,.28);font-size:13px;cursor:pointer;z-index:2}
+.pstage .pbig.off{display:none}
+/* 操作条：画面区外的下方（不遮画面）；全屏时同栏变渐变底白字 */
+.pops{position:relative;display:flex;align-items:center;gap:4px;margin:8px 12px 0;flex:0 0 auto}
+.pbtn{height:30px;min-width:32px;border:0;background:none;color:var(--text2);cursor:pointer;padding:0 4px;
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;font-family:inherit}
+.pbtn svg{width:17px;height:17px;display:block}
+.pbtn:active{opacity:.6}
+.pbtn.pwide{padding:0 7px}
+.ptm{color:var(--muted);font-size:11.5px;margin-left:2px;font-variant-numeric:tabular-nums}
+.pseg{margin-left:auto;display:flex;background:var(--fill);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.pseg button{border:0;background:none;color:var(--muted);font-size:11px;padding:5px 9px;cursor:pointer;font-family:inherit}
+.pseg button.on{background:var(--primary);color:#fff;font-weight:600}
+/* 倍速弹层：从操作条向上弹的小网格 */
+.vspop{position:absolute;right:0;bottom:36px;z-index:24;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:5px;
+  display:none;grid-template-columns:repeat(2,1fr);gap:3px;box-shadow:0 12px 30px rgba(10,14,22,.24)}
+.vspop.on{display:grid}
+.vspop button{border:0;background:none;color:var(--text);font-size:12px;padding:7px 13px;border-radius:8px;cursor:pointer;font-family:inherit}
+.vspop button.on{background:var(--primary);color:#fff;font-weight:600}
+/* 全屏回放：画面**整屏铺满**（连原先留给操作条的 54px 底条也吃掉），
+   时间轴与操作条改成悬浮在画面上——播放中时间轴隐去、暂停恢复 */
+body.fsmode #page-play.on{background:#000;overflow:hidden}
+/* 0.9.54：删掉 object-fit:cover。cover 在竖屏（0.46:1 舞台装 16:9 画面）会把左右
+   各裁掉一大半，在横屏（2.2:1）又把上下裁掉——同一台摄像机两个方向看到的画面
+   完全不同，用户判断就是"画面被裁剪"。改回 contain：完整画幅优先，多出来留黑边 */
+body.fsmode #page-play.on .pstage{position:absolute;inset:0;flex:none;margin:0;
+  border-radius:0;aspect-ratio:auto;z-index:1}
+body.fsmode #page-play.on .pstage video{object-fit:contain}
+/* 操作条：压底悬浮（渐变底），不再独占一条高度 —— 画面在它下面继续延伸。
+   按钮放大到 42px 见方、右侧筛选与全屏成组，方便点 */
+body.fsmode #page-play.on .pops{position:absolute;left:0;right:0;bottom:0;margin:0;gap:2px;z-index:21;
+  height:calc(54px + env(safe-area-inset-bottom));
+  padding:0 max(12px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(12px,env(safe-area-inset-left));
+  background:linear-gradient(transparent,rgba(0,0,0,.8))}
+body.fsmode #page-play.on .pbtn,body.fsmode #page-play.on .ptm{color:#fff}
+body.fsmode #page-play.on .pbtn{height:42px;min-width:42px;padding:0 6px}
+body.fsmode #page-play.on .pbtn svg{width:21px;height:21px;color:#fff}
+body.fsmode #page-play.on .pbtn.pwide{min-width:48px;font-size:12.5px}
+body.fsmode #page-play.on .ptm{font-size:12.5px;margin:0 8px 0 4px;color:rgba(255,255,255,.94)}
+body.fsmode #page-play.on .pseg{margin-left:auto;height:38px;border-radius:11px;background:rgba(0,0,0,.45);border-color:rgba(255,255,255,.32)}
+body.fsmode #page-play.on .pseg button{padding:0 16px;font-size:12px;color:rgba(255,255,255,.86)}
+body.fsmode #page-play.on .pseg button.on{background:rgba(255,255,255,.94);color:#111}
+body.fsmode #page-play.on .vspop{background:rgba(18,22,30,.95);border-color:rgba(255,255,255,.2);
+  bottom:calc(62px + env(safe-area-inset-bottom))}
+body.fsmode #page-play.on .vspop button{color:#fff}
+body.fsmode #page-play.on .vtlcard{position:absolute;left:0;right:0;
+  bottom:calc(56px + env(safe-area-inset-bottom));max-height:46%;z-index:20;margin:0;
+  background:transparent;border:0;border-radius:0;padding:8px 14px 4px;
+  box-shadow:none;transition:opacity .18s,transform .18s}
+body.fsmode #page-play.on .vtlscroll{background:transparent}
+body.fsmode #page-play.on .heatcap{color:rgba(255,255,255,.72);text-shadow:0 1px 2px rgba(0,0,0,.7)}
+body.fsmode #page-play.on .heatcap b{color:#fff}
+body.fsmode #page-play.on .vtlzoom b{color:rgba(255,255,255,.75)}
+body.fsmode #page-play.on .vtl .vhour{color:rgba(255,255,255,.66);
+  border-top-color:rgba(255,255,255,.28);text-shadow:0 1px 2px rgba(0,0,0,.65)}
+/* 未录制的底轨在画面上是浅灰块，透明底时太扎眼——压成半透明白 */
+body.fsmode #page-play.on .vtl .vtrack{background:rgba(255,255,255,.22)}
+body.fsmode #page-play.on .vnowline em{background:rgba(0,0,0,.45)}
+body.fsmode #page-play.on .vbubble{background:rgba(16,20,28,.92);border-color:rgba(255,255,255,.2)}
+body.fsmode #page-play.on.pvplaying .vtlcard{opacity:0;transform:translateY(14px);pointer-events:none}
+
+/* ---------- 0.9.55 全屏「黑边轨」 ----------
+   横屏时 16:9 画面在 2.1:1 的舞台上左右各留一条黑边（约 77px）。黑边是白送的地方，
+   就把按钮全搬进去：播放控制排左轨、退出/旋转排右轨，画面一个像素都不压。
+   rail 类由 syncRail() 按真实画幅算（黑边 <44px 就不加，退回 0.9.54 的底栏悬浮）。 */
+body.fsmode #page-play.on.rail .pops{
+  position:absolute;left:0;top:0;right:auto;bottom:0;width:var(--railw,56px);
+  height:auto;display:flex;flex-direction:column;justify-content:center;align-items:center;
+  gap:6px;padding:0;background:none;z-index:22}
+body.fsmode #page-play.on.rail .pops .pbtn{width:42px;min-width:42px;height:42px;padding:0}
+/* 当前时刻竖排：56px 宽的轨道横着放不下 8 个字符 */
+body.fsmode #page-play.on.rail .pops .ptm{writing-mode:vertical-rl;text-orientation:mixed;
+  font-size:11px;margin:2px 0;letter-spacing:0;color:rgba(255,255,255,.94);
+  text-shadow:0 1px 2px rgba(0,0,0,.8)}
+/* 全时 / 活动 改成竖排两段 */
+body.fsmode #page-play.on.rail .pops .pseg{margin:0;flex-direction:column;width:46px;
+  height:auto;border-radius:10px}
+body.fsmode #page-play.on.rail .pops .pseg button{padding:0;height:32px;font-size:11px;
+  width:100%;text-align:center}
+/* 倍速弹层贴着左轨内侧弹出（临时弹层，不常驻） */
+body.fsmode #page-play.on.rail .vspop{left:calc(var(--railw,56px) + 6px);right:auto;bottom:auto;
+  top:50%;transform:translateY(-50%)}
+/* 时间轴让开左右两轨，底部不再给操作条留高度 */
+body.fsmode #page-play.on.rail .vtlcard{left:var(--railw,56px);right:var(--railw,56px);
+  bottom:10px;max-height:68%}
+/* 退出 / 旋转同样进右轨，只留图标 */
+body.fsmode.rail #fsTools{position:absolute;top:0;right:0;bottom:0;width:var(--railw,56px);
+  display:none;flex-direction:column;justify-content:center;align-items:center;gap:8px;z-index:23}
+body.fsmode.rail #fsTools.on{display:flex}
+body.fsmode.rail #fsTools button{width:42px;min-width:42px;height:42px;padding:0}
+body.fsmode.rail #fsTools button span{display:none}
+/* 旋转态的原生滚动方向按屏幕坐标判定，浏览器不认这层 rotate 变换：
+   时间轴的"竖向"在屏幕上其实是横向，会被 touch-action:pan-y 拦掉 → 交给 JS 换算 */
+body.rot .vtlscroll{touch-action:none}
 </style>
 </head>
 <body>
@@ -1015,7 +1196,59 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       </div>
     </section>
 
-    <!-- ============ 回放 ============ -->
+    <!-- ============ 回放（Aqara 式时间轴） ============ -->
+    <section class="page" id="page-play">
+      <div class="hdr">
+        <div class="hdr-row">
+          <div class="camsel" id="playCamSel"><span id="playCamName">—</span>
+            <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <button class="daybtn" id="playDaySel"><span id="playDayName">—</span>
+            <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+        </div>
+      </div>
+      <div class="campick" id="playCamPick"></div>
+      <div class="daypick" id="playDayPick"></div>
+      <div class="pstage" id="playStage">
+        <video id="playVidA" playsinline preload="auto"></video>
+        <video id="playVidB" playsinline preload="auto"></video>
+        <div class="pbig" id="playBig"><span>▶ 点按开始回放</span></div>
+        <div class="vspop" id="vspop"></div>
+      </div>
+      <!-- 操作条：画面区外的下方，不遮画面；全屏时同栏保留（渐变底） -->
+      <div class="pops">
+        <button class="pbtn" id="btnPlayTog" title="播放/暂停">
+          <svg viewBox="0 0 24 24" id="playTogIco"><path fill="currentColor" d="M8 5l11 7-11 7z"/></svg>
+        </button>
+        <button class="pbtn pwide" id="btnPvSpeed">1×</button>
+        <span class="ptm mono" id="playTNow">--:--:--</span>
+        <div class="pseg">
+          <button data-pvfilter="full" class="on">全时</button>
+          <button data-pvfilter="act">活动</button>
+        </div>
+        <button class="pbtn" id="btnPlayFull" title="全屏">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+      </div>
+      <div class="vtlcard" id="vtlCard">
+        <div class="heatcap">
+          <b id="vtlTitle">全天</b>
+          <span id="vtlSum"></span>
+          <div class="vtlzoom">
+            <button id="btnVtlOut" aria-label="缩小">−</button>
+            <b id="vtlPct">×1.0</b>
+            <button id="btnVtlIn" aria-label="放大">＋</button>
+          </div>
+        </div>
+        <div class="vtlscroll" id="vtlScroll">
+          <div class="vtl" id="vtl"></div>
+        </div>
+        <!-- 固定时刻线：钉在滚动视口自下而上 2/3 高度处，播放时时间轴内容在它下面滚动 -->
+        <div class="vnowline" id="vnowline"><em id="vnowTime">--:--:--</em><i></i></div>
+      </div>
+    </section>
+
+    <!-- ============ 文件 ============ -->
     <section class="page" id="page-list">
       <div class="hdr">
         <div class="hdr-row">
@@ -1025,6 +1258,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
               <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
             </div>
           </div>
+          <button class="iconbtn" id="btnListPlay" title="时间轴回放">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.4 2"/></svg>
+          </button>
           <button class="iconbtn" id="btnScan">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/></svg>
           </button>
@@ -1034,24 +1270,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 
       <div class="playempty" id="playEmpty"></div>
 
-      <div class="modebar">
-        <div class="seg2">
-          <button class="on" data-pmode="full">全时录像</button>
-          <button data-pmode="clip">精简片段</button>
-        </div>
-      </div>
-
+      <!-- 0.9.42 文件页瘦身：seg2（全时/精简）与热力图随 Aqara 回放页上线退役。
+           state.pmode 固定 full；热力图职责移交回放页垂直时间轴。
+           renderHeat 保留为播放器时间轴同步的载体（见其函数内的守卫）。 -->
       <div class="dates" id="dates"></div>
-
-      <div class="heatwrap">
-        <div class="heatcap">
-          <b id="heatTitle">全天活动</b>
-          <span>点击色块只看该时段</span>
-          <span class="sp" id="heatClear" style="color:var(--primary);font-size:11.5px;display:none">显示全部</span>
-        </div>
-        <div class="heat" id="heat"></div>
-        <div class="heatlbl"><span>00</span><span>04</span><span>08</span><span>12</span><span>16</span><span>20</span><span>24</span></div>
-      </div>
 
       <div class="listhead">
         <b id="listTitle">全部片段</b>
@@ -1160,9 +1382,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
       <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M10 9.5l5 2.5-5 2.5z"/></svg>
       <span>直播</span>
     </button>
-    <button class="tb" data-page="list">
+    <button class="tb" data-page="play">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.4 2"/></svg>
       <span>回放</span>
+    </button>
+    <button class="tb" data-page="list">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+      <span>文件</span>
     </button>
     <button class="tb" data-page="cam">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 00-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 00-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 00-2 1.2l-2.3-1-2 3.4 2 1.5a7 7 0 000 2.4l-2 1.5 2 3.4 2.3-1a7 7 0 002 1.2l.4 2.7h4l.4-2.7a7 7 0 002-1.2l2.3 1 2-3.4-2-1.5c.06-.4.1-.8.1-1.2z"/></svg>
@@ -1507,6 +1733,10 @@ const LK = {
   intervalH:6,        // 1~24
   segSec:300,         // 分片长度
   clipStyle:"join",   // 通用切分方式：join=整段拼接 | split=活动切片（每路可用 clipMode 覆盖）
+  condenseMode:"virtual", // 缩时方案：virtual=只记台账 | materialize=产出片段 | off（服务端 _ENUM_KEYS 白名单）
+  archEnable:true,     // 夜间归档裁剪开关（仅虚拟缩时有意义）
+  archDays:90,         // 归档片段保留天数
+  archBatch:120,       // 单晚最多裁多少个分片（跨夜分批）
   pending:0,          // 待处理数 —— 以 /api/link 返回为准，不再本地编数
   done:0,
   silent:0,
@@ -1623,8 +1853,10 @@ function layout(){
      这里再写 width/transform 会把它顶掉，桌面端会缩成一小块。 */
   if(state.land || state.rot || isFullscreen()){
     document.body.classList.toggle("desktop", false);
+    syncRail();          /* 全屏/旋转一变，黑边宽度也变，工具轨跟着重算 */
     return;
   }
+  syncRail();
   const desktop = window.innerWidth >= 760 && window.innerHeight >= 700;
   document.body.classList.toggle("desktop", desktop);
   if(!desktop){
@@ -1638,7 +1870,16 @@ function layout(){
   const s = Math.min(1, (window.innerHeight - 40) / (844 + 24), (window.innerWidth - 40) / (390 + 24));
   phone.style.transform = "scale(" + s.toFixed(3) + ")";
 }
-window.addEventListener("resize", ()=>{ layout(); if(state.view==="player") drawScene(); });
+let fsRotTimer = 0;
+window.addEventListener("resize", ()=>{
+  layout(); if(state.view==="player") drawScene();
+  /* 全屏横屏自纠：转屏/锁定生效都会触发 resize。防抖 250ms 取最终方向，
+     避免过渡帧把旋转误撤后不再恢复（v0.9.51 真机仍竖屏的可疑原因之一） */
+  if(state.land){
+    clearTimeout(fsRotTimer);
+    fsRotTimer = setTimeout(fsSyncRot, 250);
+  }
+});
 
 /* ================= 全屏横屏 =================
    目标：点全屏 → 真的进全屏 + 尽量横过来，并且**永远有路退出**。
@@ -1674,12 +1915,111 @@ function setLand(on){
   layout();
 }
 
-/* 画面旋转兜底：真的转不过来时，把舞台转 90° 铺满 */
+/* 画面旋转兜底：真的转不过来时，把舞台转 90° 铺满。
+   这里任何异常都不能往上抛——真机上曾因这步出错导致退出按钮/旋转一起丢失 */
 function applyRotate(on){
   state.rot = !!on;
-  phone.classList.toggle("rot", state.rot);
-  document.body.classList.toggle("rot", state.rot);
-  layout();
+  try{
+    phone.classList.toggle("rot", state.rot);
+    document.body.classList.toggle("rot", state.rot);
+    layout();
+  }catch(e){}
+  fsDiag();
+}
+
+/* 全屏自诊断角标：默认不显示（界面干净），排障时 URL 带 ?fsdiag=1 才出现 */
+function fsDiagWanted(){
+  try{
+    if(/(?:^|[?&])fsdiag=1/.test(location.search)) return true;
+    return localStorage.getItem("fsdiag") === "1";
+  }catch(e){ return false; }
+}
+function fsDiag(){
+  let d = document.getElementById("fsDiag");
+  if(!d){
+    d = document.createElement("div");
+    d.id = "fsDiag";
+    (phone || document.body).appendChild(d);   /* 挂在 .phone 内 → 跟着旋转 */
+  }
+  const on = (state.land || isFullscreen()) && fsDiagWanted();
+  d.classList.toggle("on", !!on);
+  if(!on) return;
+  d.textContent = window.innerWidth + "×" + window.innerHeight +
+    " · 旋转" + (state.rot ? "开" : "关");
+}
+
+/* 手动旋转偏好：on/off 优先于自动判断（真机某 webview 自动算不出来时的兜底） */
+function rotPref(){
+  try{ return localStorage.getItem("fsRot") || ""; }catch(e){ return ""; }
+}
+function setRotPref(v){
+  try{ v ? localStorage.setItem("fsRot", v) : localStorage.removeItem("fsRot"); }catch(e){}
+}
+
+/* 横屏状态同步：以「实际视口方向」为准（CSS 旋转不会改变 innerWidth/Height，
+   所以视口横向 = 系统真的转过去了）。多个检查点独立求值，过渡帧误判后能自愈 */
+function fsSyncRot(){
+  if(!state.land) return;
+  const pref = rotPref();
+  const want = pref ? pref === "on" : (window.innerHeight > window.innerWidth);
+  if(want !== state.rot) applyRotate(want);
+  else fsDiag();
+}
+
+/* ================= 黑边工具轨 =================
+   全屏横屏时画面 contain 会左右各留一条黑边（宽度 = (舞台宽 - 舞台高×画幅)/2）。
+   黑边是"白送"的地方：把操作条排进左轨、退出/旋转排进右轨，画面就一点不挡了。
+   黑边太窄（<44px）时退回 0.9.54 的底栏悬浮布局——宁可压一点也不能把按钮挤成 20px。 */
+var vidAsp = 16 / 9;      /* 摄像机真实画幅，元数据到了就更新（4:3 机位也能算对）；var 防 TDZ */
+function syncRail(){
+  const st = document.getElementById("playStage");
+  const pg = document.getElementById("page-play");
+  const fs = document.body.classList.contains("fsmode");
+  let barw = 0, land = false;
+  if(fs && st && st.clientWidth && st.clientHeight){
+    const w = st.clientWidth, h = st.clientHeight;
+    land = w > h;
+    if(land && vidAsp > 0.2) barw = Math.round((w - h * vidAsp) / 2);
+  }
+  const rail = !!fs && land && barw >= 44;
+  try{
+    document.body.classList.toggle("rail", rail);
+    if(pg) pg.classList.toggle("rail", rail);
+    document.documentElement.style.setProperty("--railw",
+      (rail ? Math.min(58, Math.max(44, barw - 6)) : 56) + "px");
+  }catch(e){}
+  return { rail: rail, barw: barw };
+}
+
+/* 全屏工具组容器：**挂在 .phone 里**（跟着旋转走，永远在用户视角右上角）。
+   两颗按钮横排、间距 8px、触控区 40×40 以上，不会互相挤压 */
+function ensureFsTools(){
+  let box = document.getElementById("fsTools");
+  if(box) return box;
+  box = document.createElement("div");
+  box.id = "fsTools";
+  (phone || document.body).appendChild(box);
+  return box;
+}
+
+/* 旋转按钮：全屏期间常驻，一键切换横/竖屏 */
+function ensureRotBtn(){
+  let b = document.getElementById("fsRot");
+  if(b) return b;
+  b = document.createElement("button");
+  b.id = "fsRot";
+  b.type = "button";
+  b.title = "切换横屏 / 竖屏";
+  b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 8V4h4M20 16v4h-4M4 4l6 6M20 20l-6-6"/></svg><span>旋转</span>';
+  b.onclick = (e)=>{
+    e.stopPropagation();
+    applyRotate(!state.rot);
+    setRotPref(state.rot ? "on" : "off");    /* 本次全屏内记住，退出全屏后清掉重新自动判断 */
+    layout();
+    try{ requestAnimationFrame(()=>{ drawScene(); syncVnowline(); fsSyncRot(); }); }catch(_){}
+  };
+  ensureFsTools().appendChild(b);
+  return b;
 }
 
 /* 退出按钮：全屏时浮在右上角。桌面端和手机端都显示，这是最可靠的出口。 */
@@ -1690,15 +2030,37 @@ function ensureExitBtn(){
   b.id = "fsExit";
   b.type = "button";
   b.title = "退出全屏（Esc）";
-  b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 3v6H3M15 3v6h6M15 21v-6h6M9 21v-6H3"/></svg><span>退出全屏</span>';
+  b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 3v6H3M15 3v6h6M15 21v-6h6M9 21v-6H3"/></svg><span>退出</span>';
   b.onclick = (e)=>{ e.stopPropagation(); exitFull(); };
-  document.body.appendChild(b);
+  ensureFsTools().appendChild(b);
   return b;
 }
 
 async function enterFull(target, opts){
   opts = opts || {};
-  const el = target || document.documentElement;
+  /* 关键：永远对整个文档根进全屏，**不要**对页面元素进全屏。
+     元素级全屏会把该元素提到浏览器顶层（top layer），UA 样式给它
+     position:fixed，彻底脱离 .phone 的旋转变换——画面永远转不过来；
+     同时它会盖住挂在 body 上的退出/旋转按钮（真机三轮"全屏仍竖屏 +
+     按钮消失"都是这一个原因）。CSS 布局由 body.fsmode 负责，与全屏元素无关。 */
+  const el = document.documentElement;
+
+  /* ① 先把横屏做完（同步、不等任何异步）——真机上 requestFullscreen /
+     orientation.lock 都可能挂起，旋转不能排在它们后面 */
+  const portrait = window.innerHeight > window.innerWidth;
+  state.fsAt = Date.now();      /* fullscreenchange 防抖用：吃掉进入瞬间的补发事件 */
+  setLand(true);
+  /* 实时层自己有「退出全屏」（顶部+底部各一个），不再叠一个全局的浮标 ——
+     两个退出按钮压在同一角，反而不知道点哪个。 */
+  if(!opts.noExit) ensureExitBtn().removeAttribute("hidden");
+  else { const b = document.getElementById("fsExit"); if(b) b.setAttribute("hidden", ""); }
+  ensureRotBtn().removeAttribute("hidden");
+  ensureFsTools().classList.add("on");
+
+  const pref = rotPref();
+  applyRotate(pref === "on" ? true : pref === "off" ? false : portrait);
+
+  /* ② 再请求真全屏（拿不到就当铺满，不影响已经做好的横屏） */
   let ok = false;
   try{
     if(el.requestFullscreen) { await el.requestFullscreen({ navigationUI: "hide" }); ok = true; }
@@ -1707,33 +2069,29 @@ async function enterFull(target, opts){
     /* 用户手势过期 / iframe 没 allowfullscreen / 浏览器策略禁止 —— 都退到容器铺满 */
     ok = false;
   }
-  setLand(true);
-  /* 实时层自己有「退出全屏」（顶部+底部各一个），不再叠一个全局的浮标 ——
-     两个退出按钮压在同一角，反而不知道点哪个。 */
-  if(!opts.noExit) ensureExitBtn().classList.add("on");
-  else { const b = document.getElementById("fsExit"); if(b) b.classList.remove("on"); }
 
-  /* 锁横屏：成功了就不用旋转；失败就转画面 */
+  /* ③ 方向锁：竞速 800ms，挂起/假成功都不阻塞（旋转已经在①里做完了） */
   let locked = false;
   try{
     const so = screen.orientation;
     if(so && so.lock){
-      await so.lock("landscape");
-      locked = true;
+      await Promise.race([
+        so.lock("landscape").then(()=>{ locked = true; }).catch(()=>{}),
+        new Promise(r=>setTimeout(r, 800))
+      ]);
     }
   }catch(e){ locked = false; }
 
-  if(!locked){
-    /* 已经是横向视口（比如桌面宽屏）就没必要转；竖屏才转 */
-    applyRotate(window.innerHeight > window.innerWidth);
-  }
-  /* 全屏/旋转都可能改变视口尺寸，等一帧再量 */
-  requestAnimationFrame(()=>{ layout(); drawScene(); });
+  /* ④ 多个检查点校准：lock 真生效 → 视口变横向 → 撤掉 CSS 旋转；
+     过渡帧误判也能在后面的检查点自愈。手动偏好始终优先 */
+  [0, 400, 1000, 2000].forEach(ms=>setTimeout(fsSyncRot, ms));
+  /* 全屏/旋转都可能改变视口尺寸，等一帧再量；回放页的时刻线位置也跟着重算 */
+  requestAnimationFrame(()=>{ layout(); drawScene(); syncVnowline(); fsDiag(); });
 
   if(!ok){
     toast("toast2", "浏览器不允许真全屏 · 已切换为铺满横屏（Esc 退出）");
-  }else if(!locked && state.rot){
-    toast("toast2", "已全屏 · 设备不支持锁定方向，画面已旋转（Esc 退出）");
+  }else if(state.rot){
+    toast("toast2", "已全屏 · 画面已转横屏（右上角「旋转」可切回）");
   }else{
     toast("toast2", "已进入全屏横屏 · 右上角或 Esc 退出");
   }
@@ -1745,16 +2103,20 @@ async function exitFull(){
     else if(document.webkitExitFullscreen) document.webkitExitFullscreen();
   }catch(e){}
   try{ if(screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); }catch(e){}
-  const b = document.getElementById("fsExit");
-  if(b) b.classList.remove("on");
+  const box = document.getElementById("fsTools");
+  if(box) box.classList.remove("on");
+  /* 本次的手动旋转选择随退出作废——下次进全屏重新按视口方向自动判断，
+     免得上次选了"关"之后再也自动转不过来（真机就是这么卡住的） */
+  setRotPref("");
   setLand(false);
+  fsDiag();
   /* 实时层的全屏退出 = 回到首页原来的位置与列数（不是留在一个黑底的播放层里） */
   const room = document.getElementById("liveRoom");
   if(room && room.classList.contains("on") && state.lrFs){
     state.lrFs = false;
     closeLiveRoom();
   }
-  requestAnimationFrame(()=>{ layout(); drawScene(); });
+  requestAnimationFrame(()=>{ layout(); drawScene(); syncVnowline(); });
   toast("toast2", "已退出全屏");
 }
 
@@ -1763,13 +2125,18 @@ function toggleFull(target){
   return enterFull(target);
 }
 
-/* 浏览器自己退出全屏（按 Esc / 手势 / 切走）时同步 UI，别让按钮状态和数据打架 */
+/* 浏览器自己退出全屏（按 Esc / 手势 / 切走）时同步 UI，别让按钮状态和数据打架。
+   进入后的 600ms 内的 change 事件一律忽略——部分 webview 在 requestFullscreen
+   resolve 之后会补发一次「空」fullscreenchange，照单全收会把刚进的全屏直接退掉 */
 ["fullscreenchange","webkitfullscreenchange"].forEach(ev=>
   document.addEventListener(ev, ()=>{
+    if(Date.now() - (state.fsAt || 0) < 600) return;
     if(!isFullscreen()){
-      const b = document.getElementById("fsExit");
-      if(b) b.classList.remove("on");
+      const box = document.getElementById("fsTools");
+      if(box) box.classList.remove("on");
+      setRotPref("");            /* 手动旋转只管本次全屏，退出即作废（否则下次自动判断被压住） */
       if(state.land) setLand(false);
+      fsDiag();
       const room = document.getElementById("liveRoom");
       if(room && room.classList.contains("on") && state.lrFs){
         state.lrFs = false;
@@ -1850,8 +2217,16 @@ function activatePage(page){
   }
   if(page === "list"){
     camPickShow(false);
-    fetchRecordings();   /* 每次进回放页都按磁盘现状刷新 */
+    playCamShow(false);
+    fetchRecordings();   /* 每次进文件页都按磁盘现状刷新 */
     renderCamPick(); renderDates(); renderOverview(); renderHeat(); renderClips();
+  }
+  if(page !== "play") pvStop();   // 离开回放页就停播，不让画面区在后台空转
+  if(page === "play"){
+    camPickShow(false);
+    /* 回放页与文件页共享 camId/dayIdx；录像清单可能还没拉过，补一次 */
+    if(!state.rec) fetchRecordings();
+    renderPlay();
   }
 }
 
@@ -1871,6 +2246,170 @@ function goPage(page){
 document.querySelectorAll(".tb").forEach(b=>{
   b.onclick = ()=>{ goPage(b.dataset.page); };
 });
+/* 回放页 ↔ 文件页 互跳；回放页机位下拉；时间轴缩放 */
+(function(){
+  const blp = document.getElementById("btnListPlay");
+  if(blp) blp.onclick = ()=>{ goPage("play"); };
+  const pcs = document.getElementById("playCamSel");
+  if(pcs) pcs.onclick = e=>{ e.stopPropagation(); playCamShow(); };
+  const pds = document.getElementById("playDaySel");
+  if(pds) pds.onclick = e=>{ e.stopPropagation(); playDayShow(); };
+  document.addEventListener("click", ()=>{ playCamShow(false); playDayShow(false); vtlBubbleHide();
+    const vs = document.getElementById("vspop"); if(vs) vs.classList.remove("on"); });
+  /* 时间轴缩放：桌面 = 按钮 / Ctrl+滚轮；触屏 = 双指捏合。
+     滚轮不加修饰键时保持原生滚动，不劫持。 */
+  const bin = document.getElementById("btnVtlIn");
+  const bout = document.getElementById("btnVtlOut");
+  if(bin) bin.onclick = ()=>{ if(!vtlZoom(1.3)) toast("toast2", "已到最大缩放"); };
+  if(bout) bout.onclick = ()=>{ if(!vtlZoom(1/1.3)) toast("toast2", "已到最小缩放"); };
+  const sc = document.getElementById("vtlScroll");
+  if(!sc) return;
+  /* 启动时恢复上次筛选态（芯片高亮 + 时间轴活动模式 + 倍速标签）。
+     本 IIFE 在 PPLAY 声明之前执行，不能直接调 pvSyncCtl —— 延到脚本跑完后。 */
+  const card0 = document.getElementById("vtlCard");
+  setTimeout(()=>{
+    if(card0) card0.classList.toggle("actmode", PPLAY.filter === "act");
+    pvSyncCtl();
+    syncVnowline();
+  }, 0);
+  /* 点轨道任意位置 = 跳到该时刻并收起标注气囊（横线有自己的 click，已 stopPropagation） */
+  const vtlBox = document.getElementById("vtl");
+  if(vtlBox) vtlBox.addEventListener("click", e=>{
+    vtlBubbleHide();
+    const r = vtlBox.getBoundingClientRect();
+    const t = (e.clientY - r.top - VTL_TOP) / vtlPxh * 3600;
+    if(!(t >= 0) || t > 86400) return;
+    if(!pvSegAt(t)){ toast("toast2", "该时段无录像"); return; }
+    pvPlayAt(t);
+  });
+  /* 画面区：轻点 = 暂停/继续；大播放钮在 .pbig 上（点按 = pvResume） */
+  const st = document.getElementById("playStage");
+  if(st){
+    st.addEventListener("click", e=>{
+      if(!PPLAY.on){ pvResume(); return; }
+      const v = pvCur;
+      if(v.paused){ safePlay(v); } else { try{ v.pause(); }catch(err){} }
+    });
+    const big = document.getElementById("playBig");
+    if(big) big.addEventListener("click", e=>{ e.stopPropagation(); pvResume(); });
+  }
+  /* 全屏：整个回放页进全屏（画面铺满，时间轴/操作条悬浮），横屏锁 + 旋转兑底复用既有基建 */
+  const bf = document.getElementById("btnPlayFull");
+  if(bf) bf.onclick = e=>{ e.stopPropagation(); toggleFull(document.getElementById("page-play")); };
+  const tog = document.getElementById("btnPlayTog");
+  if(tog) tog.onclick = e=>{
+    e.stopPropagation();
+    if(!PPLAY.on){ pvResume(); return; }
+    const v = pvCur;
+    if(v.paused){ safePlay(v); } else { try{ v.pause(); }catch(err){} }
+  };
+  /* 筛选芯片：全时=连播全部；活动=时间轴只亮活动段 + 按预设跳过静止部分。
+     记住选择；切换时退出快进态并重绘时间轴（保持滚动位置） */
+  document.querySelectorAll("[data-pvfilter]").forEach(b=>{
+    b.onclick = e=>{
+      e.stopPropagation();
+      PPLAY.filter = b.dataset.pvfilter === "act" ? "act" : "full";
+      try{ localStorage.setItem("nvr_pvfilter", PPLAY.filter); }catch(err){}
+      PPLAY.ff = null; pvRate(); pvSyncCtl();
+      const card = document.getElementById("vtlCard");
+      if(card) card.classList.toggle("actmode", PPLAY.filter === "act");
+      renderVtl(vtlData, vtlDay);
+    };
+  });
+  /* 倍速：从操作条向上弹的小网格；1× 是全时连播默认，快进态下不生效 */
+  const spd = document.getElementById("btnPvSpeed");
+  const spop = document.getElementById("vspop");
+  if(spd && spop){
+    spd.onclick = e=>{
+      e.stopPropagation();
+      if(!spop.classList.toggle("on")) return;
+      spop.innerHTML = [1,2,4,8,16].map(n=>
+        '<button data-sp="' + n + '"' + (n === PPLAY.speed ? ' class="on"' : "") + ">"
+        + n + "×</button>").join("");
+      spop.querySelectorAll("[data-sp]").forEach(x=> x.onclick = ev=>{
+        ev.stopPropagation();
+        PPLAY.speed = +x.dataset.sp;
+        try{ localStorage.setItem("nvr_pvspeed", String(PPLAY.speed)); }catch(err){}
+        PPLAY.ff = null; pvRate(); pvSyncCtl(); spop.classList.remove("on");
+      });
+    };
+    spop.onclick = e=> e.stopPropagation();
+  }
+  /* 固定时刻线的跟随让位：用户拖着/挑着时间轴时不抢滚动，松手 2 秒后恢复跟随 */
+  const hold = ()=>{ vtlHold = Date.now(); };
+  sc.addEventListener("touchstart", hold, {passive:true});
+  sc.addEventListener("touchmove", hold, {passive:true});
+  sc.addEventListener("touchend", hold, {passive:true});
+  sc.addEventListener("wheel", hold, {passive:true});
+  /* 空闲态：滚到哪里，时刻线就显示哪里的时刻。
+     播放中用户拖动时间轴 = 松手后把播放定位到固定线压着的时刻继续播
+     （而不是被跟随逻辑拽回原进度，表现为"时间轴跳动"，v0.9.48）。
+     只接管用户的拖动：vtlHold 900ms 内才算用户操作，程序滚动的对齐不抢。 */
+  let vtlSeekTmr = 0;
+  sc.addEventListener("scroll", ()=>{
+    if(!PPLAY.on){ syncVnowline(); return; }
+    clearTimeout(vtlSeekTmr);
+    vtlSeekTmr = setTimeout(()=>{
+      if(!PPLAY.on || Date.now() - vtlHold > 900) return;
+      const t = Math.max(0, Math.min(86400,
+        (sc.scrollTop + sc.clientHeight / 3 - VTL_TOP) / vtlPxh * 3600));
+      if(Math.abs(t - PPLAY.t) < 1.2) return;   // 停在原进度附近就不折腾
+      if(pvSegAt(t)) pvPlayAt(t, { quiet:true });
+    }, 400);
+  });
+  window.addEventListener("resize", syncVnowline);
+  sc.addEventListener("wheel", e=>{
+    if(!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    vtlZoom(e.deltaY < 0 ? 1.15 : 1/1.15);
+  }, {passive:false});
+  const tdist = ts => Math.hypot(ts[0].clientX - ts[1].clientX,
+                                 ts[0].clientY - ts[1].clientY);
+  let pinch = null;
+  sc.addEventListener("touchstart", e=>{
+    if(e.touches.length !== 2) return;
+    const r = sc.getBoundingClientRect();
+    const my = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top;
+    pinch = { d: tdist(e.touches) || 1, pxh0: vtlPxh,
+              t: (sc.scrollTop + my - VTL_TOP) / vtlPxh * 3600, y: my };
+  }, {passive:true});
+  sc.addEventListener("touchmove", e=>{
+    if(!pinch || e.touches.length !== 2) return;
+    e.preventDefault();          // 双指期间接管，避免浏览器同时滚动/缩放页面
+    vtlPxh = vtlClampPxh(pinch.pxh0 * (tdist(e.touches) / pinch.d));
+    renderVtl(vtlData, vtlDay, pinch.t, pinch.y);
+  }, {passive:false});
+  const pinchEnd = ()=>{
+    if(!pinch) return;
+    pinch = null;
+    try{ localStorage.setItem("nvr_vtl_pxh", String(Math.round(vtlPxh))); }catch(e){}
+  };
+  sc.addEventListener("touchend", pinchEnd);
+  sc.addEventListener("touchcancel", pinchEnd);
+})();
+
+/* 旋转态下的时间轴拖动（0.9.55）：
+   画面是被 CSS rotate(90deg) 转过来的（系统不让锁横屏时只能这么干），于是时间轴的
+   "竖向"在屏幕坐标里落在横向。原生滚动按**屏幕方向**判 touch-action，pan-y 直接
+   把横向拖动拦掉 —— 表现就是"横屏暂停时弹出的时间轴怎么拖都不动"。
+   这里自己换算：容器 y 轴指向屏幕 -x，所以手指往屏幕 +x 走 = 内容往上滚。 */
+(function(){
+  const sc = document.getElementById("vtlScroll");
+  if(!sc) return;
+  let drag = null;
+  sc.addEventListener("touchstart", e=>{
+    if(e.touches.length !== 1 || !document.body.classList.contains("rot")){ drag = null; return; }
+    drag = { x: e.touches[0].clientX, top: sc.scrollTop };
+  }, {passive:true});
+  sc.addEventListener("touchmove", e=>{
+    if(!drag || e.touches.length !== 1) return;
+    e.preventDefault();                       /* 别让浏览器再按错误方向滚一遍 */
+    sc.scrollTop = drag.top + (e.touches[0].clientX - drag.x);
+  }, {passive:false});
+  const stop = ()=>{ drag = null; };
+  sc.addEventListener("touchend", stop);
+  sc.addEventListener("touchcancel", stop);
+})();
 
 /* 返回键/左滑：按"最内层优先"逐层退出。
    顺序必须是 播放器 → 实时层 → 设置展开 → 页面 → 根。
@@ -1954,7 +2493,12 @@ function renderDates(){
 /* ================= 热力条 ================= */
 /* 按「展示坐标」（缩时=源时刻，全时=分片起点）落进 2 小时格 */
 function renderHeat(){
+  /* 0.9.42：文件页热力图退役，职责移交回放页垂直时间轴。
+     但 renderHeat 还被播放器同步链（syncPlayer / 时段跳转）调用——它的
+     renderTl() 尾巴是播放器上方时间 lanes 的重建入口。热力元素不存在时
+     只跳过热力绘制，同步职责照常履行。 */
   const box = document.getElementById("heat");
+  if(!box){ renderTl(); return; }
   const segs = state.activity;
   const per = new Array(12).fill(0);   // 每格 2 小时，单位秒
   segs.forEach(s=>{
@@ -2767,6 +3311,14 @@ videoEls().forEach(v=>{
   v.addEventListener("loadedmetadata", ()=>{
     try{ v.playbackRate = Math.min(state.speed || 1, 16); }catch(e){}
     if((state.speed || 1) > 8) v.muted = true;
+    /* 按摄像机真实画幅定舞台比例（同一通道来源一致，后到的写一次也无害）；
+       vidAsp 同时给黑边工具轨算宽度用 */
+    const st = document.getElementById("playStage");
+    if(st && v.videoWidth && v.videoHeight){
+      vidAsp = v.videoWidth / v.videoHeight;
+      st.style.setProperty("--vasp", v.videoWidth + "/" + v.videoHeight);
+      syncRail();
+    }
   });
 });
 
@@ -3068,6 +3620,9 @@ function pushCfg(){
              /* 每路切分方式：follow=跟随通用；join/split 显式覆盖。
                 link 消费端按它选导出路径（拼接 vs 活动切片） */
              clip_mode: p.clipMode || "follow",
+             /* 每路缩时方案：follow=跟随全局；virtual/materialize/off 显式覆盖。
+                服务端 link 按 link.condense_mode_of() 消费它决定只写台账还是双写导出 */
+             condense_mode: p.condenseMode || "follow",
              /* 单路分片长度：0 表示跟随通用设置。必须真的推上去 ——
                 它是 ffmpeg 命令行的物理参数，只存在 localStorage 等于没设。 */
              segment_sec: p.segSec || 0,
@@ -3085,6 +3640,10 @@ function pushCfg(){
                  record_segment_sec: LK.segSec,
                  link_mode: LK.mode,
                  clip_style: LK.clipStyle,
+                 condense_mode: LK.condenseMode,
+                 archive_enable: LK.archEnable,
+                 archive_days: LK.archDays,
+                 archive_batch: LK.archBatch,
                  link_interval_h: LK.intervalH,
                  concurrency: GS.conc,
                  /* 必须是枚举值：以前推的是 !!GS.gpu 布尔，后端把 "auto" 顶成了
@@ -3114,6 +3673,11 @@ function applyServerCfg(c){
   }
   if(c.link_mode && c.link_mode !== LK.mode) LK.mode = c.link_mode;
   if(c.clip_style && c.clip_style !== LK.clipStyle) LK.clipStyle = c.clip_style;
+  if(c.condense_mode && ["virtual","materialize","off"].indexOf(c.condense_mode) >= 0
+     && c.condense_mode !== LK.condenseMode) LK.condenseMode = c.condense_mode;
+  if(typeof c.archive_enable === "boolean") LK.archEnable = c.archive_enable;
+  if(c.archive_days){ const v = +c.archive_days; if(v >= 1) LK.archDays = v; }
+  if(c.archive_batch){ const v = +c.archive_batch; if(v >= 10) LK.archBatch = v; }
   if(c.link_interval_h){
     const h = +c.link_interval_h;
     if(h && h !== LK.intervalH) LK.intervalH = h;
@@ -3172,6 +3736,7 @@ function applyServerCams(list){
     if(src.condense != null) p.condense = !(src.condense === false || src.condense === "false");
     if(src.clip_speed != null) p.clipSpeed = [1,2,4,8].indexOf(+src.clip_speed) >= 0 ? +src.clip_speed : 1;
     if(src.clip_mode != null) p.clipMode = ["follow","join","split"].indexOf(src.clip_mode) >= 0 ? src.clip_mode : "follow";
+    if(src.condense_mode != null) p.condenseMode = ["follow","virtual","materialize","off"].indexOf(src.condense_mode) >= 0 ? src.condense_mode : "follow";
     if(src.segment_sec != null) p.segSec = +src.segment_sec || 0;
     if(src.masks) p.masks = normMasks(src.masks);
     p.judge = normJudge(p.judge, null);
@@ -3908,19 +4473,26 @@ function judgeLine(p){
 
 /* 全路合计占用（保留周期跟着每路走，所以放在摄像头区下面汇总） */
 function recBudgetText(){
-  let full = 0, clip = 0;
+  let full = 0, clip = 0, arch = 0;
   CAMERAS.forEach(c=>{
     const p = camParams[c.id];
     if(!p || !p.enabled) return;
     const dayGB = fullDayMbps(c) * 86400 / 8 / 1024;   /* Mbps×86400s÷8=MB，再÷1024=GB */
     full += dayGB * p.fullDays;
-    clip += dayGB * 0.07 * p.clipDays;
+    const eff = cmOf(p);
+    if(eff === "materialize")
+      clip += dayGB * 0.07 * p.clipDays;      /* 缩时片段 ≈ 活动占比 7% */
+    else if(eff === "virtual")
+      arch += dayGB * 0.07 * (LK.archDays || 90);  /* 归档同量级，但时长随全时过期滚动 */
   });
-  const need = full + clip;
+  const need = full + clip + arch;
   const free = (REC.diskFreeGB == null || isNaN(REC.diskFreeGB)) ? null : +REC.diskFreeGB;
   const ok = free == null ? true : need <= free;   // 还没读到磁盘就不下"空间不足"的结论
+  const parts = ["全时 " + full.toFixed(0)];
+  if(arch > 0.5) parts.push("归档 " + arch.toFixed(0));
+  if(clip > 0.5) parts.push("缩时 " + clip.toFixed(0));
   return "合计占用 ≈ <b style=\"" + (ok ? "" : "color:var(--danger)") + "\">" + need.toFixed(0)
-    + " GB</b>（全时 " + full.toFixed(0) + " + 缩时 " + clip.toFixed(0)
+    + " GB</b>（" + parts.join(" + ")
     + "）· 剩余 " + (free == null ? "—" : free.toFixed(0) + " GB")
     + (ok ? "" : "，<b style='color:var(--danger)'>空间不足：减全时天数或调低画质</b>");
 }
@@ -3995,7 +4567,7 @@ function cardRec(){
       + '<div class="hint" style="margin-top:6px">全时录像存 <code style="font-size:10.5px">' + esc(REC.dir) + '/&lt;摄像头&gt;/&lt;日期&gt;/</code>，缩时片段存 <code style="font-size:10.5px">' + esc(REC.dir) + '/_clip/&lt;摄像头&gt;/&lt;日期&gt;/</code></div>'
     + '</div>'
     + '<div class="fld2">'
-      + '<label>每天几点清理过期录像</label>'
+      + '<label>夜间任务时刻（先归档裁剪，后清理过期）</label>'
       + '<div class="chips" style="margin-top:2px">'
         + ["01:00","02:00","03:00","04:00","05:00"].map(t=>
             '<button class="chip ' + (REC.cleanupAt===t?"on":"") + '" data-cleanat="' + t + '">' + t + '</button>').join("")
@@ -4011,16 +4583,52 @@ function cardRec(){
 
 function cardLink(){
   return '<div class="gcard">'
-    + '<h3>录制与压制衔接 <span class="sub">所有摄像头共用</span></h3>'
+    + '<h3>缩时与存储方案 <span class="sub">所有摄像头共用 · 每路可单独覆盖</span></h3>'
     + '<div class="srow" style="padding-top:0;border-top:none">'
-      + '<div class="n">录完之后什么时候压</div>'
+      + '<div class="n">方案模式</div>'
       + '<div class="chips">'
-        + '<button class="chip ' + (LK.mode==="live"?"on":"") + '" data-link="live">即刻压制</button>'
-        + '<button class="chip ' + (LK.mode==="scheduled"?"on":"") + '" data-link="scheduled">定时压制</button>'
+        + '<button class="chip ' + (LK.condenseMode==="virtual"?"on":"") + '" data-cmode="virtual">虚拟缩时</button>'
+        + '<button class="chip ' + (LK.condenseMode==="materialize"?"on":"") + '" data-cmode="materialize">物化切片</button>'
+        + '<button class="chip ' + (LK.condenseMode==="off"?"on":"") + '" data-cmode="off">关闭</button>'
+      + '</div>'
+      + '<div class="h" style="margin-top:8px;line-height:1.55">' + condenseHint() + '</div>'
+    + '</div>'
+    + (LK.condenseMode==="virtual" ? '<div class="srow">'
+      + '<div class="top"><span class="n">回放静默段处理</span><span class="v">' + silentLabel() + '</span></div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (PPLAY.silent==="skip"?"on":"") + '" data-silent="skip">直接跳过</button>'
+        + '<button class="chip ' + (PPLAY.silent==="16"?"on":"") + '" data-silent="16">16× 快进</button>'
+        + '<button class="chip ' + (PPLAY.silent==="32"?"on":"") + '" data-silent="32">32× 快进</button>'
+      + '</div>'
+      + '<div class="h">回放页「模拟缩时」播放时，两个活动之间的静止画面怎么过：跳过最省时间、观感最接近 Aqara；快进保留时间连续感，但对无核显机器 seek 压力大。</div>'
+    + '</div>' : '')
+    + (LK.condenseMode==="virtual" ? '<div class="srow">'
+      + '<div class="top"><span class="n">夜间归档裁剪</span>'
+        + '<span class="v">归档保留 ' + (LK.archDays || 90) + ' 天</span></div>'
+      + '<div class="swrow" style="border:none;padding:6px 0 0"><span>开启（夜间任务时刻自动执行）</span>'
+        + '<div class="sw ' + (LK.archEnable?"on":"") + '" data-archen="1"></div></div>'
+      + '<div class="chips" style="margin-top:8px">'
+        + [30,90,180,365].map(v=>'<button class="chip ' + ((LK.archDays||90)===v?"on":"")
+          + '" data-archdays="' + v + '">' + v + ' 天</button>').join("")
+      + '</div>'
+      + '<div class="h" style="margin-top:8px;line-height:1.55">全时到期前夜，把台账标记的活动窗口裁进 <code style="font-size:10.5px">_archive</code>'
+        + '（体积 ≈ 活动占比），全时目录次日就能被正常清理删掉。三层寿命：'
+        + '<b>全时（各路自定）→ 归档 ' + (LK.archDays || 90) + ' 天 → 台账永久</b>。'
+        + '无台账的临期日期会跳过并计入「未归档」，不在临期前夜临时算判定。'
+        + '单晚最多裁 ' + (LK.archBatch || 120) + ' 个分片，裁不完的跨夜继续。</div>'
+      + '<div class="h" id="archStatus" style="color:var(--muted)">' + (ARCH.sum || "候选情况加载中…") + '</div>'
+      + '<button class="btnline" id="btnArchNow" style="margin-top:9px">' + (ARCH.arm ? "确认执行归档" : "立即归档（先预览）") + '</button>'
+      + '<div class="hint" id="archOut" style="margin-top:6px">' + (ARCH.out || "") + '</div>'
+    + '</div>' : '')
+    + (LK.condenseMode!=="off" ? '<div class="srow">'
+      + '<div class="n">' + (LK.condenseMode==="materialize" ? "录完之后什么时候压" : "判定什么时候跑") + '</div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (LK.mode==="live"?"on":"") + '" data-link="live">' + (LK.condenseMode==="materialize" ? "即刻压制" : "即刻判定") + '</button>'
+        + '<button class="chip ' + (LK.mode==="scheduled"?"on":"") + '" data-link="scheduled">' + (LK.condenseMode==="materialize" ? "定时压制" : "定时判定") + '</button>'
       + '</div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">' + linkHint() + '</div>'
-    + '</div>'
-    + '<div class="srow">'
+    + '</div>' : '')
+    + (LK.condenseMode==="materialize" ? '<div class="srow">'
       + '<div class="top"><span class="n">缩时片段切分方式</span><span class="v">'
         + (LK.clipStyle==="split" ? "活动切片" : "整段拼接") + '</span></div>'
       + '<div class="chips">'
@@ -4030,7 +4638,7 @@ function cardLink(){
       + '<div class="h">整段拼接：一个分片的活动区间拼成一个片段，流复制零损失，切点按关键帧（误差约 1~2 秒）。'
         + '活动切片：每个活动区间单独成片、重编码精确到帧，热力图与跳播定位更细，也能省掉片段内的静止段；'
         + '编码开销更高，建议有核显的机器使用。每路可在摄像头设置里单独覆盖。</div>'
-    + '</div>'
+    + '</div>' : '')
     + (LK.mode==="scheduled" ? '<div class="srow">'
       + '<div class="top"><span class="n">每隔多久压一次</span><span class="v">' + LK.intervalH + ' 小时</span></div>'
       + '<div class="stepper"><button data-linkh="-1">−</button><span class="val">' + LK.intervalH + ' 小时</span><button data-linkh="1">+</button></div>'
@@ -4357,9 +4965,9 @@ function renderCamList(){
     /* 缩时摘要胶囊：四路的差异一眼可比，不用逐个点开 */
     const chip = p.enabled === false
       ? '<span class="camchip off">已停用</span>'
-      : (p.condense === false
+      : (cmOf(p) === "off"
           ? '<span class="camchip off">仅全时</span>'
-          : '<span class="camchip">缩时 ' + (p.clipSpeed || 1) + '× · ' + p.clipDays + ' 天</span>');
+          : '<span class="camchip">' + cmLabel(cmOf(p)) + '</span>');
     h += '<div class="camrow' + (open?" open":"") + '" data-camrow="' + c.id + '">'
       + '<button class="dragh" data-drag="' + c.id + '" title="按住拖动排序">'
       + '<svg viewBox="0 0 16 16"><circle cx="5" cy="4" r="1.4"/><circle cx="11" cy="4" r="1.4"/>'
@@ -4408,9 +5016,10 @@ function renderCamRead(c, p){
       + roRow("该路状态", p.enabled ? "启用" : "已停用", p.enabled ? "" : "dim")
     + '</div>'
     + '<div class="sub">'
-      + '<h4>缩时压制 <em>' + (p.condense !== false ? "已开启" : "已关闭") + '</em></h4>'
-      + roRow("功能开关", p.condense !== false ? "开启" : "关闭 · 只录全时")
-      + (p.condense !== false
+      + '<h4>缩时压制 <em>' + cmLabel(cmOf(p)) + '</em></h4>'
+      + roRow("缩时方案", cmOf(p) === "follow" ? "跟随全局" : cmLabel(cmOf(p))
+              + (cmOf(p) !== "off" ? " · 判定照常" : " · 只录全时"))
+      + (cmOf(p) === "materialize"
         ? roRow("切分方式", clipModeLabel(p.clipMode, true))
           + roRow("缩时片段保留", p.clipDays + " 天")
           + roRow("输出倍速", (p.clipSpeed || 1) + "×")
@@ -4483,6 +5092,26 @@ function clipModeLabel(m, eff){
   return m === "split" ? "活动切片" : m === "join" ? "整段拼接" : "跟随通用";
 }
 
+/* 缩时方案：每路覆盖（p.condenseMode）优先，follow/缺省回落全局 LK.condenseMode */
+function cmOf(p){
+  const m = (p && p.condenseMode) || "follow";
+  return m === "follow" ? (LK.condenseMode || "virtual") : m;
+}
+function cmLabel(m){
+  return m === "virtual" ? "虚拟缩时" : m === "materialize" ? "物化切片"
+       : m === "off" ? "关闭" : "跟随全局";
+}
+function condenseHint(){
+  if(LK.condenseMode === "virtual")
+    return "虚拟缩时：判定只记「活动台账」（每路每天几 KB，可永久保留），不产出任何缩时视频；回放在回放页时间轴上点标记按需播放。零常驻编码，存储只花在全时录像上。";
+  if(LK.condenseMode === "materialize")
+    return "物化切片：按下面的切分方式产出缩时片段文件（传统方案），台账同步记录，时间轴回放与片段文件都可用。编码开销照旧。";
+  return "关闭：只录全时、不判定。回放页时间轴没有活动标记，也不产出缩时片段。";
+}
+function silentLabel(){
+  return PPLAY.silent === "skip" ? "跳过" : PPLAY.silent + "× 快进";
+}
+
 function renderCamEdit(c, p){
   const isNight = p.profile === "night";
   const pr = isNight ? p.night : p.day;
@@ -4491,7 +5120,8 @@ function renderCamEdit(c, p){
   const j = judgeOf(p);
   const openAcc = SET.acc || "base";
   const speed = p.clipSpeed || 1;
-  const on = p.condense !== false;
+  const cm = cmOf(p);
+  const on = cm !== "off";
 
   /* ---- ① 名称与码流 ---- */
   const bodyBase =
@@ -4538,17 +5168,22 @@ function renderCamEdit(c, p){
   const segsToday = (state.activity && state.activity.length) ? state.activity.length : null;
   const drift = judgeDrift(p);
   const bodyCond =
-      '<div class="master">'
-      + '<div class="tx"><b>缩时压制</b><span>关闭后只录全时、不再产出缩时片段；已有片段不会被删除</span></div>'
-      + '<div class="sw ' + (on ? "on" : "") + '" data-cond="1"></div>'
+      '<div class="srow" style="padding-top:6px">'
+      + '<div class="top"><span class="n">缩时方案</span>'
+        + '<span class="v">' + cmLabel(p.condenseMode || "follow") + '</span></div>'
+      + '<div class="chips">'
+        + [["follow","跟随全局"],["virtual","虚拟缩时"],["materialize","物化切片"],["off","关闭"]].map(([v,l])=>
+            '<button class="chip ' + ((p.condenseMode||"follow")===v?"on":"") + '" data-cmcam="' + v + '">' + l + '</button>').join("")
+      + '</div>'
+      + '<div class="h">跟随全局 = 用「通用设置 · 缩时与存储方案」。虚拟缩时只写活动台账、不产出缩时视频（回放走回放页时间轴）；物化切片按切分方式产出片段文件；关闭 = 只录全时不判定。</div>'
     + '</div>'
-    + '<div class="impact">'
-      + '<div class="c"><div class="kv">' + speed + '×</div><div class="kl">输出倍速</div></div>'
-      + '<div class="c"><div class="kv">' + (segsToday == null ? "—" : "≈ " + segsToday) + '</div><div class="kl">段 / 天</div></div>'
-      + '<div class="c"><div class="kv">' + clipDayGB.toFixed(0) + ' GB</div><div class="kl">占空间 / 天</div></div>'
-      + '<div class="c"><div class="kv">' + p.clipDays + ' 天</div><div class="kl">保留</div></div>'
-    + '</div>'
-    + '<div class="' + (on ? "" : "dim") + '">'
+    + (cm === "materialize" ? (
+        '<div class="impact">'
+        + '<div class="c"><div class="kv">' + speed + '×</div><div class="kl">输出倍速</div></div>'
+        + '<div class="c"><div class="kv">' + (segsToday == null ? "—" : "≈ " + segsToday) + '</div><div class="kl">段 / 天</div></div>'
+        + '<div class="c"><div class="kv">' + clipDayGB.toFixed(0) + ' GB</div><div class="kl">占空间 / 天</div></div>'
+        + '<div class="c"><div class="kv">' + p.clipDays + ' 天</div><div class="kl">保留</div></div>'
+      + '</div>'
       + '<div class="srow">'
         + '<div class="top"><span class="n">切分方式</span>'
           + '<span class="v">' + clipModeLabel(p.clipMode) + '</span></div>'
@@ -4556,7 +5191,7 @@ function renderCamEdit(c, p){
           + [["follow","跟随通用"],["join","整段拼接"],["split","活动切片"]].map(([v,l])=>
               '<button class="chip ' + ((p.clipMode||"follow")===v?"on":"") + '" data-clipmode="' + v + '">' + l + '</button>').join("")
         + '</div>'
-        + '<div class="h">跟随通用 = 用「通用设置 · 录制与压制衔接」里的切分方式。'
+        + '<div class="h">跟随通用 = 用「通用设置 · 缩时与存储方案」里的切分方式。'
           + '活动切片对这一路<b>强制「录完即切」</b>（即使通用选了定时批量），每个活动区间单独成片、重编码精确到帧，'
           + '热力图与跳播定位更细；编码开销更高，建议有核显的机器或重点机位使用。</div>'
       + '</div>'
@@ -4573,6 +5208,10 @@ function renderCamEdit(c, p){
           + '<span class="val">' + p.clipDays + ' 天</span><button data-ret="clipDays" data-d="1">+</button></div>'
         + '<div class="h">与全时录像各自独立，改这里不影响全时保留天数。</div>'
       + '</div>'
+      ) : (cm === "virtual"
+        ? '<div class="hint" style="margin:6px 0 10px">这一路用<b>虚拟缩时</b>：判定照常跑、只写活动台账（回放页时间轴可看），不产出缩时视频。切分方式/输出倍速/片段保留仅在物化切片下生效。</div>'
+        : '<div class="hint" style="margin:6px 0 10px">这一路缩时已<b>关闭</b>：只录全时、不判定，回放页时间轴没有活动标记。已有片段不会被删除。</div>'))
+    + '<div class="' + (on ? "" : "dim") + '">'
       + chipRow("灵敏度", "judge.sens", j.sens,
           [["low","低"],["mid","标准（推荐）"],["high","高"]], "sens",
           "阈值倍率 低 " + SENS_MULT.low + "× · 标准 " + SENS_MULT.mid + "× · 高 " + SENS_MULT.high
@@ -5106,24 +5745,28 @@ function cardStorage(){
         + '<button class="btnmini" id="btnStRefresh" style="margin:6px 0 0">立即重算</button>')
       : '正在统计各摄像头占用…（只扫目录元数据，不读文件内容）') + '</div>';
   }else{
-    const full = +d.full || 0, clip = +d.clip || 0;
-    const used = full + clip;
+    const full = +d.full || 0, arch = +d.archive || 0, clip = +d.clip || 0;
+    const ledger = +d.ledger || 0;
+    const used = full + arch + clip;
     const denom = Math.max(used, 1);
     const fp = used ? Math.round(full / denom * 100) : 0;
-    const cp = used ? 100 - fp : 0;
+    const ap = used ? Math.round(arch / denom * 100) : 0;
+    const cp = used ? Math.max(0, 100 - fp - ap) : 0;
     const totalB = (d.disk_total_gb || 0) * 1073741824;
     const freeB = (d.disk_free_gb != null ? d.disk_free_gb : REC.diskFreeGB || 0) * 1073741824;
     const rows = (d.cameras || []).slice().sort((a,b)=>b.total - a.total).map(c=>{
       const t = +c.total || 0;
       const f = t ? Math.round((c.full || 0) / t * 100) : 0;
-      const k = t ? 100 - f : 0;
+      const a2 = t ? Math.round((c.archive || 0) / t * 100) : 0;
+      const k = t ? Math.max(0, 100 - f - a2) : 0;
       return '<div class="strow">'
         + '<span class="nm">' + esc(c.name) + '</span>'
         + '<span class="stbar">' + (t
-            ? '<i class="f" style="width:' + f + '%"></i><i class="c" style="width:' + k + '%"></i>'
+            ? '<i class="f" style="width:' + f + '%"></i><i class="c" style="width:' + a2 + '%"></i><i class="k" style="width:' + k + '%"></i>'
             : '') + '</span>'
         + '<span class="vv">' + (t ? fmtBytes(t) : "—")
-          + '<em>' + (t ? (fmtBytes(c.full || 0) + " / " + (c.clip ? fmtBytes(c.clip) : "—")) : "无录像") + '</em></span>'
+          + '<em>' + (t ? (fmtBytes(c.full || 0) + " / " + (c.archive ? fmtBytes(c.archive) + " / " : "")
+                           + (c.clip ? fmtBytes(c.clip) : "—")) : "无录像") + '</em></span>'
         + '</div>';
     }).join("");
     const at = d.at ? new Date(+d.at * 1000) : null;
@@ -5133,14 +5776,17 @@ function cardStorage(){
           + (totalB ? (" / 共 " + fmtBytes(totalB)) : "") + '</span>'
         + '<span class="rt">剩余 ' + (freeB ? fmtBytes(freeB) : "—") + '</span>'
       + '</div>'
-      + '<div class="stbar-big"><i class="f" style="width:' + fp + '%"></i><i class="c" style="width:' + cp + '%"></i></div>'
+      + '<div class="stbar-big"><i class="f" style="width:' + fp + '%"></i><i class="c" style="width:' + ap + '%"></i><i class="k" style="width:' + cp + '%"></i></div>'
       + '<div class="legend">'
         + '<span><i style="background:var(--primary)"></i>全时 <b>' + fmtBytes(full) + ' · ' + fp + '%</b></span>'
+        + '<span><i style="background:#5c8fd6"></i>归档 <b>' + fmtBytes(arch) + ' · ' + ap + '%</b></span>'
         + '<span><i style="background:#9dbaff"></i>缩时 <b>' + fmtBytes(clip) + ' · ' + cp + '%</b></span>'
       + '</div>'
+      + '<div class="dline" style="margin-top:9px">活动台账 <b>' + fmtBytes(ledger)
+        + '</b>（永久保留 · 几乎不占空间）</div>'
       + '<div style="margin-top:11px;padding-top:10px;border-top:1px solid var(--line2)">'
         + '<div style="display:flex;align-items:baseline;font-size:10.5px;color:var(--faint)">'
-          + '<span>每路占用</span><span style="margin-left:auto">合计 · 全时 / 缩时</span></div>'
+          + '<span>每路占用</span><span style="margin-left:auto">合计 · 全时 / 归档 / 缩时</span></div>'
         + (rows || '<div class="stload">还没有摄像头</div>')
       + '</div>'
       + '<div class="dline" style="margin-top:9px">' + recBudgetText() + '</div>'
@@ -5154,7 +5800,7 @@ function cardStorage(){
   }
   return '<div class="dcard"><div class="dh">存储与占用'
     + '<span class="tg">非实时 · 按需统计</span>'
-    + '<span class="rt">' + (STORAGE.loading ? "统计中…" : "全时 + 缩时") + '</span></div>'
+    + '<span class="rt">' + (STORAGE.loading ? "统计中…" : "全时 + 归档 + 缩时") + '</span></div>'
     + body + '</div>';
 }
 
@@ -5164,7 +5810,10 @@ function keepPolicyText(){
     : Math.min(...a) + "~" + Math.max(...a) + " 天";
   const ps = CAMERAS.map(c=>camParams[c.id]).filter(Boolean);
   if(!ps.length) return "无摄像头";
-  return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 缩时 " + rng(ps.map(p=>p.clipDays));
+  /* 三层寿命：台账永久 > 归档 N 天 > 全时各路自定。归档期用全局值展示
+     （每路覆盖在后端生效，界面只报全局口径，避免一处显示两套数） */
+  return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 归档 " + (LK.archDays || 90)
+    + " 天 / 台账永久";
 }
 
 function loadStorageUsage(force){
@@ -5284,6 +5933,21 @@ function renderCamTabs(){
   const tabs = document.getElementById("camTabs");
   if(tabs) tabs.style.display = "none";
   if(!body) return;
+  /* 归档候选摘要：设置页开着且方案是虚拟缩时才拉，10 分钟节流 */
+  if(SET.open === "generic" && LK.condenseMode === "virtual"
+     && Date.now() - ARCH.at > 10*60*1000 && !ARCH.loading){
+    ARCH.at = Date.now(); ARCH.loading = true;
+    apiGet("/api/archive").then(d=>{
+      ARCH.loading = false;
+      if(!d || !d.ok) return;
+      ARCH.sum = "待归档 <b>" + d.todo_count + " 天</b> / " + d.segments
+        + " 片 · 预估 " + fmtBytes(d.est_bytes || 0)
+        + (d.no_ledger_count ? " · 无台账跳过 " + d.no_ledger_count + " 天" : "")
+        + " · 下次 " + (d.next_run || "—").slice(5);
+      const el = document.getElementById("archStatus");
+      if(el) el.innerHTML = ARCH.sum;
+    }).catch(()=>{ ARCH.loading = false; });
+  }
 
   if(!CAMERAS.length){
     state.camId = null;
@@ -5421,6 +6085,94 @@ function bindSettings(body){
         : "通用切分改为整段拼接 · 流复制零损失");
     };
   });
+  /* 缩时方案（通用）：virtual/materialize/off，推服务端走 _ENUM_KEYS 白名单 */
+  body.querySelectorAll("[data-cmode]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.condenseMode = el.dataset.cmode;
+      renderCamTabs(); saveCfgSoon();
+      toast("toast2", condenseHint().split("：")[0]);
+    };
+  });
+  /* 回放静默段处理：客户端播放偏好，存本机（不影响服务端判定） */
+  body.querySelectorAll("[data-silent]").forEach(el=>{
+    el.onclick = ()=>{
+      PPLAY.silent = el.dataset.silent;
+      try{ localStorage.setItem("nvr_silent", PPLAY.silent); }catch(e){}
+      renderCamTabs();
+    };
+  });
+  /* 夜间归档裁剪：开关 / 保留天数（推服务端，夜间任务循环消费） */
+  body.querySelectorAll("[data-archen]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.archEnable = !LK.archEnable;
+      renderCamTabs(); saveCfgSoon();
+      toast("toast2", LK.archEnable
+        ? "夜间归档已开启 · 夜间任务时刻先归档后清理"
+        : "夜间归档已关闭 · 临期全时将直接被清理删除");
+    };
+  });
+  body.querySelectorAll("[data-archdays]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.archDays = +el.dataset.archdays || 90;
+      ARCH.at = 0;                     /* 保留期变了，候选摘要重拉 */
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  /* 立即归档：第一次点 = dry_run 预览；第二次点 = 真跑（受 batch 限速） */
+  const bArch = body.querySelector("#btnArchNow");
+  if(bArch) bArch.onclick = async ()=>{
+    const ao = document.getElementById("archOut");
+    if(!ARCH.arm){
+      bArch.disabled = true;
+      if(ao) ao.textContent = "正在扫描候选日期…";
+      try{
+        const r = await apiPost("/api/archive/run", {dry_run:true});
+        if(!r || !r.ok){
+          if(ao) ao.textContent = "预览失败：" + ((r && r.error) || "未知错误");
+          return;
+        }
+        const est = r.est_bytes ? fmtBytes(r.est_bytes) : "≈0";
+        const lines = (r.todo || []).slice(0, 8).map(x=>
+          x.name + " " + x.date + "（" + x.segments + " 片）").join("、");
+        ARCH.arm = { at: Date.now() };
+        ARCH.out = "将归档 <b>" + (r.todo || []).length + " 天</b> / "
+          + r.segments + " 个分片，预计产出 <b>" + est + "</b>"
+          + (r.no_ledger && r.no_ledger.length
+             ? "；跳过无台账 " + r.no_ledger.length + " 天" : "")
+          + (lines ? "<br>" + esc(lines) + ((r.todo||[]).length > 8 ? " …" : "") : "")
+          + "<br>再点一次开始执行（单晚最多 " + r.batch + " 片）。";
+        renderCamTabs();
+      }catch(e){
+        if(ao) ao.textContent = "预览失败：" + esc(String(e));
+      }finally{ bArch.disabled = false; }
+      return;
+    }
+    /* 二次确认 → 执行（预览 5 分钟过期，防误触旧清单） */
+    if(Date.now() - ARCH.arm.at > 5*60*1000){
+      ARCH.arm = null; ARCH.out = "预览已过期，请重新预览。";
+      renderCamTabs();
+      return;
+    }
+    bArch.disabled = true;
+    if(ao) ao.textContent = "归档中，视分片数量可能需要几分钟…";
+    try{
+      const r = await apiPost("/api/archive/run", {dry_run:false});
+      ARCH.arm = null;
+      ARCH.out = r.ok
+        ? ("归档完成：<b>" + (r.days||[]).length + " 天</b> / " + (r.files||0)
+           + " 段 / " + fmtBytes(r.bytes_out||0)
+           + (r.remaining ? "，剩余 " + r.remaining + " 天跨夜继续" : "")
+           + ((r.no_ledger||[]).length ? "；无台账跳过 " + r.no_ledger.length + " 天" : ""))
+        : ("部分失败：完成 " + (r.days||[]).length + " 天，失败 "
+           + (r.failed||[]).length + " 片（下次自动重试）");
+      STORAGE.data = null; STORAGE.at = 0;   /* 占用变了，存储卡强制重拉 */
+      renderCamTabs();
+    }catch(e){
+      ARCH.arm = null;
+      if(ao) ao.textContent = "归档失败：" + esc(String(e));
+      renderCamTabs();
+    }
+  };
   body.querySelectorAll("[data-linkseg]").forEach(el=>{
     el.onclick = ()=>{
       LK.segSec = +el.dataset.linkseg; renderCamTabs();
@@ -5547,6 +6299,13 @@ function bindSettings(body){
   body.querySelectorAll("[data-clipmode]").forEach(el=>{
     el.onclick = ()=>{
       draftSet("clipMode", el.dataset.clipmode);
+      renderCamTabs();
+    };
+  });
+  /* 缩时方案：follow/virtual/materialize/off（草稿态，点保存才落盘） */
+  body.querySelectorAll("[data-cmcam]").forEach(el=>{
+    el.onclick = ()=>{
+      draftSet("condenseMode", el.dataset.cmcam);
       renderCamTabs();
     };
   });
@@ -5789,6 +6548,12 @@ function recalcDayList(){
   const src = state.pmode === "clip" ? rec.clips : rec.cameras;
   const days = (src && src[state.camId]) || {};
   const all = Object.keys(days).sort();          // 旧→新，全量
+  /* 日期下拉必须含当前日期：今天还没落盘第一个文件时也补进去，
+     否则用户打开下拉找不到"今天"（v0.9.48 反馈） */
+  if(all.length){
+    const today = jsToday();
+    if(all[all.length - 1] < today) all.push(today);
+  }
   state.dayList = all;
   let idx = state.daySel ? all.indexOf(state.daySel) : -1;
   if(idx < 0) idx = all.length ? all.length - 1 : 0;   // 没选过/选中的天没了 → 最新一天
@@ -5805,6 +6570,7 @@ function fetchRecordings(){
     recalcDayList();
     renderDates(); renderOverview(); renderHeat(); renderClips();
     applyPlaybackVisibility();
+    try{ renderPlay(); }catch(e){}   /* 回放页若开着，吃到新清单后重绘日期条 */
   }).catch(()=>{
     if(recRetry++ < 3) setTimeout(fetchRecordings, 2500);   // 服务刚重启时给几次机会
   });
@@ -5947,7 +6713,7 @@ function camPickShow(force){
 }
 
 /* 切摄像头：回放页所有面板都按新机器重算 */
-function pickCam(id){
+function pickCam(id, autoPlay){
   const c = CAMERAS.find(x=>x.id === id);
   if(!c) return;
   state.camId = id;
@@ -5956,11 +6722,576 @@ function pickCam(id){
   try{ loadDay(); }catch(e){}
   renderOverview(); syncDiagSum(); renderDates();
   renderCamPick();
+  try{ renderPlay(autoPlay); }catch(e){}   /* 回放页若开着，跟随机位切换 */
   /* 设置页若正展开这一路，跟着切过去 */
   if(SET.open) SET.open = id;
   renderCamTabs();
   toast("toast2", "已切到「" + c.name + "」");
 }
+
+/* ================= 回放页（Aqara 式垂直时间轴） =================
+   数据源：/api/ledger（events + avail），与文件页共享 state.camId /
+   dayList / dayIdx，两页切机位、切日期始终同步。
+   P0 范围：全天时间轴渲染 + 定位 + 事件列表；点标记的 seek 连播随 P1
+   常驻画面区一起落地。坐标约定与后端一致：当天 0 点起的浮点秒。 */
+const VTL_TOP = 30;                        // 顶部留 30px
+const VTL_PXH_DEF = 120, VTL_PXH_MIN = 30, VTL_PXH_MAX = 600;
+let vtlPxh = VTL_PXH_DEF;                  // 1 小时 = 120px（旧版 60 太挤，热点事件互相叠）
+let vtlData = null, vtlDay = null;         // 最近一次台账缓存，缩放重绘时复用
+function vtlY(sec){ return VTL_TOP + sec / 3600 * vtlPxh; }
+function vtlClampPxh(v){
+  return Math.max(VTL_PXH_MIN, Math.min(VTL_PXH_MAX, v));
+}
+try{
+  const v = +localStorage.getItem("nvr_vtl_pxh");
+  if(v >= VTL_PXH_MIN && v <= VTL_PXH_MAX) vtlPxh = v;
+}catch(e){}
+
+/* 缩放：factor>1 放大。锚点 = anchorSec（该时刻在缩放前后留在屏幕
+   anchorY 位置不动），不传则锚定视口中心——缩放时视线不跳。 */
+function vtlZoom(factor, anchorSec, anchorY){
+  const sc = document.getElementById("vtlScroll");
+  if(!sc) return false;
+  if(anchorSec == null){
+    /* 无显式锚点：优先锚可见的播放点（缩放围绕当前画面，播放点不漂出视口）；
+       否则锚固定时刻线压着的时刻（自下而上 2/3 高度处）——缩放后线下的时刻还在线下 */
+    if(PPLAY.on && PPLAY.day === vtlDay){
+      const py = vtlY(PPLAY.t) - sc.scrollTop;
+      if(py >= 0 && py <= sc.clientHeight){ anchorY = py; anchorSec = PPLAY.t; }
+    }
+    if(anchorSec == null){
+      anchorY = Math.round(sc.clientHeight / 3);
+      anchorSec = (sc.scrollTop + anchorY - VTL_TOP) / vtlPxh * 3600;
+    }
+  }
+  const np = vtlClampPxh(vtlPxh * factor);
+  if(np === vtlPxh) return false;
+  vtlPxh = np;
+  try{ localStorage.setItem("nvr_vtl_pxh", String(Math.round(vtlPxh))); }catch(e){}
+  renderVtl(vtlData, vtlDay, anchorSec, anchorY);
+  return true;
+}
+function jsToday(){
+  const t = new Date();
+  return t.getFullYear() + "-" + pad(t.getMonth() + 1) + "-" + pad(t.getDate());
+}
+
+function renderPlay(autoStart){
+  pvLoadDay();   // 换机位/换日期 = 停播并重装分片清单（放最前面，避免旧引用）
+  const cam = CAMERAS.find(c=>c.id === state.camId);
+  const nameEl = document.getElementById("playCamName");
+  if(nameEl) nameEl.textContent = cam ? cam.name : "—";
+  renderPlayDates();
+  renderPlayCamPick();
+  renderVtl(null, curDay());
+  /* 换机位/换日期 = 用户手势内直接定位最新全时录像开播（v0.9.48） */
+  if(autoStart) pvJumpLatest();
+  const day = curDay();
+  if(!state.camId || !day) return;   // 空态由时间轴摘要兜住
+  fetch("/api/ledger?cam=" + encodeURIComponent(state.camId) + "&date=" + day,
+        {mode:"same-origin", cache:"no-store"})
+    .then(r=>r.json()).then(d=>{
+      if(!d || !d.ok) throw new Error((d && d.error) || "台账读取失败");
+      renderVtl(d, day);
+      const sum = d.summary || {count:0, active_sec:0};
+      const sumEl = document.getElementById("vtlSum");
+      if(sumEl) sumEl.textContent = sum.count
+        ? (sum.count + " 个活动 · 累计 " + durText(sum.active_sec))
+        : "暂无活动记录（判定进行中，或这一路的缩时方案是「关闭」）";
+    }).catch(e=>{
+      const sumEl = document.getElementById("vtlSum");
+      if(sumEl) sumEl.textContent = "台账读取失败";
+      toast("toast2", String(e.message || e));
+    });
+}
+
+function renderPlayDates(){
+  const pick = document.getElementById("playDayPick");
+  const name = document.getElementById("playDayName");
+  const sel = curDay();
+  if(name) name.textContent = sel ? sel.slice(5) : "—";
+  if(!pick) return;
+  pick.innerHTML = "";
+  (state.dayList || []).forEach((d,i)=>{
+    const b = document.createElement("div");
+    b.className = "dp" + (d === sel ? " on" : "");
+    const dt = new Date(d + "T00:00:00");
+    b.innerHTML = '<span>' + d.slice(5) + '</span><span class="w">周'
+      + "日一二三四五六"[dt.getDay()] + '</span>';
+    b.onclick = e=>{ e.stopPropagation();
+      if(state.dayIdx !== i){ state.dayIdx = i; state.daySel = d; state.hourBlock = -1; renderPlay(true); }
+      playDayShow(false);
+    };
+    pick.appendChild(b);
+  });
+}
+
+function playDayShow(force){
+  const pick = document.getElementById("playDayPick");
+  if(!pick) return;
+  const open = (force == null) ? !pick.classList.contains("on") : !!force;
+  pick.classList.toggle("on", open);
+}
+
+function renderPlayCamPick(){
+  const box = document.getElementById("playCamPick");
+  if(!box) return;
+  if(!CAMERAS.length){
+    box.innerHTML = '<div class="cempty">还没有摄像头 · 去设置页添加</div>';
+    return;
+  }
+  box.innerHTML = CAMERAS.map(c=>{
+    const pp = camParams[c.id] || {};
+    const off = !c.online || !pp.main || pp.enabled === false;
+    return '<div class="cp' + (c.id === state.camId ? " on" : "") + '" data-playcam="' + esc(c.id) + '">'
+      + '<span class="dt' + (off ? " off" : "") + '"></span>'
+      + '<span class="nm">' + esc(c.name) + '</span>'
+      + '<span class="ch">' + esc(c.ch || c.id) + '</span></div>';
+  }).join("");
+  box.querySelectorAll("[data-playcam]").forEach(el=>{
+    el.onclick = e=>{ e.stopPropagation(); pickCam(el.dataset.playcam, true); playCamShow(false); };
+  });
+}
+
+function playCamShow(force){
+  const box = document.getElementById("playCamPick");
+  const sel = document.getElementById("playCamSel");
+  if(!box) return;
+  const open = (force == null) ? !box.classList.contains("on") : !!force;
+  box.classList.toggle("on", open);
+  if(sel) sel.classList.toggle("open", open);
+  if(open) renderPlayCamPick();
+}
+
+function renderVtl(d, day, anchorSec, anchorY){
+  const box = document.getElementById("vtl");
+  if(!box) return;
+  if(d){ vtlData = d; vtlDay = day; }
+  vtlBubbleHide();
+  box.innerHTML = "";
+  box.style.height = (VTL_TOP + 24 * vtlPxh + 24) + "px";
+  /* 刻度步进随缩放变精细：默认 120px/h 仍是 1 小时刻度，
+     放大到 150px/h 起 30 分 → 15 分 → 5 分；缩太小则 2/3/6 小时一格 */
+  const TICKS = [[480,5],[240,10],[150,30],[90,60],[45,120],[22,180],[0,360]];
+  let hstep = 180;
+  for(const t of TICKS){ if(vtlPxh >= t[0]){ hstep = t[1]; break; } }
+  for(let m = 0; m <= 24 * 60; m += hstep){
+    const el = document.createElement("div");
+    el.className = "vhour";
+    el.style.top = vtlY(m * 60) + "px";
+    el.textContent = pad(Math.floor(m / 60)) + ":" + pad(m % 60);
+    box.appendChild(el);
+  }
+  const track = document.createElement("div");
+  track.className = "vtrack";
+  track.style.top = vtlY(0) + "px";
+  track.style.height = (24 * vtlPxh) + "px";
+  box.appendChild(track);
+  const av = (d && d.avail) || {};
+  /* 活动清单先算好：横线标注与活动时段块共用 */
+  const evs = ((d && d.events) || []).slice().sort((a,b)=>a.s-b.s);
+  (av.full || []).forEach(iv=>{
+    const el = document.createElement("div");
+    el.className = "vavail";
+    el.style.top = vtlY(iv[0]) + "px";
+    el.style.height = Math.max(4, vtlY(iv[1]) - vtlY(iv[0])) + "px";
+    box.appendChild(el);
+  });
+  (av.archive || []).forEach(iv=>{
+    const el = document.createElement("div");
+    el.className = "vavail arch";
+    el.style.top = vtlY(iv[0]) + "px";
+    el.style.height = Math.max(4, vtlY(iv[1]) - vtlY(iv[0])) + "px";
+    box.appendChild(el);
+  });
+  /* 活动时段块：蓝轨同列的橙色块，「活动」筛选时点亮（其余区域变淡） */
+  evs.forEach(ev=>{
+    const el = document.createElement("div");
+    el.className = "vevspan";
+    el.style.top = vtlY(ev.s) + "px";
+    el.style.height = Math.max(4, vtlY(ev.e) - vtlY(ev.s)) + "px";
+    box.appendChild(el);
+  });
+  // 事件层：Aqara 式橙色横线标注（3px 细线，命中区 16px）。
+  // 挤在一起（间距 < 6px）的合并为一根长线（组），点线弹标注气囊，点空白处直接跳播。
+  const GAP = 6;   // 线高 3 + 间隙 3
+  let i = 0;
+  while(i < evs.length){
+    let j = i;
+    while(j + 1 < evs.length && vtlY(evs[j + 1].s) - vtlY(evs[i].s) < GAP) j++;
+    const ev0 = evs[i], cnt = j - i + 1, lo = i, hi = j;   // 闭包捕获：i/j 循环里会变，必须先存局部
+    const el = document.createElement("div");
+    el.className = "vmark" + (cnt > 1 ? " grp" : "");
+    el.style.top = vtlY(ev0.s) + "px";
+    el.onclick = e=>{ e.stopPropagation();
+      vtlBubbleShow(e.currentTarget, ev0, cnt > 1 ? evs.slice(lo, hi + 1) : null); };
+    box.appendChild(el);
+    i = j + 1;
+  }
+  /* 时刻线不再画进内容层：改为固定在滚动视口垂直居中的 .vnowline（Aqara 式），
+     播放时内容向上滚动对准它。这里只决定非播放态的默认落点。 */
+  let nowSec;
+  if(PPLAY.on && PPLAY.day === day && PPLAY.camId === state.camId){
+    nowSec = PPLAY.t;
+  }else if(day === jsToday()){
+    const t = new Date();
+    nowSec = t.getHours() * 3600 + t.getMinutes() * 60 + t.getSeconds();
+  }else{
+    nowSec = evs.length ? evs[evs.length - 1].e : 12 * 3600;
+  }
+  nowSec = Math.max(0, Math.min(86400, nowSec));
+  const pct = document.getElementById("vtlPct");
+  if(pct) pct.textContent = "×" + (vtlPxh / VTL_PXH_DEF).toFixed(1);
+  const sc = document.getElementById("vtlScroll");
+  if(sc){
+    if(anchorSec != null){
+      /* 缩放/捏合锚点：锚定时刻停在屏幕原位置（默认 = 时刻线所在的 2/3 高度处） */
+      const ay = (anchorY != null) ? anchorY : Math.round(sc.clientHeight / 3);
+      sc.scrollTop = Math.max(0, vtlY(anchorSec) - ay);
+    }else if(PPLAY.on && PPLAY.day === day && PPLAY.camId === state.camId){
+      /* 播放中：让固定时刻线对准播放位置 */
+      sc.scrollTop = Math.max(0, vtlY(PPLAY.t) - Math.round(sc.clientHeight / 3));
+    }else if(vtlDay !== day){
+      /* 换天/首次：把默认落点（今天=现在钟点，历史=最后活动/正午）摆到 2/3 高度处 */
+      sc.scrollTop = Math.max(0, vtlY(nowSec) - Math.round(sc.clientHeight / 3));
+    }
+    /* 其余情况（同天重绘，如切筛选/弹层）：保持滚动位置不动 */
+  }
+  syncVnowline();
+}
+
+/* 固定时刻线：钉在滚动视口自下而上 2/3 高度处，线短只盖轨道区。
+   播放中 = 显示播放时刻（内容自动滚动对准）；空闲 = 显示线下压着的时刻（随滚动变） */
+function syncVnowline(){
+  const sc = document.getElementById("vtlScroll");
+  const ln = document.getElementById("vnowline");
+  if(!sc || !ln) return;
+  ln.style.top = (sc.offsetTop + Math.round(sc.clientHeight / 3)) + "px";
+  const em = document.getElementById("vnowTime");
+  if(!em) return;
+  if(PPLAY.on){ em.textContent = hms(PPLAY.t); return; }
+  const t = Math.max(0, Math.min(86400,
+    (sc.scrollTop + sc.clientHeight / 3 - VTL_TOP) / vtlPxh * 3600));
+  em.textContent = hms(t);
+}
+
+/* 标注气囊：点横线弹出（再点同一根 = 关）；列表行/播放钮直接跳播 */
+let vtlBubbleEl = null, vtlBubbleRef = null;
+function vtlBubbleHide(){
+  if(vtlBubbleEl){ vtlBubbleEl.remove(); vtlBubbleEl = null; }
+  vtlBubbleRef = null;
+}
+function densText(d){ return d >= 0.3 ? " · 高密度" : d >= 0.1 ? " · 中密度" : " · 低密度"; }
+function vtlBubbleShow(anchor, ev0, list){
+  const boxv = document.getElementById("vtl");
+  if(!boxv || !anchor) return;
+  if(vtlBubbleRef === anchor){ vtlBubbleHide(); return; }
+  vtlBubbleHide();
+  const el = document.createElement("div");
+  el.className = "vbubble";
+  if(list){
+    let html = '<div class="bt">' + hms(list[0].s) + " 附近 · " + list.length + " 个事件</div>";
+    list.forEach(ev=>{
+      html += '<div class="row" data-t="' + Math.max(0, ev.s - PV_ROLL) + '"><b>' + hms(ev.s) + '</b>'
+        + '<span>' + durText(ev.e - ev.s) + densText(ev.d) + '</span>'
+        + '<span class="d">播放 ▸</span></div>';
+    });
+    el.innerHTML = html;
+  }else{
+    el.innerHTML = '<div class="bt">' + hms(ev0.s) + '</div>'
+      + '<div class="bi">' + durText(ev0.e - ev0.s) + densText(ev0.d) + '</div>'
+      + '<button class="go" data-t="' + Math.max(0, ev0.s - PV_ROLL) + '">▶ 从此处播放</button>';
+  }
+  el.style.top = (parseFloat(anchor.style.top) + 10) + "px";
+  boxv.appendChild(el);
+  vtlBubbleEl = el; vtlBubbleRef = anchor;
+  el.querySelectorAll("[data-t]").forEach(x=> x.onclick = e=>{
+    e.stopPropagation();
+    if(pvPlayAt(+x.dataset.t)) vtlBubbleHide();
+  });
+  /* 气囊尾部超出可视区则上提（元素挂在 #vtl 内，坐标含 scrollTop 换算到可视带） */
+  const sc = document.getElementById("vtlScroll");
+  if(sc){
+    const top = parseFloat(el.style.top), bh = el.offsetHeight;
+    if(top + bh > sc.scrollTop + sc.clientHeight)
+      el.style.top = Math.max(sc.scrollTop, sc.scrollTop + sc.clientHeight - bh - 8) + "px";
+  }
+}
+
+/* 播放位置所在事件的横线高亮（轻量，不重绘时间轴） */
+function vtlMarkActive(){
+  const on = PPLAY.on && ((vtlData && vtlData.events) || []).find(ev=> PPLAY.t >= ev.s && PPLAY.t < ev.e);
+  const y = on ? vtlY(on.s) : null;
+  document.querySelectorAll("#vtl .vmark").forEach(x=>
+    x.classList.toggle("on", y != null && Math.abs(parseFloat(x.style.top) - y) < 0.5));
+}
+
+/* ================= 回放页常驻画面区（P1）=================
+   与文件页的弹出播放器相互独立：这里只服务 Aqara 回放页的
+   「按时刻跳播 + 模拟缩时连播」。分片地址复用 realSegs("full") 的
+   /api/record/file；跳播落点向前垫 PV_ROLL 秒（与服务端 analysis.pre_buf
+   默认 3 秒一致），把关键帧对齐误差整个吸收掉。 */
+const pvA = document.getElementById("playVidA");
+const pvB = document.getElementById("playVidB");
+const PV_ROLL = 3.0;
+/* filter：full=全时连播；act=活动连播（按预设跳过静止段）。
+   speed：全时/平时的倍速（浏览器上限 16×）；silent 仍是活动模式下静止段的预设方案。 */
+const PPLAY = { on:false, filter:"full", silent:"skip",
+                day:null, camId:null, segs:[], segIdx:-1, t:0, ff:null, speed:1 };
+/* 归档面板状态：sum=候选摘要文案；arm=预览已出待确认；out=最近一次结果 */
+const ARCH = { sum:"", out:"", arm:null, at:0, loading:false };
+try{
+  const f = localStorage.getItem("nvr_pvfilter"); if(f === "act") PPLAY.filter = "act";
+  const sp = +localStorage.getItem("nvr_pvspeed");
+  if([1,2,4,8,16].indexOf(sp) >= 0) PPLAY.speed = sp;
+  const s = localStorage.getItem("nvr_silent");
+  if(s === "16" || s === "32") PPLAY.silent = s;
+}catch(e){}
+let pvCur = pvA, pvNxt = pvB, pvPreloadSeg = -1;
+
+function pvSegAt(t){
+  const a = PPLAY.segs;
+  let lo = 0, hi = a.length - 1;
+  while(lo <= hi){
+    const m = (lo + hi) >> 1, sg = a[m];
+    if(t < sg.s) hi = m - 1;
+    else if(t >= sg.e) lo = m + 1;
+    else return { seg: sg, idx: m };
+  }
+  return null;
+}
+
+function pvStop(){
+  [pvA, pvB].forEach(v=>{ try{ v.pause(); }catch(e){} });
+  PPLAY.on = false; PPLAY.ff = null;
+  pvRate();
+  pvSyncCtl();
+  pvSyncVtl();
+}
+
+/* 跳播：t = 当天钟点秒。目标无画面时提示并拒绝（宁可不播也不黑屏） */
+function pvPlayAt(t, opts){
+  opts = opts || {};
+  const hit = pvSegAt(Math.max(0, Math.min(86399, t)));
+  if(!hit){
+    if(!opts.quiet) toast("toast2", "该时刻无录像");
+    return false;
+  }
+  const seg = hit.seg;
+  PPLAY.on = true; PPLAY.segIdx = hit.idx;
+  PPLAY.t = Math.max(seg.s, t);
+  PPLAY.day = curDay(); PPLAY.camId = state.camId; PPLAY.ff = null;
+  /* 下一段已预加载好 = 热切换；否则冷启动整个 src（避免清空再加载的黑帧） */
+  if(pvPreloadSeg === hit.idx && pvNxt.getAttribute("src") === seg.file){
+    const old = pvCur;
+    pvCur = pvNxt; pvNxt = old;
+    pvPreloadSeg = -1;
+    pvNxt.classList.remove("on");
+  }else if(pvCur.getAttribute("src") !== seg.file){
+    try{ pvCur.pause(); }catch(e){}
+    pvCur.src = seg.file;
+    try{ pvCur.load(); }catch(e){}
+  }
+  pvCur.classList.add("on");
+  try{ pvCur.currentTime = Math.max(0, PPLAY.t - seg.s); }catch(e){}
+  pvRate();
+  safePlay(pvCur);
+  pvSyncOsd(); pvSyncCtl(); pvPreloadNext(); pvSyncVtl();
+  return true;
+}
+
+function pvPreloadNext(){
+  const nx = PPLAY.segs[PPLAY.segIdx + 1];
+  if(!nx){ pvPreloadSeg = -1; return; }
+  const v = pvNxt;
+  if(pvPreloadSeg === PPLAY.segIdx + 1 && v.getAttribute("src") === nx.file) return;
+  pvPreloadSeg = PPLAY.segIdx + 1;
+  try{ if(v.getAttribute("src") !== nx.file){ v.src = nx.file; v.load(); } }catch(e){}
+}
+
+/* 下一个播放目标：活动筛选 = 下一个活动起点（垫 PV_ROLL）；全时 = 下一分片起点 */
+function pvNextTarget(){
+  if(PPLAY.filter === "act"){
+    const evs = (vtlData && vtlData.events) || [];
+    for(let k = 0; k < evs.length; k++){
+      if(evs[k].s > PPLAY.t + 0.25) return { t: Math.max(0, evs[k].s - PV_ROLL) };
+    }
+    return null;
+  }
+  const nx = PPLAY.segs[PPLAY.segIdx + 1];
+  return nx ? { t: nx.s } : null;
+}
+
+function pvAdvance(){
+  if(!PPLAY.on) return;
+  const tgt = pvNextTarget();
+  if(!tgt){
+    pvStop();
+    toast("toast2", PPLAY.filter === "act" ? "已播完今天最后一个活动" : "已播到今天最后一段录像");
+    return;
+  }
+  /* 静止段快进：不 seek，继续播但加速静音，到下一活动起点恢复原速。
+     注意先 pvPlayAt 再设 ff（pvPlayAt 内部会清 ff，顺序反了会被吃掉） */
+  if(PPLAY.filter === "act" && PPLAY.silent !== "skip"){
+    const target = tgt.t + PV_ROLL;   // 快进直达活动本体（不需要落点余量）
+    if(PPLAY.t >= target){ pvPlayAt(target, { quiet:true }); return; }
+    if(!pvSegAt(PPLAY.t)){
+      const nx = PPLAY.segs.find(sg => sg.e > PPLAY.t);
+      if(nx && !pvPlayAt(nx.s, { quiet:true })) return;
+    }
+    PPLAY.ff = target;
+    pvRate();
+    return;
+  }
+  pvPlayAt(tgt.t, { quiet:true });
+}
+
+/* 倍速设定：活动模式快进时按预设 16/32×（浏览器上限 16）+ 静音；平时按用户倍速 */
+function pvRate(){
+  const ff = PPLAY.ff != null;
+  const r = ff ? Math.min(16, +PPLAY.silent || 16) : Math.min(16, +PPLAY.speed || 1);
+  [pvA, pvB].forEach(v=>{ try{ v.playbackRate = r; v.muted = ff; }catch(e){} });
+}
+
+/* 活动筛选：掉出活动窗口 = 进入静止段，按预设方案处理——
+   skip = 直接 seek 到下一活动起点；16/32 = 静音快进到活动本体。
+   判定窗口用 s-PV_ROLL：跳播落点本身就垫在活动前 3 秒，不能把它当成静止段，否则死循环 */
+function pvSkipStatic(){
+  if(PPLAY.filter !== "act") return false;
+  const evs = (vtlData && vtlData.events) || [];
+  if(!evs.length) return false;
+  let cur = false, nxt = null;
+  for(let k = 0; k < evs.length; k++){
+    if(PPLAY.t >= evs[k].s - PV_ROLL - 0.01 && PPLAY.t < evs[k].e){ cur = true; break; }
+    if(evs[k].s > PPLAY.t){ nxt = evs[k]; break; }
+  }
+  if(cur || !nxt) return false;   /* 在活动内；没有下一个 = 播完，交给分片结束逻辑 */
+  if(PPLAY.silent === "skip") return pvPlayAt(Math.max(0, nxt.s - PV_ROLL), { quiet:true });
+  if(PPLAY.ff == null){ PPLAY.ff = nxt.s; pvRate(); }
+  return false;
+}
+
+function pvOnTime(){
+  if(!PPLAY.on) return;
+  const v = pvCur, seg = PPLAY.segs[PPLAY.segIdx];
+  if(!seg) return;
+  PPLAY.t = seg.s + (v.currentTime || 0);
+  if(PPLAY.ff != null && PPLAY.t >= PPLAY.ff){ PPLAY.ff = null; pvRate(); }
+  if(pvSkipStatic()) return;
+  if(PPLAY.t >= seg.e - 0.05 || v.ended){ pvAdvance(); return; }
+  pvSyncOsd(); pvSyncVtl();
+}
+
+function pvSyncOsd(){
+  const s = hms(PPLAY.t);
+  const a = document.getElementById("playOsdTime"), b = document.getElementById("playTNow");
+  if(a) a.textContent = s;
+  if(b) b.textContent = s;
+}
+function pvSyncCtl(){
+  const big = document.getElementById("playBig");
+  if(big) big.classList.toggle("off", PPLAY.on);
+  /* 全屏时：播放中隐藏时间轴悬浮层，暂停恢复（CSS 由 pvplaying 类驱动）。
+   注意用「正在播」而不是 PPLAY.on：暂停后要能看到时间轴拖动跳转 */
+  const pg = document.getElementById("page-play");
+  const nowPlaying = PPLAY.on && pvCur && !pvCur.paused && !pvCur.ended;
+  if(pg) pg.classList.toggle("pvplaying", nowPlaying);
+  document.querySelectorAll("[data-pvfilter]").forEach(x=>
+    x.classList.toggle("on", x.dataset.pvfilter === PPLAY.filter));
+  /* 播放/暂停图标随真实状态变（暂停/切分片/快进都会触发 pause 事件） */
+  const ico = document.getElementById("playTogIco");
+  if(ico){
+    const playing = PPLAY.on && pvCur && !pvCur.paused;
+    ico.innerHTML = playing ? '<path fill="#fff" d="M8 5h3v14H8zM13 5h3v14h-3z"/>'
+                            : '<path fill="#fff" d="M8 5l11 7-11 7z"/>';
+  }
+  const sp = document.getElementById("btnPvSpeed");
+  if(sp) sp.textContent = (PPLAY.speed || 1) + "×";
+}
+
+/* 播放跟随：固定时刻线不动，滚动内容让它对准自下而上 2/3 高度处（用户拖着时暂不打扰） */
+let vtlHold = 0;   /* 用户最近一次拖动/捏合的时间戳，2 秒内不抢滚动 */
+function pvSyncVtl(){
+  const sc = document.getElementById("vtlScroll");
+  if(sc && PPLAY.on && Date.now() - vtlHold > 2000)
+    sc.scrollTop = Math.max(0, vtlY(PPLAY.t) - Math.round(sc.clientHeight / 3));
+  syncVnowline();
+  vtlMarkActive();
+}
+
+/* 换机位/换日期：停播并重装分片清单 */
+function pvLoadDay(){
+  const day = curDay();
+  if(PPLAY.camId !== state.camId || PPLAY.day !== day){
+    pvStop();
+    PPLAY.segIdx = -1; PPLAY.t = 0;
+  }
+  PPLAY.segs = (state.camId && day ? realSegs(state.camId, day, "full") : []) || [];
+  const cam = CAMERAS.find(c=>c.id === state.camId);
+  const oc = document.getElementById("playOsdCam");
+  if(oc) oc.textContent = cam ? cam.ch : "—";
+}
+
+/* 换机位/换日期：自动定位到这一路最新一段全时录像，往前回溯 PV_BACK 秒开播，
+   让画面立即动起来（落点必须落在分片内，否则 pvPlayAt 会拒绝） */
+const PV_BACK = 30;
+function pvJumpLatest(){
+  /* 选中的日期还没有全时分片（比如"今天"刚补进下拉）：回退到最近有录像的一天 */
+  if(!PPLAY.segs.length){
+    const list = (state.dayList || []).slice().reverse();
+    for(const d of list){
+      const sg = realSegs(state.camId, d, "full");
+      if(sg && sg.length){
+        state.daySel = d;
+        state.dayIdx = (state.dayList || []).indexOf(d);
+        pvLoadDay();
+        renderPlayDates();          // 实际回退到了别的日期，菜单栏显示跟上
+        renderVtl(null, curDay());
+        break;
+      }
+    }
+  }
+  const segs = PPLAY.segs;
+  if(!segs.length) return false;
+  const last = segs[segs.length - 1];
+  return pvPlayAt(Math.max(last.s, last.e - PV_BACK));
+}
+
+/* 大播放钮 / 轻点画面：有断点就续播，没有就从「第一个活动 / 现在时刻」开始 */
+function pvDefaultStart(){
+  const evs = (vtlData && vtlData.events) || [];
+  if(PPLAY.filter === "act" && evs.length) return Math.max(0, evs[0].s - PV_ROLL);
+  const t = new Date();
+  const now = t.getHours() * 3600 + t.getMinutes() * 60 + t.getSeconds();
+  /* 今天优先落在「现在」所在或之前最近的一分片；没有就从头 */
+  let best = null;
+  PPLAY.segs.forEach(sg=>{ if(sg.s <= now) best = sg; });
+  return best ? Math.max(best.s, Math.min(now, best.e - 1)) :
+         (PPLAY.segs.length ? PPLAY.segs[0].s : now);
+}
+function pvResume(){
+  if(PPLAY.segIdx >= 0 && pvCur.getAttribute("src")){
+    PPLAY.on = true;
+    safePlay(pvCur);
+    pvSyncCtl();
+    return;
+  }
+  pvPlayAt(pvDefaultStart());
+}
+
+[pvA, pvB].forEach(v=>{
+  v.addEventListener("timeupdate", e=>{
+    if(e.target !== pvCur) return;   // 预加载路的 timeupdate 不参与
+    pvOnTime();
+  });
+  /* 播放/暂停状态实时反映到操作条图标 */
+  v.addEventListener("play", e=>{ if(e.target === pvCur) pvSyncCtl(); });
+  v.addEventListener("pause", e=>{ if(e.target === pvCur) pvSyncCtl(); });
+  v.addEventListener("ended", e=>{
+    if(e.target !== pvCur || !PPLAY.on) return;
+    pvAdvance();
+  });
+});
 
 /* ================= 启动 ================= */
 function loadDay(){
@@ -5980,18 +7311,6 @@ function loadDay(){
   renderDates(); renderOverview(); renderHeat(); renderClips();
   applyPlaybackVisibility();
 }
-
-/* 回放模式切换 */
-document.querySelectorAll("[data-pmode]").forEach(el=>{
-  el.onclick = ()=>{
-    if(state.pmode === el.dataset.pmode) return;
-    state.pmode = el.dataset.pmode;
-    document.querySelectorAll("[data-pmode]").forEach(x=>x.classList.toggle("on", x===el));
-    state.hourBlock = -1; state.segIdx = -1;
-    loadDay();
-    toast("toast2", state.pmode==="full" ? "全时录像 · 主码流原画质" : "精简片段 · 压缩后成品");
-  };
-});
 
 loadCfg();          /* 先把上次保存的摄像头与参数读回来，再渲染 */
 /* 启动顺序：localStorage 只是缓存，服务端的通道列表才是权威。

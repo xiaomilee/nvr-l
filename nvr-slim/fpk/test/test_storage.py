@@ -186,8 +186,10 @@ class TestS4Payload(StorageCase):
         self.assertEqual(d["root"], self.root)
         self.assertIsInstance(d["at"], int)
         cam = d["cameras"][0]
-        self.assertEqual(sorted(cam), ["clip", "full", "id", "name", "total"])
-        self.assertEqual(cam["total"], cam["full"] + cam["clip"])
+        self.assertEqual(sorted(cam),
+                         ["archive", "clip", "full", "id", "name", "total"])
+        self.assertEqual(cam["total"], cam["full"] + cam["archive"] + cam["clip"])
+        self.assertIn("ledger", d)   # 台账单列（KB 级，只为可见性）
 
     def test_空目录也给零而不是缺字段(self):
         d = nvr_slim.storage_usage(force=True)

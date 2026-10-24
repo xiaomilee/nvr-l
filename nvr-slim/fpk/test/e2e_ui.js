@@ -41,6 +41,18 @@ function d2(n) { return String(n).padStart(2, "0"); }
   for (const h of ["10-00-00", "10-05-00", "10-10-00"]) {
     fs.writeFileSync(path.join(rec, "车库", today, h + ".mp4"), Buffer.alloc(2048));
   }
+  // 台账 fixture：判定引擎需要 ffprobe（本机没有），按服务端真实格式种一天窗口，
+  // 让横线标注/活动时段块/活动筛选跳静止都有数据可断言。窗口 = 当天钟点秒。
+  const W = (h, m, s, dur) => [h * 3600 + m * 60 + s, h * 3600 + m * 60 + s + dur];
+  fs.mkdirSync(path.join(rec, "_ledger", "cam-01"), { recursive: true });
+  fs.writeFileSync(path.join(rec, "_ledger", "cam-01", today + ".json"), JSON.stringify({
+    v: 1, cam: "cam-01", date: today, updated_at: today + " 11:05:00",
+    sources: { "10-00-00.mp4": { start: 10 * 3600, d: 0.35, windows: [
+      W(10, 2, 15, 12), W(10, 7, 19, 277), W(10, 13, 30, 10),
+    ] }, "11-00-00.mp4": { start: 11 * 3600, d: 0.4, windows: [
+      W(11, 0, 56, 218),
+    ] } },
+  }));
   fs.writeFileSync(path.join(rec, "车库", oldDay, "09-00-00.mp4"), Buffer.alloc(4096));
   // 缩时片段：真实时长要靠 ffprobe 读文件，这里造不出真 mp4，就验证「读不到
   // 时长时不会拿 segment_sec 冒充」（否则界面显示 2 小时 30 分，3 秒播完）。
@@ -229,6 +241,401 @@ function d2(n) { return String(n).padStart(2, "0"); }
   // 天数一多就把老日期藏起来，用户找不到录像。断言的是"列表来自真实扫描"。
   check("日期列表包含真实存在的每一天", dayCount === 1, dayCount);
 
+  // --- 0.9.42 Aqara 回放页骨架：4 tab / 文件页瘦身 / 时间轴渲染 ---
+  const tabs = await page.evaluate(() =>
+    document.querySelectorAll(".tb").length);
+  check("底部导航 4 个页签（直播/回放/文件/设置）", tabs === 4, tabs);
+  const seg2 = await page.evaluate(() =>
+    document.querySelector("[data-pmode]"));
+  check("文件页 seg2（全时/精简切换）已退役", seg2 === null, !!seg2);
+  const heatGone = await page.evaluate(() =>
+    document.getElementById("heat") === null);
+  check("文件页热力图已迁出", heatGone, heatGone);
+  await page.click('.tb[data-page="play"]');
+  await page.waitForTimeout(600);
+  const onPlay = await page.evaluate(() =>
+    document.getElementById("page-play").classList.contains("on"));
+  check("回放页能打开", onPlay, onPlay);
+  const hours = await page.evaluate(() =>
+    document.querySelectorAll("#vtl .vhour").length);
+  check("垂直时间轴默认密度 120px/h（1 小时刻度 × 25）", hours === 25, hours);
+  // --- 时间轴缩放：默认 ×1.0，放大一档轨道变高，再缩小还原 ---
+  const vh0 = await page.evaluate(() =>
+    parseFloat(document.getElementById("vtl").style.height));
+  check("默认轨道高度 = 30 + 24h×120px + 24", Math.abs(vh0 - 2934) < 1, vh0);
+  await page.click('#btnVtlIn');
+  await page.waitForTimeout(150);
+  const vh1 = await page.evaluate(() => ({
+    h: parseFloat(document.getElementById("vtl").style.height),
+    pct: document.getElementById("vtlPct").textContent,
+  }));
+  check("放大按钮：轨道变高、倍率显示 ×1.3",
+        vh1.h > vh0 && vh1.pct === "×1.3", vh1);
+  const sc1 = await page.evaluate(() => {
+    const sc = document.getElementById("vtlScroll");
+    return { top: sc.scrollTop, };
+  });
+  await page.click('#btnVtlOut');
+  await page.waitForTimeout(150);
+  const vh2 = await page.evaluate(() => ({
+    h: parseFloat(document.getElementById("vtl").style.height),
+    pct: document.getElementById("vtlPct").textContent,
+  }));
+  check("缩小按钮还原到 ×1.0", Math.abs(vh2.h - vh0) < 1 && vh2.pct === "×1.0", vh2);
+  check("缩放后视口仍停在有效区间（锚点不越界）",
+        sc1.top >= 0, sc1);
+  const avail = await page.evaluate(() =>
+    document.querySelectorAll("#vtl .vavail").length);
+  check("时间轴蓝轨来自真实分片覆盖", avail >= 1, avail);
+  await page.waitForTimeout(400);   // 台账 fetch 回调写摘要
+  const dayName = await page.evaluate(() =>
+    document.getElementById("playDayName").textContent);
+  check("菜单栏右侧日期下拉显示当前日期", /\d{2}-\d{2}/.test(dayName), dayName);
+  const playSum = await page.evaluate(() =>
+    document.getElementById("vtlSum").textContent);
+  check("时间轴标题旁摘要带活动数与累计（台账 fixture：4 个活动）",
+        /^4 个活动 · 累计/.test(playSum), playSum);
+  const marks = await page.evaluate(() =>
+    document.querySelectorAll("#vtl .vmark").length);
+  check("台账事件渲染为 Aqara 式横线标注", marks >= 3, marks);
+  const gone = await page.evaluate(() => ({
+    dates: document.getElementById("playDates") === null,
+    evList: document.getElementById("playEvents") === null,
+    playscroll: document.querySelector(".playscroll") === null,
+    legend: document.querySelector(".vtllegend") === null,
+    files: document.getElementById("btnPlayFiles") === null,
+    osd: document.querySelector("#playStage .posd") === null,
+  }));
+  check("日期 chip/活动列表/图例/文件按钮/画面 OSD 均已移除",
+        gone.dates && gone.evList && gone.playscroll && gone.legend && gone.files && gone.osd, gone);
+
+  // --- 0.9.43 P1：常驻画面区 + 点按跳播 + 模拟缩时/原速 ---
+  const vids = await page.evaluate(() =>
+    document.querySelectorAll("#playStage video").length);
+  check("回放页常驻画面区含双 video（A/B 预加载）", vids === 2, vids);
+  const seek1 = await page.evaluate(() => {
+    const ok = pvPlayAt(36010);       // 测试分片在 10:00 起
+    return { ok, idx: PPLAY.segIdx, src: pvCur.getAttribute("src") || "" };
+  });
+  check("点按时刻 10:00:10 跳播命中第一个分片",
+        seek1.ok && seek1.idx === 0 && seek1.src.indexOf("/api/record/file") >= 0, seek1);
+  const seekGap = await page.evaluate(() => pvPlayAt(12 * 3600));   // 正午无分片
+  check("无画面时刻拒绝跳播（宁可不播不黑屏）", seekGap === false, seekGap);
+  // --- 0.9.47：操作条移到画面区外下方（不遮画面）---
+  const bar = await page.evaluate(() => {
+    const b = document.querySelector("#page-play .pops");
+    const stage = document.getElementById("playStage").getBoundingClientRect();
+    const br = b.getBoundingClientRect();
+    return { bar: !!b, outside: br.top >= stage.bottom - 1,
+      tog: !!document.getElementById("btnPlayTog"),
+      spd: (document.getElementById("btnPvSpeed") || {}).textContent,
+      seg: document.querySelectorAll("#page-play .pseg [data-pvfilter]").length,
+      full: !!document.getElementById("btnPlayFull"),
+      line: !!document.getElementById("vnowline") };
+  });
+  check("操作条在画面区外下方：播放/倍速/全时活动筛选/全屏齐全",
+        bar.bar && bar.outside && bar.tog && bar.seg === 2 && bar.full && /1×/.test(bar.spd || ""), bar);
+  check("固定时刻线挂在时间轴卡上（JS 定位）", bar.line, bar);
+  const linePos = await page.evaluate(() => {
+    const sc = document.getElementById("vtlScroll");
+    const ln = document.getElementById("vnowline");
+    const i = ln.querySelector("i"), em = ln.querySelector("em");
+    const ir = i.getBoundingClientRect(), er = em.getBoundingClientRect();
+    return { top: parseFloat(ln.style.top),
+      twoThird: sc.offsetTop + Math.round(sc.clientHeight / 3),
+      lineColor: getComputedStyle(i).backgroundColor,
+      emColor: getComputedStyle(em).color,
+      midGap: Math.abs((ir.top + ir.bottom) / 2 - (er.top + er.bottom) / 2) };
+  });
+  check("固定时刻线在自下而上 2/3 高度（视口上 1/3 处）",
+        Math.abs(linePos.top - linePos.twoThird) < 2, linePos);
+  check("时刻文字与横线红色且互相居中（线对准数字中腰）",
+        /rgb\(21[12], 59, 59\)/.test(linePos.lineColor) &&
+        linePos.lineColor === linePos.emColor &&
+        linePos.midGap < 2, linePos);
+  await page.click('[data-pvfilter="full"]');
+  const filtFull = await page.evaluate(() => ({
+    filter: PPLAY.filter,
+    chip: document.querySelector('[data-pvfilter="full"]').classList.contains("on") }));
+  await page.click('[data-pvfilter="act"]');
+  const filtAct = await page.evaluate(() => ({
+    filter: PPLAY.filter,
+    chip: document.querySelector('[data-pvfilter="act"]').classList.contains("on"),
+    dim: document.getElementById("vtlCard").classList.contains("actmode"),
+    spans: document.querySelectorAll("#vtl .vevspan").length }));
+  /* 活动筛选核心行为：掉出活动窗口 = 跳到下一活动起点（垫 3 秒）。
+     fixture：10:02:15-27 / 10:07:19-11:11:56... 落在 10:04（静止段）应跳 10:07:16 */
+  const skip = await page.evaluate(() => {
+    const ok = pvPlayAt(10 * 3600 + 4 * 60, { quiet: true });
+    const jumped = pvSkipStatic();
+    return { ok, jumped, t: PPLAY.t, expect: 10 * 3600 + 7 * 60 + 19 - 3 };
+  });
+  check("活动筛选：自动跳过全时录像的静止部分，连播下一个活动",
+        skip.ok && skip.jumped && Math.abs(skip.t - skip.expect) < 1.5, skip);
+  await page.click('[data-pvfilter="full"]');
+  await page.evaluate(() => { pvStop(); pvSyncCtl(); });
+  check("筛选切换 全时/活动：芯片同步 + 活动模式时间轴变淡且点亮活动时段块",
+        filtFull.filter === "full" && filtFull.chip &&
+        filtAct.filter === "act" && filtAct.chip &&
+        filtAct.dim && filtAct.spans >= 3, [filtFull, filtAct]);
+  // --- 0.9.48：全时模式活动标记常亮 / 日期下拉含今天 / 换日期自动定位开播 / 拖动续播 ---
+  const evVis = await page.evaluate(() => {
+    const sp = document.querySelector("#vtl .vevspan");
+    const mk = document.querySelector("#vtl .vmark");
+    return { spOp: sp ? getComputedStyle(sp).opacity : null,
+      mkZ: mk ? getComputedStyle(mk).zIndex : null };
+  });
+  check("全时模式活动标记常亮（橙色时段块+横线在上层不被遮盖）",
+        parseFloat(evVis.spOp) > 0.5 && +evVis.mkZ >= 2, evVis);
+  await page.click('#playDaySel');
+  const dayHasToday = await page.evaluate(() => {
+    const t = new Date();
+    const md = ("0" + (t.getMonth() + 1)).slice(-2) + "-" + ("0" + t.getDate()).slice(-2);
+    return { md, rows: Array.from(document.querySelectorAll("#playDayPick .dp"))
+      .map(x => x.textContent) };
+  });
+  check("日期下拉包含当前日期",
+        dayHasToday.rows.some(x => x.indexOf(dayHasToday.md) >= 0), dayHasToday);
+  await page.evaluate(() => playDayShow(false));
+  const jump = await page.evaluate(() => {
+    pvStop();
+    const ok = pvJumpLatest();
+    const segs = PPLAY.segs, last = segs[segs.length - 1];
+    return { ok, on: PPLAY.on, t: PPLAY.t, lastS: last ? last.s : null,
+      lastE: last ? last.e : null };
+  });
+  check("换日期/机位自动定位最新全时录像并回溯 30 秒开播",
+        jump.ok && jump.on && jump.lastE != null &&
+        Math.abs(jump.t - Math.max(jump.lastS, jump.lastE - 30)) < 1, jump);
+  const scrub = await page.evaluate(async () => {
+    pvStop();
+    pvPlayAt(10 * 3600 + 10 * 60 + 10, { quiet: true });   // 播放中（10:10:10）
+    const sc = document.getElementById("vtlScroll");
+    vtlHold = Date.now();                                  // 模拟用户手指拖动
+    const target = 10 * 3600 + 12 * 60;                    // 拖到 10:12（分片覆盖内）
+    sc.scrollTop = Math.max(0, vtlY(target) - sc.clientHeight / 3);
+    await new Promise(r => setTimeout(r, 700));
+    /* scrollTop 是整数（浏览器截断），期望值按实际 scrollTop 反推，容 1px 量化差 */
+    const expectT = Math.max(0, (sc.scrollTop + sc.clientHeight / 3 - VTL_TOP) / vtlPxh * 3600);
+    return { t: PPLAY.t, expectT, target };
+  });
+  check("播放中拖动时间轴：松手后从固定线时刻继续播（不被拽回原进度）",
+        Math.abs(scrub.t - scrub.expectT) < 1, scrub);
+  await page.evaluate(() => pvStop());
+  // --- 0.9.47：全屏回放 = 横屏全屏 + 时间轴悬浮（播放隐藏/暂停恢复） ---
+  // 0.9.51 回归：部分 webview 的 orientation.lock 永远挂起（真机全屏仍竖屏根因），
+  // 覆盖成「永不 resolve 的 lock」，进全屏后 800ms 竞速超时也必须转横屏
+  await page.evaluate(() => {
+    const so = screen.orientation;
+    if(!window.__origLock) window.__origLock = so && so.lock ? so.lock.bind(so) : null;
+    if(so) Object.defineProperty(so, "lock",
+      { value: () => new Promise(()=>{}), configurable: true });
+  });
+  await page.click('#btnPlayFull');
+  await page.waitForTimeout(600);
+  const fsOn = await page.evaluate(() => {
+    const cs = getComputedStyle(document.getElementById("vtlCard"));
+    const pp = document.getElementById("page-play");
+    return {
+      fs: document.body.classList.contains("fsmode"),
+      land: !!document.querySelector(".phone.land"),
+      cardAbs: cs.position, cardBg: cs.backgroundColor, cardShadow: cs.boxShadow,
+      fsTag: (document.fullscreenElement || document.webkitFullscreenElement || {}).tagName || null,
+      pageDims: [pp.offsetWidth, pp.offsetHeight] };
+  });
+  /* 0.9.54：全屏画面不裁剪（contain）+ 舞台吃掉整屏（含操作条原来占的那条高度）
+     + 操作条悬浮在画面之上、按钮放大到可点尺寸且互不重叠 */
+  const fsLayout = await page.evaluate(() => {
+    const vid = document.querySelector("#playStage video.on") || document.querySelector("#playStage video");
+    const st = document.getElementById("playStage");
+    const pops = document.querySelector("#page-play .pops");
+    const pg = document.getElementById("page-play");
+    /* 用 offset* 而不是 getBoundingClientRect：旋转态下 bbox 已按 90° 换轴，
+       量不出真实横排关系。底栏是横排比左右，黑边轨是竖排比上下 */
+    const col = getComputedStyle(pops).flexDirection === "column";
+    const btns = [...pops.querySelectorAll(".pbtn, .pseg")].map(e => col
+      ? { l: e.offsetTop, r: e.offsetTop + e.offsetHeight }
+      : { l: e.offsetLeft, r: e.offsetLeft + e.offsetWidth }
+    ).sort((a, b) => a.l - b.l);
+    let overlap = false;
+    for (let i = 1; i < btns.length; i++) if (btns[i].l < btns[i-1].r - 1) overlap = true;
+    const segBtn = pops.querySelector(".pseg button");
+    return { fit: getComputedStyle(vid).objectFit,
+             rail: document.body.classList.contains("rail"),
+             stagePos: getComputedStyle(st).position,
+             popsPos: getComputedStyle(pops).position,
+             stageH: st.offsetHeight, stageW: st.offsetWidth, popsH: pops.offsetHeight,
+             pageH: pg.offsetHeight, pageW: pg.offsetWidth,
+             /* 操作条贴底（悬浮）：底边与页面底边对齐，不再挤占画面高度 */
+             popsGap: pops.offsetParent === pg
+               ? pg.offsetHeight - (pops.offsetTop + pops.offsetHeight) : -1,
+             minBtnH: Math.min(...[...pops.querySelectorAll(".pbtn")].map(e => e.offsetHeight)),
+             segH: segBtn ? segBtn.offsetHeight : 0,
+             segW: segBtn ? segBtn.offsetWidth : 0, overlap };
+  });
+  /* 0.9.55：横屏时按钮要排进左右黑边（rail 布局），竖屏没黑边就用底栏悬浮 */
+  check("全屏画面不裁剪（contain）+ 舞台整屏 + 按钮 ≥40px 不重叠（底栏/黑边轨两种布局都算）",
+        fsLayout.fit === "contain" && fsLayout.stagePos === "absolute" &&
+        fsLayout.popsPos === "absolute" &&
+        (fsLayout.rail
+          ? fsLayout.popsH >= fsLayout.pageH - 2
+          : fsLayout.popsGap === 0) &&
+        fsLayout.stageH >= fsLayout.pageH - 2 && fsLayout.stageW >= fsLayout.pageW - 2 &&
+        fsLayout.minBtnH >= 40 && !fsLayout.overlap &&
+        fsLayout.segH >= (fsLayout.rail ? 30 : 36) && fsLayout.segW >= 44, fsLayout);
+  /* 0.9.55：黑边轨必须真的落在黑边里——左轨右边缘 ≤ 画面左边缘，
+     右轨（退出/旋转）左边缘 ≥ 画面右边缘；两个轨道都要竖排（flex-direction:column） */
+  const fsRail = await page.evaluate(() => {
+    const pg = document.getElementById("page-play");
+    const pops = document.querySelector("#page-play .pops");
+    const tools = document.getElementById("fsTools");
+    const st = document.getElementById("playStage");
+    const w = pg.offsetWidth, h = pg.offsetHeight;
+    /* 假 mp4 没有元数据 → vidAsp 走默认 16:9；contain 后的画面宽度 = 高度×画幅 */
+    const drawnW = Math.round(h * (16 / 9));
+    const picL = Math.round((w - drawnW) / 2), picR = Math.round((w + drawnW) / 2);
+    return { rail: document.body.classList.contains("rail"),
+      pageW: w, pageH: h, stageH: st.offsetHeight, picL: picL, picR: picR,
+      railw: getComputedStyle(document.documentElement).getPropertyValue("--railw").trim(),
+      popsRight: pops.offsetLeft + pops.offsetWidth, popsH: pops.offsetHeight,
+      popsDir: getComputedStyle(pops).flexDirection,
+      segDir: getComputedStyle(pops.querySelector(".pseg")).flexDirection,
+      toolsLeft: tools ? tools.offsetLeft : -1,
+      toolsTop: tools ? tools.offsetTop : -1,
+      toolsH: tools ? tools.offsetHeight : -1,
+      toolsDir: tools ? getComputedStyle(tools).flexDirection : "",
+      toolsLabelHidden: tools ? [...tools.querySelectorAll("span")].every(
+        s => getComputedStyle(s).display === "none") : false };
+  });
+  check("横屏按钮排进左右黑边：左轨放播放控制、右轨放退出/旋转，都不压画面",
+        fsRail.rail && fsRail.popsRight <= fsRail.picL + 1 &&
+        fsRail.toolsLeft >= fsRail.picR - 1 &&
+        fsRail.popsDir === "column" && fsRail.segDir === "column" &&
+        fsRail.toolsDir === "column" && fsRail.toolsLabelHidden &&
+        fsRail.popsH >= fsRail.pageH - 2 && fsRail.toolsH >= fsRail.pageH - 2,
+        fsRail);
+  /* 0.9.55：旋转态（CSS rotate 90°）下时间轴要能拖——屏幕横向位移换算成 scrollTop。
+     真机是原生滚动被 touch-action 按屏幕方向拦掉，这里直接验我们自己的换算逻辑 */
+  const rotDrag = await page.evaluate(() => {
+    const sc = document.getElementById("vtlScroll");
+    sc.scrollTop = 0;
+    const before = sc.scrollTop;
+    const mk = (type, x) => {
+      const t = new Touch({ identifier: 1, target: sc, clientX: x, clientY: 200 });
+      sc.dispatchEvent(new TouchEvent(type, {
+        touches: type === "touchend" ? [] : [t],
+        targetTouches: type === "touchend" ? [] : [t],
+        changedTouches: [t], bubbles: true, cancelable: true }));
+    };
+    mk("touchstart", 120);
+    for (let i = 1; i <= 6; i++) mk("touchmove", 120 + i * 10);
+    mk("touchend", 180);
+    const after = sc.scrollTop;
+    return { rot: document.body.classList.contains("rot"), before, after,
+             touchAction: getComputedStyle(sc).touchAction };
+  });
+  check("旋转态时间轴可拖动（横屏暂停后时间轴拖不动 → 屏幕横向位移换算 scrollTop）",
+        rotDrag.rot && rotDrag.touchAction === "none" && rotDrag.after >= 50, rotDrag);
+  const fsPlay = await page.evaluate(() => {
+    /* 假 mp4 无法真实 play（paused 恒为 true），用实例属性遮蔽 paused 模拟播放态 */
+    Object.defineProperty(pvCur, "paused", { get: () => false, configurable: true });
+    PPLAY.on = true; pvSyncCtl();
+    const r = { pv: document.getElementById("page-play").classList.contains("pvplaying"),
+      pe: getComputedStyle(document.getElementById("vtlCard")).pointerEvents };
+    delete pvCur.paused;
+    return r;
+  });
+  const fsPause = await page.evaluate(() => {
+    /* 暂停态：paused 恢复真实值 true，PPLAY.on 仍为 true（暂停 ≠ 停止） */
+    try{ pvCur.pause(); }catch(e){}
+    PPLAY.on = true; pvSyncCtl();
+    return { pv: document.getElementById("page-play").classList.contains("pvplaying"),
+      pe: getComputedStyle(document.getElementById("vtlCard")).pointerEvents };
+  });
+  /* 0.9.53：全屏工具组（退出/旋转）挂进容器内 → 跟着旋转，永远在用户视角右上角；
+     诊断角标改成默认隐藏（?fsdiag=1 才出现） */
+  const rotBtn = await page.evaluate(() => {
+    const box = document.getElementById("fsTools");
+    const b = document.getElementById("fsRot");
+    const d = document.getElementById("fsDiag");
+    localStorage.setItem("fsdiag", "1");
+    fsDiag();
+    const diagOn = !!d && d.classList.contains("on") && !!d.textContent;
+    localStorage.removeItem("fsdiag");
+    fsDiag();
+    const diagOff = !d || !d.classList.contains("on");
+    const cs = box ? getComputedStyle(box) : null;
+    return {
+      exists: !!b, visible: !!b && !!cs && cs.display !== "none",
+      groupOn: !!box && box.classList.contains("on"),
+      inPhone: !!box && document.getElementById("phone").contains(box),
+      diagOn, diagOff,
+      rot: state.rot,
+      btnCount: box ? box.querySelectorAll("button").length : 0,
+    };
+  });
+  check("全屏工具组：退出+旋转同组、挂在容器内随旋转、诊断角标默认隐藏",
+        rotBtn.exists && rotBtn.visible && rotBtn.groupOn && rotBtn.inPhone &&
+        rotBtn.btnCount === 2 && rotBtn.diagOn && rotBtn.diagOff, rotBtn);
+  const rotToggle = await page.evaluate(async () => {
+    const before = state.rot, b = document.getElementById("fsRot");
+    b.click(); await new Promise(r => setTimeout(r, 150));
+    const mid = state.rot;
+    b.click(); await new Promise(r => setTimeout(r, 150));
+    const after = state.rot;
+    try { localStorage.removeItem("fsRot"); } catch(e) {}
+    return { before, mid, after };
+  });
+  check("旋转按钮可切换横/竖屏并切回",
+        rotToggle.mid !== rotToggle.before && rotToggle.after === rotToggle.before, rotToggle);
+
+  /* lock 竞速超时是 800ms，fsPause 已消耗约 600+，再等一拍后必已转横屏 */  const rotHang = await page.evaluate(async () => {
+    await new Promise(r => setTimeout(r, 700));
+    return { rot: document.body.classList.contains("rot"),
+      portrait: window.innerHeight > window.innerWidth,
+      cardBg: getComputedStyle(document.getElementById("vtlCard")).backgroundColor,
+      scrollBg: getComputedStyle(document.getElementById("vtlScroll")).backgroundColor };
+  });
+  check("lock 永久挂起时仍转横屏（800ms 超时兜底）+ 时间轴双层底色透明",
+        (!rotHang.portrait || rotHang.rot) &&
+        /rgba\(0, 0, 0, 0\)|transparent/.test(rotHang.cardBg) &&
+        /rgba\(0, 0, 0, 0\)|transparent/.test(rotHang.scrollBg), rotHang);
+  await page.evaluate(() => {
+    const so = screen.orientation;
+    if(so){ if(window.__origLock) Object.defineProperty(so, "lock", { value: window.__origLock, configurable: true });
+            else delete so.lock; }
+  });
+  await page.evaluate(() => exitFull());
+  await page.waitForTimeout(400);
+  const fsOff = await page.evaluate(() => ({
+    fs: document.body.classList.contains("fsmode"),
+    pv: document.getElementById("page-play").classList.contains("pvplaying") }));
+  await page.evaluate(() => { pvStop(); });
+  check("全屏回放：进入 fsmode/横屏，时间轴变悬浮层且底色透明（不遮画面）",
+        fsOn.fs && fsOn.land && fsOn.cardAbs === "absolute" &&
+        /rgba\(0, 0, 0, 0\)|transparent/.test(fsOn.cardBg) && fsOn.cardShadow === "none", fsOn);
+  /* 真机三轮"全屏仍竖屏"的根因：对页面元素 requestFullscreen 会被提到顶层，
+     UA 的 :fullscreen{position:fixed} 让它脱离 .phone 的旋转 —— 必须全屏根节点 */
+  check("全屏只提根节点（页面元素进顶层会绕过旋转）",
+        !fsOn.fsTag || fsOn.fsTag === "HTML", fsOn);
+  check("旋转态下页面按横向空间布局（宽>高）",
+        fsOn.pageDims[0] > fsOn.pageDims[1], fsOn.pageDims);
+  check("全屏播放中隐藏时间轴悬浮层，暂停恢复（仍可筛选拖动跳转）",
+        fsPlay.pv && fsPlay.pe === "none" && !fsPause.pv && fsPause.pe !== "none", [fsPlay, fsPause]);
+  check("退出全屏恢复正常布局", !fsOff.fs, fsOff);
+  // --- 0.9.43 P1：设置页缩时与存储方案区块 ---
+  await page.click('.tb[data-page="cam"]');
+  await page.waitForTimeout(500);
+  const setChk = await page.evaluate(() => ({
+    cmode: document.querySelectorAll("[data-cmode]").length,
+    clipstyle: document.querySelectorAll("[data-clipstyle]").length,
+    silent: document.querySelectorAll("[data-silent]").length,
+    lk: LK.condenseMode,
+  }));
+  check("设置页有方案模式三选 + 静默段处理（虚拟模式）",
+        setChk.cmode === 3 && setChk.silent === 3 && setChk.lk === "virtual", setChk);
+  check("虚拟缩时下切分方式选项隐藏（避免假选项）", setChk.clipstyle === 0, setChk);
+
   // --- 缩时片段：时长必须来自文件本身，不能拿 segment_sec 冒充 ---
   const clipSegs = await page.evaluate(() =>
     realSegs(state.camId, curDay(), "clip"));
@@ -345,10 +752,11 @@ function d2(n) { return String(n).padStart(2, "0"); }
   await page.waitForTimeout(700);
   const fsState = await page.evaluate(() => {
     const b = document.getElementById("fsExit");
+    const box = document.getElementById("fsTools");
     return {
       fsmode: document.body.classList.contains("fsmode"),
-      exitVisible: !!b && b.classList.contains("on")
-                   && getComputedStyle(b).display !== "none",
+      exitVisible: !!b && !!box && box.classList.contains("on")
+                   && getComputedStyle(box).display !== "none",
       fsEl: !!(document.fullscreenElement || document.webkitFullscreenElement),
     };
   });
@@ -358,14 +766,18 @@ function d2(n) { return String(n).padStart(2, "0"); }
   const exitBox = await page.$("#fsExit");
   if (exitBox) {
     const bb = await exitBox.boundingBox();
-    check("退出按钮在右上角且可点",
-          !!bb && bb.width > 0 && bb.height > 0 && bb.x + bb.width > 300 && bb.y < 120, bb);
+    /* 旋转态下"用户视角右上角"落在屏幕物理边缘中部，所以这里只验尺寸与不出界；
+       是否锚在画面右上角由容器局部坐标断言（见下） */
+    check("退出按钮触控区 ≥40px 且在视口内可点",
+          !!bb && bb.width >= 40 && bb.height >= 40 &&
+          bb.x >= -2 && bb.y >= -2 &&
+          bb.x + bb.width <= 422 && bb.y + bb.height <= 902, bb);
     await exitBox.click();
     await page.waitForTimeout(600);
     const after = await page.evaluate(() => ({
       fsmode: document.body.classList.contains("fsmode"),
       land: !!state.land, rot: !!state.rot,
-      exitOn: (document.getElementById("fsExit") || {}).className || "",
+      exitOn: (document.getElementById("fsTools") || {}).className || "",
     }));
     check("点退出按钮真的退出全屏",
           !after.fsmode && !after.land && !after.rot
@@ -394,14 +806,24 @@ function d2(n) { return String(n).padStart(2, "0"); }
     check("旋转态下退出按钮仍在视口内且可见",
           rb.w > 0 && rb.h > 0 && rb.x >= -2 && rb.y >= -2
           && rb.x + rb.w <= rb.vw + 2 && rb.y + rb.h <= rb.vh + 2, rb);
-    // 按钮自身（内部文字）反向转 90°，否则跟着画面一起躺倒看不懂
-    const inner = await page.evaluate(() => {
+    /* 0.9.53：工具组进容器后不再需要手写反向旋转——用「容器局部坐标」验证
+       它始终锚在画面右上角（旋转与否都是用户视角的右上角），文字不补偿 */
+    const anchor = await page.evaluate(() => {
+      const ph = document.getElementById("phone");
+      const box = document.getElementById("fsTools");
       const sp = document.querySelector("#fsExit span");
-      return { tf: sp ? getComputedStyle(sp).transform : "none",
-               txt: sp ? sp.textContent : "" };
+      return {
+        gapRight: ph.offsetWidth - (box.offsetLeft + box.offsetWidth),
+        gapTop: box.offsetTop,
+        spanTf: sp ? getComputedStyle(sp).transform : "none",
+        txt: sp ? sp.textContent : "",
+        pageW: document.getElementById("page-play").offsetWidth,
+        pageH: document.getElementById("page-play").offsetHeight,
+      };
     });
-    check("旋转态下按钮文字反向旋转（不躺倒）",
-          /matrix\(0,\s*1,\s*-1,\s*0/.test(inner.tf) && /退出/.test(inner.txt), inner);
+    check("旋转态下工具组锚在画面右上角（随容器旋转，文字无需补偿）",
+          anchor.gapRight >= 0 && anchor.gapRight <= 20 && anchor.gapTop <= 20 &&
+          anchor.spanTf === "none" && /退出/.test(anchor.txt), anchor);
   }
   await page.keyboard.press("Escape");
   await page.waitForTimeout(500);

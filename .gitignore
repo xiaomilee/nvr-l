@@ -7,3 +7,6 @@ var/
 .shots/
 .probe/
 .probe_ui.js
+# 依赖与本地复现素材（不入库，避免体积膨胀）
+node_modules/
+_repro/
