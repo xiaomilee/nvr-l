@@ -8,7 +8,9 @@ const path = require("path");
 const vm = require("vm");
 
 const HTML = path.join(__dirname, "..", "..", "app", "ui", "index.html");
-const src = fs.readFileSync(HTML, "utf8");
+/* Windows 检出（core.autocrlf=true）会把仓库存的 LF 换成 CRLF，源码字符串
+   断言里的 `\n` 全部失配 —— 行尾在测试口径里统一归一成 LF，跟仓库一致。 */
+const src = fs.readFileSync(HTML, "utf8").replace(/\r\n/g, "\n");
 const blocks = src.match(/<script>([\s\S]*?)<\/script>/g) || [];
 if(!blocks.length){ console.error("找不到 <script> 块"); process.exit(1); }
 const code = blocks[blocks.length-1].replace(/^<script>/, "").replace(/<\/script>$/, "");
@@ -100,11 +102,14 @@ ck("保留·缩时保留不在这段", !h.includes('data-ret="clipDays"'));
 ck("保留·指明缩时天数在缩时压制里", h.includes("缩时片段的保留天数在「缩时压制」里单独设"));
 run('SET.acc="condense"; renderCamTabs();');
 h = body();
-ck("缩时·展开后有总开关", h.includes('data-cond="1"'));
-ck("缩时·总闸是独立一条（不与普通开关并列）", h.includes('class="master"'));
-ck("缩时·影响预估四格", (h.match(/class="c"><div class="kv"/g) || []).length === 4);
-ck("缩时·缩时保留在菜单里", h.includes('data-ret="clipDays"'));
-ck("缩时·倍速四档", (h.match(/data-speed="\d"/g) || []).length === 4);
+/* 0.9.43：每路 condense 布尔总开关 → 缩时方案四选（follow/virtual/materialize/off），
+   切分/倍速/片段保留/影响预估收进 materialize 分支，虚拟模式给提示 */
+ck("缩时·展开后有方案四选", (h.match(/data-cmcam="/g) || []).length === 4);
+ck("缩时·方案行独立在首行", h.includes("缩时方案") && h.includes('data-cmcam="follow"'));
+ck("缩时·跟随全局（虚拟）时物化专属行隐藏",
+   !h.includes('data-clipmode="join"') && !h.includes('data-ret="clipDays"')
+   && (h.match(/data-speed="\d"/g) || []).length === 0);
+ck("缩时·虚拟模式有提示", h.includes("虚拟缩时"));
 ck("缩时·常用段只露灵敏度", (h.match(/data-sens="(low|mid|high)"/g) || []).length === 3
    && !h.includes("data-engine="));
 ck("缩时·进阶默认收起", h.includes('data-adv="1"') && !h.includes('data-k="judge.pixelDelta"'));
@@ -121,20 +126,23 @@ run('SET.outOpen = true; renderCamTabs();');
 h = body();
 ck("缩时·展开后有画质滑杆", h.includes('data-k="day.crf"'));
 ck("缩时·画质折叠行收起时显示当前档", src.includes('(SET.outOpen ? "" : esc(qualLine(p)))'));
-run('SET.acc="mask"; SET.adv=false; SET.outOpen=false; renderCamTabs();');
+run('SET.acc="condense"; draftSet("condenseMode", "materialize"); renderCamTabs();');
+h = body();
+ck("缩时·切物化后显示切分方式/倍速四档/片段保留",
+   h.includes('data-clipmode="join"') && (h.match(/data-speed="\d"/g) || []).length === 4
+   && h.includes('data-ret="clipDays"'));
+ck("缩时·物化后影响预估四格", (h.match(/class="c"><div class="kv"/g) || []).length === 4);
+run('draftSet("condenseMode", "off"); renderCamTabs();');
+h = body();
+ck("缩时·关闭后判读区 dim", h.includes('class="dim"'));
+ck("缩时·关闭后有提示（只录全时不判定）", h.includes("只录全时、不判定"));
+run('draftSet("condenseMode", "follow"); SET.adv=false; SET.outOpen=false; SET.acc="mask"; renderCamTabs();');
 h = body();
 ck("缩时·收起后明细消失只剩标题条", !h.includes('data-cond="1"') && h.includes("整段拼接 · 1× · 10 天"));
 ck("缩时·展开后有忽略区画布", h.includes("maskCv-ig"));
 ck("编辑·画布可画", !h.includes("maskstage locked"));
 
-/* ---- 4c. 总开关关闭 → 参数区置灰 ---- */
-run('SET.acc="condense"; draftSet("condense", false); renderCamTabs();');
-h = body();
-ck("缩时·关闭后参数区 dim", h.includes('class="dim"'));
-ck("缩时·关闭后有提示", h.includes("总开关已关闭"));
-ck("缩时·关闭后标题条改口", h.includes("已关闭 · 只录全时"));
-run('draftSet("condense", true); renderCamTabs();');
-h = body();
+/* 0.9.43：总开关关闭用例已被上面的「缩时方案=off」用例取代（旧布尔已退役） */
 
 /* ---- 5. 草稿语义：改草稿不动原值 ---- */
 const orig = get('camParams["cam-01"].judge.pixelDelta');
@@ -427,10 +435,15 @@ run('var tc = CAMERAS[0].id; state.camId = tc;'
   + 'state.rec.cameras[tc] = {"2026-10-20":[{n:"08-00-00.mp4",b:1024},{n:"08-05-00.mp4",b:1024}],'
   + '"2026-10-21":[{n:"09-00-00.mp4",b:1024}],"2026-10-22":[{n:"10-00-00.mp4",b:1024}]};'
   + 'state.daySel = "2026-10-21"; recalcDayList();');
-ck("多日·dayList 旧→新全量", get('state.dayList.join(",")') === "2026-10-20,2026-10-21,2026-10-22");
+ck("多日·dayList 旧→新全量（末尾补今天）",
+   get('state.dayList.join(",")') === "2026-10-20,2026-10-21,2026-10-22," + get('jsToday()'));
 ck("多日·daySel 命中原选中日（不串天）", get('state.dayIdx') === 1 && get('curDay()') === "2026-10-21");
 run('state.daySel = null; recalcDayList();');
-ck("多日·未选时默认最新一天", get('state.dayIdx') === 2 && get('curDay()') === "2026-10-22");
+ck("多日·未选时默认最新一天（今天没文件也补进下拉）",
+   get('state.dayIdx') === 3 && get('curDay()') === get('jsToday()'));
+run('state.rec.cameras[tc][jsToday()] = [{n:"11-00-00.mp4",b:1024}]; state.daySel = null; recalcDayList();');
+ck("多日·今天已有文件时不重复补",
+   get('state.dayList.filter(d=>d===jsToday()).length') === 1 && get('state.dayIdx') === 3);
 ck("多日·dayList 赋值不再 reverse/slice(-7)",
    !/dayList\s*=[^;]*reverse\(\)/.test(src) && !/dayList\s*=[^;]*slice\(-7\)/.test(src));
 
@@ -468,13 +481,13 @@ run('STORAGE.data = { ok:true, at:' + Math.floor(Date.now()/1000) + ','
 const stc = get('cardStorage()');
 ck("存储·总量条无灰色「其余可用」段（容量共享，无意义）", !stc.includes("其余可用")
    && stc.includes('class="stbar-big"') && !/stbar-big[\s\S]{0,220}class="r"/.test(stc));
-ck("存储·总条只由全时+缩时两段填满", (()=>{ const m = stc.match(/stbar-big">([\s\S]*?)<\/div>/);
-   return m && (m[1].match(/<i /g) || []).length === 2; })());
+ck("存储·总条由全时+归档+缩时三段填满（归档 0 时占 0%）", (()=>{ const m = stc.match(/stbar-big">([\s\S]*?)<\/div>/);
+   return m && (m[1].match(/<i /g) || []).length === 3; })());
 ck("存储·图例给百分比", stc.includes("全时 <b>") && stc.includes("缩时 <b>") && stc.includes("%</b>"));
 ck("存储·每路按自身总量归满格（行按总量降序）",
    stc.indexOf("后院") < stc.indexOf("车库入口")
    && /class="stbar"><i class="f" style="width:\d+%"><\/i><i class="c" style="width:\d+%">/.test(stc));
-ck("存储·每路显示合计 + 全时/缩时明细", stc.includes("合计 · 全时 / 缩时")
+ck("存储·每路显示合计 + 全时/归档/缩时明细", stc.includes("合计 · 全时 / 归档 / 缩时")
    && stc.includes("3.5 GB") && stc.includes("3.0 GB / 572 MB"));
 ck("存储·标注非实时与统计时刻", stc.includes("非实时") && stc.includes("每 30 分钟最多重算一次")
    && stc.includes("统计于 "));
@@ -914,6 +927,40 @@ ck("竖线·红色光晕",
    && src.includes("box-shadow:0 0 6px rgba(255,80,80,.9)"));
 ck("播放当前时刻·红色",
    src.includes(".p-times .pt-c{flex:1;text-align:center;font-size:12.5px;font-weight:600;color:#ff6b6b}"));
+
+/* ===== 32. 0.9.44：夜间归档裁剪 + 三层保留 ===== */
+ck("归档·通用卡有开关与保留天数 chips（仅虚拟缩时显示）",
+   src.includes("data-archen=\"1\"") && src.includes("data-archdays=\"")
+   && src.includes("[30,90,180,365].map")
+   && src.includes('<span class="n">夜间归档裁剪</span>')
+   && src.includes('LK.condenseMode==="virtual" ?'));
+ck("归档·LK 默认开 + 90 天 + 批量 120",
+   get("LK.archEnable") === true && get("LK.archDays") === 90
+   && get("LK.archBatch") === 120);
+ck("归档·处理器写回并重拉候选摘要",
+   src.includes("LK.archDays = +el.dataset.archdays || 90;")
+   && src.includes("ARCH.at = 0;"));
+ck("归档·开关切换有后果提示",
+   src.includes("临期全时将直接被清理删除"));
+ck("归档·立即归档两段式（预览→确认执行）",
+   src.includes('await apiPost("/api/archive/run", {dry_run:true})')
+   && src.includes('await apiPost("/api/archive/run", {dry_run:false})')
+   && src.includes("预览已过期，请重新预览"));
+ck("归档·执行后强制重拉存储占用",
+   src.includes("STORAGE.data = null; STORAGE.at = 0;"));
+ck("归档·候选摘要从 /api/archive 节流拉取",
+   src.includes('apiGet("/api/archive")') && src.includes("Date.now() - ARCH.at > 10*60*1000"));
+ck("三层·保留策略文本含台账永久",
+   src.includes('return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 归档 " + (LK.archDays || 90)')
+   && src.includes("+ \" 天 / 台账永久\""));
+ck("三层·预算含归档项且按方案分摊",
+   src.includes("else if(eff === \"virtual\")")
+   && src.includes("arch += dayGB * 0.07 * (LK.archDays || 90)")
+   && src.includes("const need = full + clip + arch;"));
+ck("存储·占用载荷三类 + 台账单列",
+   src.includes("活动台账 <b>") && src.includes("永久保留 · 几乎不占空间"));
+ck("夜间任务·时刻文案说明先归档后清理",
+   src.includes("夜间任务时刻（先归档裁剪，后清理过期）"));
 
 console.log("设置页 " + (pass + fail) + " 项：通过 " + pass + "，失败 " + fail);
 process.exit(fail ? 1 : 0);

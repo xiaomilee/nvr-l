@@ -30,6 +30,8 @@ import snapshots  # noqa: E402
 import sysinfo  # noqa: E402
 import ffmpeg_cmd  # noqa: E402
 import pixdiff  # noqa: E402
+import ledger  # noqa: E402
+import archive  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
 # 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
@@ -288,6 +290,21 @@ def clip_speed_of(v):
     return n if n in _CLIP_SPEEDS else 1
 
 
+def _cam_condense_mode(c):
+    """每路缩时方案的生效值（follow/virtual/materialize/off）。
+
+    迁移规则：旧配置只有 condense 布尔——false 视为 off（用户原意就是
+    "这一路只录全时"）；true 与新字段缺省都回落 follow（跟全局走）。
+    显式给了合法新字段则以新字段为准。
+    """
+    cm = str((c or {}).get("condense_mode") or "follow").strip().lower()
+    if cm in ("follow", "virtual", "materialize", "off"):
+        return cm
+    condense_on = str((c or {}).get("condense", True)).strip().lower() \
+        not in ("0", "false", "off", "no")
+    return "follow" if condense_on else "off"
+
+
 def merge_cam_urls(cams, old_cams):
     """跨设备防覆盖：回给浏览器的 url 永远是脱敏的（rtsp://***@），明文只存在
     "配置它的那台浏览器"的 localStorage 里。换设备 / 清缓存后推回来的 url 是
@@ -345,10 +362,15 @@ def norm_cameras(raw):
             out[-1]["full_days"] = c.get("full_days")
         if c.get("clip_days") is not None:
             out[-1]["clip_days"] = c.get("clip_days")
-        # 每路缩时压制总开关：关掉这一路就不再产出缩时片段（全时录像照常）。
+        # 每路缩时压制总开关（旧字段，保留兼容）：关掉这一路就不再产出缩时片段。
         # 字符串 "false"/"off" 也要认：前端一不小心推成字符串是常事。
         out[-1]["condense"] = str(c.get("condense", True)).strip().lower() \
             not in ("0", "false", "off", "no")
+        # 每路缩时方案：follow=跟随全局 condense_mode；virtual/materialize/off 显式覆盖。
+        # 旧布尔迁移：condense=false 且未显式给新字段 → off（保留用户原有的「这一路只录全时」）。
+        cm = str(c.get("condense_mode") or "follow").strip().lower()
+        out[-1]["condense_mode"] = cm if cm in ("follow", "virtual", "materialize", "off") \
+            else ("off" if not out[-1]["condense"] else "follow")
         # 缩时倍速：只认 1/2/4/8，别的值一律回落 1（见 clip_speed_of）
         out[-1]["clip_speed"] = clip_speed_of(c.get("clip_speed"))
         # 每路切分方式：follow=跟随通用 clip_style；join/split 显式覆盖。
@@ -418,11 +440,17 @@ def cameras():
             "sub_url": str(c.get("sub_url") or "").strip(),
             "full_days": retention.clamp_days("full_days",
                                               c.get("full_days", retention.DEFAULTS["full_days"])),
+            "archive_days": retention.clamp_days(
+                "archive_days",
+                c.get("archive_days", retention.DEFAULTS["archive_days"])),
             "clip_days": retention.clamp_days("clip_days",
                                               c.get("clip_days", retention.DEFAULTS["clip_days"])),
             # 每路缩时压制总开关与倍速（见 norm_cameras 的说明）
             "condense": str(c.get("condense", True)).strip().lower()
                         not in ("0", "false", "off", "no"),
+            # 每路缩时方案（follow/virtual/materialize/off）。消费端 link 与
+            # /api/ledger 都用它判定这一路「只写台账」还是「台账+导出」还是「不判定」。
+            "condense_mode": _cam_condense_mode(c),
             "clip_speed": clip_speed_of(c.get("clip_speed")),
             # 每路切分方式（follow/join/split），消费端 link 按它选导出路径
             "clip_mode": runtime.clip_mode(c.get("clip_mode")),
@@ -828,6 +856,59 @@ def _clip_window(day_dir, name):
     return [round(max(0.0, start + ss), 2), round(min(86400.0, start + to), 2)]
 
 
+def ledger_payload(cam_id, date):
+    """一天的活动台账 + 画面可用性：回放页时间轴的唯一数据源。
+
+    windows 来自 _ledger/（判定引擎结论），avail.full 来自真实分片清单，
+    avail.archive 来自 _archive/ 的 idx 侧车（归档裁剪 P2 落地后非空）。
+    三者同用「当天钟点秒」坐标，前端一条轨道叠加渲染。
+    """
+    if not ledger.valid_date(date):
+        return {"ok": False, "error": "日期格式应为 YYYY-MM-DD"}
+    cam = next((c for c in cameras() if c["id"] == cam_id), None)
+    if not cam:
+        return {"ok": False, "error": "没有这个摄像头"}
+    root = record_dir()
+    dirs = cam_storage_dirs(cam)
+    # 旧 id 目录与新名称目录可能都有台账（升级过渡期）：sources 合并后再算
+    combined = None
+    for dn in dirs:
+        d = ledger.load(root, dn, date)
+        if isinstance(d, dict) and isinstance(d.get("sources"), dict):
+            if combined is None:
+                combined = d
+            else:
+                combined["sources"].update(d["sources"])
+    ev = ledger.events_of(combined)
+    # 画面可用性（全时）：分片按文件名起点排，覆盖到下一片起点，末片按分片长度兜底
+    seg = runtime.segment_sec(runtime.load_config(STATE["var_dir"]).get("record_segment_sec"))
+    full = []
+    starts = []
+    for dn in dirs:
+        for f in _scan_day_dirs(os.path.join(root, dn)).get(date, []):
+            st = ledger.src_start(f["n"])
+            if st is not None:
+                starts.append(st)
+    starts = sorted(set(starts))
+    for i, st in enumerate(starts):
+        en = starts[i + 1] if i + 1 < len(starts) else min(86400.0, st + seg)
+        if full and st <= full[-1][1]:
+            full[-1][1] = max(full[-1][1], en)   # 相邻片首尾相接 → 并成一个区间
+        else:
+            full.append([st, en])
+    cfg = runtime.load_config(STATE["var_dir"])
+    cm = _cam_condense_mode(cam)
+    if cm == "follow":
+        cm = str(cfg.get("condense_mode") or "virtual")
+    return {"ok": True, "cam": cam_id, "date": date,
+            "mode": cm, "segment_sec": seg,
+            "updated_at": (combined or {}).get("updated_at"),
+            "events": ev,
+            "summary": {"count": len(ev),
+                        "active_sec": round(sum(e["e"] - e["s"] for e in ev), 2)},
+            "avail": {"full": full, "archive": []}}
+
+
 def recordings_payload():
     """磁盘上真实存在的录像：每路每天有哪些分片、多大。
 
@@ -885,6 +966,18 @@ def storage_cache_path():
     return os.path.join(STATE["var_dir"], "storage-usage.json")
 
 
+def _dir_bytes(path):
+    """整个目录树的字节总量（台账用：KB 级，只为可见性单列）。"""
+    total = 0
+    for root, _dirs, names in os.walk(path):
+        for n in names:
+            try:
+                total += os.path.getsize(os.path.join(root, n))
+            except OSError:
+                pass
+    return total
+
+
 def _sum_cam_bytes(root, names, sub=""):
     """按「日期/文件名」去重后求和 —— 旧 id 目录与新名称目录可能同时存在。"""
     seen = {}
@@ -916,6 +1009,7 @@ def storage_usage(force=False):
         per[c["id"]] = {
             "name": c["name"],
             "full": _sum_cam_bytes(root, names),
+            "archive": _sum_cam_bytes(root, names, "_archive"),
             "clip": _sum_cam_bytes(root, names, "_clip"),
         }
     data = {"at": now, "root": root, "cams": per}
@@ -932,7 +1026,10 @@ def storage_usage(force=False):
 def _storage_payload(data, cached):
     cams = data.get("cams") or {}
     full = sum(int(v.get("full") or 0) for v in cams.values())
+    arch = sum(int(v.get("archive") or 0) for v in cams.values())
     clip = sum(int(v.get("clip") or 0) for v in cams.values())
+    # 台账单列：体积是 KB 级，但用户关心它到底占没占地方（答：几乎不占）
+    ledger = _dir_bytes(os.path.join(data.get("root") or record_dir(), "_ledger"))
     free, total = sysinfo.disk(data.get("root") or record_dir())
     return {
         "ok": True,
@@ -940,15 +1037,19 @@ def _storage_payload(data, cached):
         "at": int(data.get("at") or 0),
         "ttl": int(STORAGE_TTL),
         "root": data.get("root") or record_dir(),
-        "used": full + clip,
+        "used": full + arch + clip,
         "full": full,
+        "archive": arch,
         "clip": clip,
+        "ledger": ledger,
         "disk_free_gb": free,
         "disk_total_gb": total,
         "cameras": [dict(id=cid, name=v.get("name") or cid,
                          full=int(v.get("full") or 0),
+                         archive=int(v.get("archive") or 0),
                          clip=int(v.get("clip") or 0),
-                         total=int(v.get("full") or 0) + int(v.get("clip") or 0))
+                         total=int(v.get("full") or 0) + int(v.get("archive") or 0)
+                               + int(v.get("clip") or 0))
                     for cid, v in cams.items()],
     }
 
@@ -957,23 +1058,126 @@ def cleanup_state_path():
     return os.path.join(STATE["var_dir"], "cleanup-state.json")
 
 
-def load_cleanup_state():
-    p = cleanup_state_path()
-    if os.path.isfile(p):
+def archive_state_path():
+    return os.path.join(STATE["var_dir"], "archive-state.json")
+
+
+def load_state_file(path):
+    if os.path.isfile(path):
         try:
-            with open(p, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except (OSError, ValueError):
             pass
     return {}
 
 
-def save_cleanup_state(obj):
-    p = cleanup_state_path()
-    tmp = p + ".tmp"
+def save_state_file(path, obj):
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, p)
+    os.replace(tmp, path)
+
+
+def load_cleanup_state():
+    return load_state_file(cleanup_state_path())
+
+
+def save_cleanup_state(obj):
+    save_state_file(cleanup_state_path(), obj)
+
+
+def archive_modes(cams, cfg):
+    """每路生效的缩时方案 dict（与 link.condense_mode_of 同一口径）。"""
+    out = {}
+    for c in cams:
+        cm = str(c.get("condense_mode") or "follow").lower()
+        if cm not in ("virtual", "materialize", "off"):
+            cm = str(cfg.get("condense_mode") or "virtual").strip().lower()
+            if cm not in ("virtual", "materialize", "off"):
+                cm = "virtual"
+        out[c["id"]] = cm
+    return out
+
+
+def _archive_plan():
+    """归档计划（不裁）：预览用。旧 id 目录与新名称目录都扫。"""
+    cfg, cams, cam_cfg = camera_cfg()
+    seg = runtime.segment_sec(cfg.get("record_segment_sec"))
+    return archive.plan(record_dir(), cams, cam_cfg,
+                        archive_modes(cams, cfg), seg_sec=seg)
+
+
+def archive_payload():
+    cfg, cams, _ = camera_cfg()
+    at = retention.parse_hhmm(cfg.get("cleanup_at"))
+    p = _archive_plan()
+    return {
+        "ok": True,
+        "enable": bool(cfg.get("archive_enable", True)),
+        "archive_days": retention.clamp_days(
+            "archive_days", cfg.get("archive_days", retention.DEFAULTS["archive_days"])),
+        "batch": archive.clamp("archive_batch", cfg.get("archive_batch", archive.DEFAULTS["archive_batch"])),
+        "cleanup_at": at,
+        "next_run": retention.next_run(at).strftime("%Y-%m-%d %H:%M"),
+        "last": load_state_file(archive_state_path()),
+        "todo_count": len(p["todo"]),
+        "todo": p["todo"][:30],
+        "no_ledger_count": len(p["no_ledger"]),
+        "no_ledger": p["no_ledger"][:30],
+        "segments": p["segments"],
+        "bytes": p["bytes"],
+        "est_bytes": p["est_bytes"],
+        "policy": p["policy"],
+    }
+
+
+def run_archive(dry_run=False, trigger="manual"):
+    """归档裁剪。dry_run 只出计划；真跑受 archive_batch 限速、idx+done 幂等。"""
+    cfg, cams, cam_cfg = camera_cfg()
+    seg = runtime.segment_sec(cfg.get("record_segment_sec"))
+    batch = archive.clamp("archive_batch", cfg.get("archive_batch",
+                                                   archive.DEFAULTS["archive_batch"]))
+    if dry_run:
+        p = archive.plan(record_dir(), cams, cam_cfg,
+                         archive_modes(cams, cfg), seg_sec=seg)
+        return {"ok": True, "dry_run": True, "trigger": trigger,
+                "todo": p["todo"], "no_ledger": p["no_ledger"],
+                "segments": p["segments"], "bytes": p["bytes"],
+                "est_bytes": p["est_bytes"], "policy": p["policy"],
+                "batch": batch}
+    logs = []
+    res = archive.run(record_dir(), cams, cam_cfg,
+                      archive_modes(cams, cfg),
+                      STATE.get("ffmpeg_bin"), seg_sec=seg,
+                      batch=batch, on_log=logs.append)
+    res["trigger"] = trigger
+    res["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    if res["days"] or res["failed"] or trigger == "schedule":
+        state = {"date": time.strftime("%Y-%m-%d"), "at": res["at"],
+                 "trigger": trigger,
+                 "days": len(res["days"]),
+                 "files": res["files"],
+                 "bytes_out": res["bytes_out"],
+                 "failed": len(res["failed"]),
+                 "remaining": res["remaining"],
+                 "no_ledger": len(res["no_ledger"])}
+        save_state_file(archive_state_path(), state)
+        res["state"] = state
+        try:
+            log_dir = os.path.join(STATE["var_dir"], "log")
+            os.makedirs(log_dir, exist_ok=True)
+            with open(os.path.join(log_dir, "archive.log"), "a",
+                      encoding="utf-8") as f:
+                f.write("%s [%s] 归档 %d 天 / %d 段 / %s，失败 %d，剩余 %d 天，无台账跳过 %d\n" % (
+                    res["at"], trigger, len(res["days"]), res["files"],
+                    archive.pretty_bytes(res["bytes_out"]),
+                    len(res["failed"]), res["remaining"],
+                    len(res["no_ledger"])))
+        except OSError:
+            pass
+    res["logs"] = logs[-50:]
+    return res
 
 
 def retention_payload():
@@ -1057,12 +1261,24 @@ def run_cleanup(dry_run=False, trigger="manual", only=None):
 
 
 def cleanup_loop(stop_event):
-    """每天到点跑一次；靠 state 里的日期去重，重启不会重复删。"""
+    """夜间任务循环：每天到点先归档、后清理。
+
+    顺序是硬约束：归档裁的是「明天 0 点就过期」的全时日期，清理删的也是
+    过期目录 —— 先删后裁的话，最需要归档的那批日期已经先被删掉了。
+    两个任务各自用 state 里的日期去重，重启不会重复跑。
+    """
     while not stop_event.wait(30):
         try:
             cfg = runtime.load_config(STATE["var_dir"])
+            at = cfg.get("cleanup_at")
+            if retention.due(load_state_file(archive_state_path()).get("date"), at) \
+                    and cfg.get("archive_enable", True):
+                try:
+                    run_archive(dry_run=False, trigger="schedule")
+                except Exception as e:             # 归档失败不阻塞清理
+                    log_line("archive error: %s" % e)
             last = load_cleanup_state().get("date")
-            if retention.due(last, cfg.get("cleanup_at")):
+            if retention.due(last, at):
                 run_cleanup(dry_run=False, trigger="schedule")
         except Exception as e:                     # 清理线程不能把服务带死
             log_line("cleanup error: %s" % e)
@@ -1285,6 +1501,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, live_payload())
         if path == "/api/recordings":
             return self._send(200, recordings_payload())
+        if path == "/api/ledger":
+            qs = parse_qs(urlparse(self.path).query)
+            return self._send(200, ledger_payload(
+                (qs.get("cam") or [""])[0], (qs.get("date") or [""])[0]))
+        if path == "/api/archive":
+            return self._send(200, archive_payload())
         if path == "/api/storage/usage":
             # 命中缓存就直接回（30 分钟内不重复扫盘）；?force=1 强制重算
             qs = parse_qs(urlparse(self.path).query)
@@ -1875,6 +2097,14 @@ class Handler(BaseHTTPRequestHandler):
             res = run_cleanup(dry_run=dry, only=only)
             return self._send(200, res)
 
+        if path == "/api/archive/run":
+            # 归档裁剪：dry_run 预览日期与预估体积 → 二次确认执行。
+            # 真跑没有 retention 那种「按确认清单删」的指纹问题：idx + .done
+            # 幂等，重复触发最多浪费一次目录扫描，不会重复裁同一天。
+            dry = bool(body.get("dry_run", True))
+            res = run_archive(dry_run=dry, trigger="manual")
+            return self._send(200, res)
+
         if path == "/api/shutdown":
             self._send(200, {"ok": True})
             STATE["shutdown"] = True
@@ -1910,8 +2140,9 @@ class Handler(BaseHTTPRequestHandler):
                 cache["data"] = f.read()
             cache["etag"] = etag
         data = cache["data"]
-        # index 每次协商缓存（升级后立即生效）；图标类资源可以放心缓存一天
-        cc = "no-cache" if rel.endswith(".html") or rel == "index.html" else "public, max-age=86400"
+        # index 直接 no-store：部分 NAS 内嵌 webview 对 no-cache 协商不可靠，
+        # 升级后仍拿旧页面（实测反馈「活动标记仍未显示」的一个来源）；图标类资源放心缓存一天
+        cc = "no-store" if rel.endswith(".html") or rel == "index.html" else "public, max-age=86400"
         self._responded = True
         self.send_response(200)
         self.send_header("Content-Type", ctype)

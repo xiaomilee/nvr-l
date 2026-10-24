@@ -30,6 +30,7 @@ import threading
 import time
 
 import condense
+import ledger
 import params
 import recorder
 import runtime
@@ -83,6 +84,7 @@ class Link:
         self.max_queue = runtime.clamp_int(cfg.get("link_max_queue"), 20, 2000, 200)
         # 通用切分方式（每路可用 clip_mode=join/split 覆盖，follow=用这个值）
         self.clip_style = runtime.clip_style(cfg.get("clip_style"))
+        self._modes_sig = self._modes_signature()   # 缩时方案指纹，变更时作废 done 集合
 
         self.profiles = {}
         # 判读引擎的降级说明只记一次（同一路同一个原因），否则每个分片刷一行
@@ -139,6 +141,23 @@ class Link:
         """这一路自己选的切分方式：join/split 或 follow（跟随通用）。"""
         return runtime.clip_mode((self.cam_of(cam_id) or {}).get("clip_mode"))
 
+    def condense_mode_of(self, cam_id):
+        """这一路生效的缩时方案：virtual（只写台账）/ materialize（台账+导出）/ off。
+
+        每路显式覆盖优先；follow/缺省回落全局 condense_mode。旧配置的
+        condense=false 已在服务端 cameras() 迁移成 condense_mode=off，这里不重复判。
+        """
+        cm = str((self.cam_of(cam_id) or {}).get("condense_mode") or "follow").lower()
+        if cm in ("virtual", "materialize", "off"):
+            return cm
+        cm = str(self.cfg.get("condense_mode") or "virtual").strip().lower()
+        return cm if cm in ("virtual", "materialize", "off") else "virtual"
+
+    def _modes_signature(self):
+        """全部生效方案的指纹：变了就意味着旧 done 集合作废（见 reconfigure）。"""
+        return ",".join("%s=%s" % (c["id"], self.condense_mode_of(c["id"]))
+                        for c in self.cams)
+
     def eff_clip_mode(self, cam_id):
         """生效的切分方式：follow 展开成通用 clip_style。"""
         m = self.clip_mode_of(cam_id)
@@ -150,6 +169,29 @@ class Link:
         for c in self.cams:
             if c["id"] not in self.profiles:
                 self.profiles[c["id"]] = params.new_profile(c.get("name") or c["id"])
+        self._reset_done_if_mode_changed()
+
+    def _reset_done_if_mode_changed(self):
+        """缩时方案变更 → 旧 done 集合作废。
+
+        virtual 下判定过的分片没有导出物，切到 materialize 必须重新过一遍
+        （导出产物已存在的会被幂等跳过，真正的代价只有一次重判定）。反向同理。
+        done 键不含方案字段，所以只能在方案变化时显式清零 —— 不清的话
+        「虚拟切物化」永远不会再导出，用户看到的就是选项失效。
+        """
+        sig = self._modes_signature()
+        if sig == self._modes_sig:
+            return
+        self._modes_sig = sig
+        n = len(self.done)
+        self.done = set()
+        self.failed = {}
+        try:
+            with open(self._done_path(), "w", encoding="utf-8") as f:
+                f.write("")
+        except OSError:
+            pass
+        self.log("缩时方案变更，已处理记录已重置（%d 项将重新判定）" % n)
 
     def ignore_cells(self, cam_id):
         """这一路的检测忽略区格号（16×9）。没有就返回空列表。
@@ -275,8 +317,9 @@ class Link:
         out = []
         for c in self.cams:
             cid = c["id"]
-            # 每路的缩时压制总开关：关了就不入队（已生成的片段照常回放/清理）
-            if c.get("condense") is False:
+            # 每路缩时方案：off 才不入队（virtual/materialize 都要判定，只是导出不同）。
+            # 已生成的片段照常回放/清理，判定结论照常进台账。
+            if self.condense_mode_of(cid) == "off":
                 continue
             style = self.eff_clip_mode(cid)
             if only_split and style != "split":
@@ -415,6 +458,27 @@ class Link:
         if res["error"]:
             return {"ok": False, "reason": "analyze", "error": res["error"]}
 
+        # 台账先行：判定结论落 _ledger（virtual/materialize 两模式都要）。
+        # 失败只记日志不阻塞导出——台账缺一天的标记是损失，但不该连累已有的导出能力。
+        date_dir = os.path.basename(os.path.dirname(src))
+        start = ledger.src_start(os.path.basename(src))
+        if date_dir and start is not None:
+            w = ledger.merge(self.root, it.get("dir") or it["cam"], date_dir,
+                             os.path.basename(src), start,
+                             res.get("windows") or [],
+                             density=res.get("active_ratio") or 0.0,
+                             engine=res.get("engine"))
+            if w is None:
+                self.log("台账写入失败 %s/%s/%s" % (it.get("dir") or it["cam"],
+                                              date_dir, os.path.basename(src)))
+
+        # 虚拟缩时：判定完就收工，不产出任何视频文件。画面回放全靠全时录像
+        # 按需 seek，常驻重编码归零 —— 这正是无核显机器上最大的收益。
+        if self.condense_mode_of(it["cam"]) == "virtual":
+            return {"ok": True, "silent": bool(res.get("silent")),
+                    "ledger_only": True, "bytes_in": size_in, "bytes_out": 0,
+                    "detail": res}
+
         if res["silent"]:
             # 整段没有值得留的变化：不产出文件，只记账。
             # 源文件不删 —— 全时录像的删除权归保留策略，压缩层不能越界。
@@ -476,6 +540,11 @@ class Link:
                 self._mark_done(it["key"])
                 if r.get("silent"):
                     self.stats["silent"] += 1
+                elif r.get("ledger_only"):
+                    self.stats["done"] += 1
+                    self.log("判定完成（虚拟缩时）%s · %d 个活动窗口"
+                             % (os.path.basename(it["path"]),
+                                len((r.get("detail") or {}).get("windows") or [])))
                 else:
                     self.stats["done"] += 1
                     try:
@@ -549,6 +618,8 @@ class Link:
         if new_style != self.clip_style:
             self.clip_style = new_style
             self.log("通用切分方式改为%s" % runtime.CLIP_STYLE_LABEL[new_style])
+        # 缩时方案变了 → 旧的 done 集合作废（见 _reset_done_if_mode_changed）
+        self._reset_done_if_mode_changed()
         new_root = (str(cfg.get("record_dir") or "").strip() or self.root)
         if new_root != self.root:
             self.root = new_root

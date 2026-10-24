@@ -2,7 +2,7 @@
 """独立校验 fpk 包内容：解开 app.tgz，逐项断言本轮改动都进包了。
 
 不依赖 build.sh 的输出，只看真实字节。
-    python tools/verify_pkg.py dist/nvr-0.9.41_x86.fpk
+    python tools/verify_pkg.py dist/nvr-0.9.55_x86.fpk
 """
 import hashlib
 import io
@@ -63,10 +63,10 @@ MUST_HAVE_UI = [
     # 0.9.24：四段手风琴 + 缩时三层 + 影响预估
     "function camAcc",
     'data-acc="',
-    'data-cond="1"',
+    # 0.9.44：每路 condense 布尔总开关退役 → 缩时方案四选（master 开关不再存在）
+    'data-cmcam="',
     'data-adv="1"',
     'data-outopen="1"',
-    'class="master"',
     'class="impact"',
     "function judgeDrift",
     "function judgeAdvLine",
@@ -164,8 +164,20 @@ MUST_HAVE_UI = [
     "function pHeatJump",
     ".phone.land .p-heat{display:none}",
     "renderPlayerHeat();          /* 热力格高亮跟随当前片段，切段自动刷新 */",
+    # 0.9.54：全屏画面不裁剪（contain 回退）+ 舞台整屏 + 操作条悬浮
+    "body.fsmode #page-play.on .pstage{position:absolute;inset:0;",
+    "body.fsmode #page-play.on .pstage video{object-fit:contain}",
+    "aspect-ratio:var(--vasp,16/9)",
+    'st.style.setProperty("--vasp"',
+    # 0.9.55：横屏按钮排进左右黑边（rail）+ 旋转态时间轴自己换算拖动
+    "body.fsmode #page-play.on.rail .pops{",
+    "function syncRail",
+    "body.rot .vtlscroll{touch-action:none}",
+    "sc.scrollTop = drag.top + (e.touches[0].clientX - drag.x)",
 ]
 MUST_NOT_HAVE_UI = [
+    # 0.9.54：全屏视频不能再出现 cover（真机上竖屏裁两侧、横屏裁上下）
+    "body.fsmode #page-play.on .pstage video{object-fit:cover}",
     # 第 2 项删掉的实时占用
     'id="resCpu"',
     'id="resMem"',
@@ -312,7 +324,7 @@ MUST_HAVE_SRV = {
     "server/sysinfo.py": [
         "_TICK = (0.0, 0.0, 0.0)",
     ],
-    "server/runtime.py": ['VERSION = "0.9.41"',
+    "server/runtime.py": ['VERSION = "0.9.55"',
                           'record_dir": "/vol1/@appshare/nvr-output"',
                           '"service_port": 18080',
                           "def probe_record_dir",
@@ -383,8 +395,8 @@ def main(path):
     mf = blobs["manifest"].decode("utf-8", "replace")
     import re as _re
     vline = _re.search(r"(?m)^\s*version\s*=\s*(\S+)", mf)
-    chk(bool(vline) and vline.group(1) == "0.9.41",
-        "manifest 版本号不是 0.9.41：%s" % (vline.group(1) if vline else "无"))
+    chk(bool(vline) and vline.group(1) == "0.9.55",
+        "manifest 版本号不是 0.9.55：%s" % (vline.group(1) if vline else "无"))
     print("manifest 版本行：%s"
           % [l for l in mf.splitlines() if l.strip().startswith("version")])
 
@@ -478,4 +490,4 @@ def main(path):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1] if len(sys.argv) > 1
-                  else "dist/nvr-0.9.41_x86.fpk"))
+                  else "dist/nvr-0.9.55_x86.fpk"))

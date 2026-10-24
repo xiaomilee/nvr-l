@@ -256,8 +256,87 @@ class TestConfig(unittest.TestCase):
 
     def test_defaults_present(self):
         for k in ("record_enable", "record_segment_sec", "link_mode",
-                  "link_interval_h", "link_max_queue"):
+                  "link_interval_h", "link_max_queue", "condense_mode"):
             self.assertIn(k, runtime.DEFAULTS)
+
+
+class TestLedgerPipeline(unittest.TestCase):
+    """判定 → 台账 →（按方案）导出 这条链的行为。
+
+    不起真 ffmpeg：monkeypatch condense.analyze 给固定结论，验三件事——
+    virtual 只写台账不导出；off 不入队；方案切换会作废 done 集合。
+    """
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="nvrlg")
+        self.var = tempfile.mkdtemp(prefix="nvrlgv")
+        self.day = "2026-10-23"
+        self.src = os.path.join(self.root, "车库入口", self.day, "08-12-00.mp4")
+        touch(self.src, 64)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.var, ignore_errors=True)
+
+    def make(self, cam_over=None, cfg_over=None):
+        cam = {"id": "cam-01", "name": "车库入口", "dir_name": "车库入口"}
+        cam.update(cam_over or {})
+        cfg = {"condense_mode": "virtual"}
+        cfg.update(cfg_over or {})
+        return link_mod.Link("ffmpeg", "ffprobe", self.root, self.var,
+                             [cam], cfg, log=lambda m: None)
+
+    def fake_analyze(self, windows, ratio=0.09):
+        orig = condense.analyze
+
+        def stub(ffprobe, src, a, timeout=180, ignore=None, ffmpeg=None):
+            return {"windows": windows, "packets": 10, "duration": 300.0,
+                    "bytes": 1, "threshold": 1, "active_ratio": ratio,
+                    "silent": not windows, "ignored_regions": 0,
+                    "error": "", "engine": "bytes"}
+        condense.analyze = stub
+        return orig
+
+    def item(self):
+        return {"key": "k1", "path": self.src, "cam": "cam-01",
+                "dir": "车库入口", "name": "车库入口", "mtime": 0, "style": "join"}
+
+    def test_virtual_writes_ledger_only(self):
+        lk = self.make()
+        orig = self.fake_analyze([[3.0, 30.0]])
+        try:
+            r = lk._process(self.item())
+        finally:
+            condense.analyze = orig
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["ledger_only"])
+        self.assertFalse(os.path.exists(os.path.join(self.root, "_clip")))
+        import ledger
+        ev = ledger.events_of(ledger.load(self.root, "车库入口", self.day))
+        self.assertEqual(len(ev), 1)
+        self.assertAlmostEqual(ev[0]["s"], 8 * 3600 + 12 * 60 + 3.0, places=1)
+        self.assertAlmostEqual(ev[0]["e"], 8 * 3600 + 12 * 60 + 30.0, places=1)
+
+    def test_off_never_enqueues(self):
+        lk = self.make(cam_over={"condense_mode": "off"})
+        self.assertEqual(lk._new_items(), [])
+
+    def test_materialize_still_exports(self):
+        lk = self.make(cam_over={"condense_mode": "materialize"})
+        orig = self.fake_analyze([[3.0, 30.0]])
+        try:
+            r = lk._process(self.item())
+        finally:
+            condense.analyze = orig
+        # 没有 ffmpeg（假的）导出会失败，但绝不能走 ledger_only 分支
+        self.assertFalse(r.get("ledger_only"))
+
+    def test_mode_switch_resets_done(self):
+        lk = self.make(cfg_over={"condense_mode": "virtual"})
+        lk.done.add("abc")
+        lk.set_cameras([{"id": "cam-01", "name": "车库入口", "dir_name": "车库入口",
+                         "condense_mode": "materialize"}])
+        self.assertEqual(lk.done, set())
 
 
 if __name__ == "__main__":

@@ -184,6 +184,37 @@ def main():
         d = json.loads(b)
         check("/api/live 正常", s == 200 and d.get("ok"), (s, b[:80]))
 
+        # ---- 台账 / 缩时方案（Aqara 式） ----
+        s, b = req("/api/config")
+        d = json.loads(b)
+        check("GET /api/config 带回 condense_mode 默认 virtual",
+              d.get("config", {}).get("condense_mode") == "virtual",
+              d.get("config", {}).get("condense_mode"))
+        s, b = req("/api/ledger?cam=cam-01&date=" + day)
+        d = json.loads(b)
+        check("/api/ledger 返回窗口与可用性", s == 200 and d.get("ok") is True
+              and isinstance(d.get("events"), list)
+              and d.get("avail", {}).get("full"), (s, b[:120]))
+        check("/api/ledger 模式解析为 virtual", d.get("mode") == "virtual", d.get("mode"))
+        s, b = req("/api/archive")
+        d = json.loads(b)
+        check("/api/archive 返回归档面板载荷",
+              s == 200 and d.get("ok") is True and "todo_count" in d
+              and "next_run" in d and "policy" in d, (s, b[:120]))
+        check("/api/archive 默认开启且保留 90 天",
+              d.get("enable") is True and d.get("archive_days") == 90,
+              (d.get("enable"), d.get("archive_days")))
+        s, b = req("/api/storage/usage")
+        d = json.loads(b)
+        check("/api/storage/usage 三类占用 + 台账",
+              s == 200 and "archive" in d and "ledger" in d, (s, b[:120]))
+        s, b = req("/api/ledger?cam=cam-01&date=bad-date")
+        d = json.loads(b)
+        check("/api/ledger 拒绝坏日期", s == 200 and d.get("ok") is False, (s, b[:80]))
+        s, b = req("/api/ledger?cam=no-such&date=" + day)
+        d = json.loads(b)
+        check("/api/ledger 拒绝未知通道", s == 200 and d.get("ok") is False, (s, b[:80]))
+
         s, b = req("/")
         check("首页可打开", s == 200 and b"<html" in b.lower(), b[:40])
 

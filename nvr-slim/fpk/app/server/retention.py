@@ -11,9 +11,10 @@
 按日期目录删的好处是三个可预测：用量可预测（每天固定量）、删除量可预测
 （正好一天的量）、时间可预测（凌晨固定时刻）。代价是当天多留一点空间。
 
-每个摄像头两类数据各有各的周期：
-    全时录像   <root>/<cam>/<YYYY-MM-DD>/*.mp4     默认 4 天（体积大）
-    缩时片段   <root>/_clip/<cam>/<YYYY-MM-DD>/*.mp4  默认 90 天（体积小）
+每个摄像头各类数据各有各的周期：
+    全时录像   <root>/<cam>/<YYYY-MM-DD>/*.mp4          默认 4 天（体积大）
+    归档片段   <root>/_archive/<cam>/<YYYY-MM-DD>/*.mp4  默认 90 天
+    缩时片段   <root>/_clip/<cam>/<YYYY-MM-DD>/*.mp4     默认 90 天（体积小）
 
 "保留 N 天" = 今天 + 前 N-1 天。所以 N=1 表示只留今天。
 """
@@ -24,14 +25,17 @@ from datetime import date, datetime, timedelta
 DEFAULTS = {
     "cleanup_at": "03:00",     # 每天几点清理（本地时间）
     "full_days": 4,            # 每路全时录像保留天数（可被摄像头级覆盖）
+    "archive_days": 90,        # 归档片段保留天数（_archive，可被摄像头级覆盖）
     "clip_days": 90,           # 每路缩时片段保留天数
 }
 
-KIND_DIR = {"full": "", "clip": "_clip"}
-KIND_LABEL = {"full": "全时录像", "clip": "缩时片段"}
-KIND_DAYS_KEY = {"full": "full_days", "clip": "clip_days"}
+KIND_DIR = {"full": "", "archive": "_archive", "clip": "_clip"}
+KIND_LABEL = {"full": "全时录像", "archive": "归档片段", "clip": "缩时片段"}
+KIND_DAYS_KEY = {"full": "full_days", "archive": "archive_days",
+                 "clip": "clip_days"}
 
-LIMITS = {"full_days": (1, 30), "clip_days": (1, 3650)}
+LIMITS = {"full_days": (1, 30), "archive_days": (1, 3650),
+          "clip_days": (1, 3650)}
 
 
 # ---------------------------------------------------------------- 时间
@@ -96,6 +100,8 @@ def camera_retention(cam, cam_cfg):
     c = cam_cfg or {}
     return {
         "full_days": clamp_days("full_days", c.get("full_days", DEFAULTS["full_days"])),
+        "archive_days": clamp_days("archive_days",
+                                   c.get("archive_days", DEFAULTS["archive_days"])),
         "clip_days": clamp_days("clip_days", c.get("clip_days", DEFAULTS["clip_days"])),
     }
 
@@ -117,7 +123,8 @@ def _dir_stats(path):
     return size, files, protected
 
 
-def plan(root, cameras, cam_cfg=None, today=None, kinds=("full", "clip")):
+def plan(root, cameras, cam_cfg=None, today=None,
+         kinds=("full", "archive", "clip")):
     """算一遍要删什么，不真删。返回的结构直接给 UI 预览用。
 
     三条硬保护：
