@@ -6560,19 +6560,21 @@ function recalcDayList(){
   state.dayIdx = idx;
 }
 let recRetry = 0;
-function fetchRecordings(){
-  if(typeof fetch !== "function") return;
+function fetchRecordings(done){
+  if(typeof fetch !== "function"){ if(done) done(); return; }
   /* ?_t + no-store 双保险：WebView 曾把空录像清单缓存住，导致回放页永远「无视频文件」 */
   fetch("/api/recordings?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" }).then(r=>r.json()).then(d=>{
-    if(!d || !d.ok) return;
+    if(!d || !d.ok){ if(done) done(); return; }
     state.rec = d;
     recRetry = 0;
     recalcDayList();
     renderDates(); renderOverview(); renderHeat(); renderClips();
     applyPlaybackVisibility();
     try{ renderPlay(); }catch(e){}   /* 回放页若开着，吃到新清单后重绘日期条 */
+    if(done) done();
   }).catch(()=>{
-    if(recRetry++ < 3) setTimeout(fetchRecordings, 2500);   // 服务刚重启时给几次机会
+    if(recRetry++ < 3) setTimeout(function(){ fetchRecordings(done); }, 2500);   // 服务刚重启时给几次机会
+    else if(done) done();
   });
 }
 
@@ -7037,7 +7039,7 @@ const PV_ROLL = 3.0;
 /* filter：full=全时连播；act=活动连播（按预设跳过静止段）。
    speed：全时/平时的倍速（浏览器上限 16×）；silent 仍是活动模式下静止段的预设方案。 */
 const PPLAY = { on:false, filter:"full", silent:"skip",
-                day:null, camId:null, segs:[], segIdx:-1, t:0, ff:null, speed:1 };
+                day:null, camId:null, segs:[], segIdx:-1, t:0, ff:null, speed:1, endHit:false };
 /* 归档面板状态：sum=候选摘要文案；arm=预览已出待确认；out=最近一次结果 */
 const ARCH = { sum:"", out:"", arm:null, at:0, loading:false };
 try{
@@ -7126,10 +7128,30 @@ function pvAdvance(){
   if(!PPLAY.on) return;
   const tgt = pvNextTarget();
   if(!tgt){
-    pvStop();
-    toast("toast2", PPLAY.filter === "act" ? "已播完今天最后一个活动" : "已播到今天最后一段录像");
+    /* 列表尽头 ≠ 磁盘尽头：进页时的段列表是快照，正在录的 .part 不在其中，
+       播放期间新分片还会陆续封口。先重拉一次清单再判，确实没有才收播
+       （0.9.56：修「已播到今天最后一段录像」误报——时间轴蓝轨比段列表新） */
+    if(!PPLAY.endHit){
+      PPLAY.endHit = true;
+      fetchRecordings(function(){
+        if(!PPLAY.on) return;              // 等待刷新时用户已停播
+        if(PPLAY.filter === "act"){
+          pvRefreshLedger(function(){      // 活动模式的目标来自台账，也刷新一次
+            if(!PPLAY.on) return;
+            if(pvNextTarget()){ pvAdvance(); return; }
+            pvFinish();
+          });
+          return;
+        }
+        if(pvNextTarget()){ pvAdvance(); return; }
+        pvFinish();
+      });
+      return;
+    }
+    pvFinish();
     return;
   }
+  PPLAY.endHit = false;   // 正常推进，恢复「尽头重试」资格
   /* 静止段快进：不 seek，继续播但加速静音，到下一活动起点恢复原速。
      注意先 pvPlayAt 再设 ff（pvPlayAt 内部会清 ff，顺序反了会被吃掉） */
   if(PPLAY.filter === "act" && PPLAY.silent !== "skip"){
@@ -7144,6 +7166,35 @@ function pvAdvance(){
     return;
   }
   pvPlayAt(tgt.t, { quiet:true });
+}
+
+/* 播完收尾：全时模式下，若最后一段的覆盖窗刚过（下一段此刻应正在录），
+   把话说准——不是「最后一段录像」，是「下一段录制中」 */
+function pvEndMsg(){
+  if(PPLAY.filter === "act") return "已播完今天最后一个活动";
+  const segs = PPLAY.segs, last = segs && segs[segs.length - 1];
+  if(last){
+    const rec = state.rec || {};
+    const segLen = Math.max(10, Math.min(3600, +(rec.segment_sec || LK.segSec || 300)));
+    if(Date.now() / 1000 < last.e + segLen) return "已播到最新一段，下一段录制中";
+  }
+  return "已播到今天最后一段录像";
+}
+function pvFinish(){
+  pvStop();
+  toast("toast2", pvEndMsg());
+}
+
+/* 只刷新台账数据不动画面（播放中重绘会晃动滚动位置），给活动模式尽头重试用 */
+function pvRefreshLedger(done){
+  const day = curDay();
+  if(!state.camId || !day){ if(done) done(); return; }
+  fetch("/api/ledger?cam=" + encodeURIComponent(state.camId) + "&date=" + day,
+        {mode:"same-origin", cache:"no-store"})
+    .then(r=>r.json()).then(d=>{
+      if(d && d.ok){ vtlData = d; vtlDay = day; }
+      if(done) done();
+    }).catch(()=>{ if(done) done(); });
 }
 
 /* 倍速设定：活动模式快进时按预设 16/32×（浏览器上限 16）+ 静音；平时按用户倍速 */
@@ -7227,6 +7278,7 @@ function pvLoadDay(){
     PPLAY.segIdx = -1; PPLAY.t = 0;
   }
   PPLAY.segs = (state.camId && day ? realSegs(state.camId, day, "full") : []) || [];
+  PPLAY.endHit = false;   // 新清单装好，「尽头重试」资格恢复
   const cam = CAMERAS.find(c=>c.id === state.camId);
   const oc = document.getElementById("playOsdCam");
   if(oc) oc.textContent = cam ? cam.ch : "—";
