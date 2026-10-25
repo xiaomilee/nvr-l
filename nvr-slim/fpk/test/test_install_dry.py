@@ -33,6 +33,12 @@ def _read(path):
 class TestInstallCallbackDryRun(unittest.TestCase):
     def _stage(self):
         work = tempfile.mkdtemp(prefix="nvrdry")
+        # 必须自己收拾：app/vendor 里是 numpy/onnxruntime 的 wheel，整份复制一次
+        # 约 88 MB。本文件有 4 个用例、每个还会在 _run_install 里再 stage 一次，
+        # 一轮 build.sh 就是 5~6 个目录 / 600 MB。以前没有 addCleanup，2026-10-26
+        # 在开发机 TEMP 里堆了 95 个共 9.2 GB，C 盘只剩 9.9 GB。
+        # addCleanup 在 tearDown 之后跑，用例失败/patch 报错也照样回收。
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
         app = os.path.join(work, "app")
         shutil.copytree(os.path.join(ROOT, "app"), app,
                         ignore=shutil.ignore_patterns("__pycache__"))
@@ -105,6 +111,20 @@ class TestInstallCallbackDryRun(unittest.TestCase):
         cfg, _ = self._run_install({}, app=app, var=var)
         self.assertEqual(cfg["service_port"], 18099, "升级不得改动用户端口")
         self.assertEqual(cfg["record_dir"], old_rec, "升级不得改动用户目录")
+
+    def test_stage_recycles_its_temp_dir(self):
+        """临时目录必须自己回收。
+
+        2026-10-26 开发机 TEMP 里堆了 95 个 nvrdry、合计 9.2 GB，C 盘只剩 9.9 GB ——
+        每一轮 build.sh 都悄悄多留 5~6 个 88 MB 的 app 副本。这条回归不是「测删除」，
+        而是钉住「_stage 必须注册 cleanup」这个约定，防止以后重构时又把
+        addCleanup 掉。
+        """
+        work, app = self._stage()
+        self.assertTrue(os.path.isdir(app), "暂存目录应已建好")
+        self.doCleanups()          # 模拟 tearDown：真按注册顺序执行回收
+        self.assertFalse(os.path.exists(work),
+                         "临时目录 %s 没被回收 —— _stage 丢了 addCleanup？" % work)
 
 
 if __name__ == "__main__":

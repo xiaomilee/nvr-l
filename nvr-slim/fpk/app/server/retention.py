@@ -25,7 +25,7 @@ from datetime import date, datetime, timedelta
 DEFAULTS = {
     "cleanup_at": "03:00",     # 每天几点清理（本地时间）
     "full_days": 4,            # 每路全时录像保留天数（可被摄像头级覆盖）
-    "archive_days": 90,        # 归档片段保留天数（_archive，可被摄像头级覆盖）
+    "archive_days": 7,         # 归档片段保留天数（_archive，可被摄像头级覆盖）
     "clip_days": 90,           # 每路缩时片段保留天数
 }
 

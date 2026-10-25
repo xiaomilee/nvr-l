@@ -324,8 +324,9 @@ MUST_HAVE_SRV = {
     "server/sysinfo.py": [
         "_TICK = (0.0, 0.0, 0.0)",
     ],
-    "server/runtime.py": ['VERSION = "0.9.55"',
-                          'record_dir": "/vol1/@appshare/nvr-output"',
+    # 版本号不写死：从包名 nvr-<ver>_x86.fpk 取，两边必须一致
+    # （写死就会像 0.9.55→0.9.56 那样每次升版本都红一次）
+    "server/runtime.py": ['record_dir": "/vol1/@appshare/nvr-output"',
                           '"service_port": 18080',
                           "def probe_record_dir",
                           # 0.9.38：通用切分方式（每路可覆盖）
@@ -395,8 +396,27 @@ def main(path):
     mf = blobs["manifest"].decode("utf-8", "replace")
     import re as _re
     vline = _re.search(r"(?m)^\s*version\s*=\s*(\S+)", mf)
-    chk(bool(vline) and vline.group(1) == "0.9.55",
-        "manifest 版本号不是 0.9.55：%s" % (vline.group(1) if vline else "无"))
+    # 期望版本从包名推导：dist/nvr-<ver>_<platform>.fpk。
+    # 不写死常量——每次升版本改一遍常量，忘了就红（0.9.55→0.9.56 踩过）。
+    import os as _os
+    want_ver = ""
+    mm = _re.search(r"-([0-9]+\.[0-9]+\.[0-9]+)_", _os.path.basename(path))
+    if mm:
+        want_ver = mm.group(1)
+    chk(bool(vline) and vline.group(1) == want_ver,
+        "manifest 版本号不是 %s：%s" % (want_ver, vline.group(1) if vline else "无"))
+    # runtime.VERSION 必须与 manifest 同源（诊断页版本对不上就是这两处改漏一处）
+    rt = blobs.get("app.tgz")
+    if rt:
+        import io as _io, tarfile as _tf
+        try:
+            inner = _tf.open(fileobj=_io.BytesIO(rt), mode="r:gz")
+            rb = inner.extractfile("server/runtime.py").read().decode("utf-8", "replace")
+            rv = _re.search(r'VERSION\s*=\s*"([^"]+)"', rb)
+            chk(bool(rv) and rv.group(1) == want_ver,
+                "runtime.VERSION 不是 %s：%s" % (want_ver, rv.group(1) if rv else "无"))
+        except Exception as e:
+            chk(False, "读 app.tgz/server/runtime.py 失败：%s" % e)
     print("manifest 版本行：%s"
           % [l for l in mf.splitlines() if l.strip().startswith("version")])
 
@@ -490,4 +510,4 @@ def main(path):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1] if len(sys.argv) > 1
-                  else "dist/nvr-0.9.55_x86.fpk"))
+                  else "dist/nvr-0.9.60_x86.fpk"))

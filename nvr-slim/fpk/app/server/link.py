@@ -34,6 +34,24 @@ import ledger
 import params
 import recorder
 import runtime
+import detect
+
+
+def _merge_windows(wins, gap=2.0):
+    """帧差窗口 + AI 窗口并集（0.9.60）：排序合并，gap 秒内相接的并成一段。
+
+    两边都是「分片内秒」区间。AI 窗口来自检测（±1s 余量），与帧差窗口
+    重叠/相接时合并，切点取并集——避免同一事件被切成两段导出。
+    """
+    ws = sorted([[float(s), float(e)] for s, e in (wins or []) if float(e) > float(s)],
+                key=lambda x: x[0])
+    out = []
+    for s, e in ws:
+        if out and s - out[-1][1] <= gap:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return [[round(s, 2), round(e, 2)] for s, e in out]
 
 
 def _fingerprint(profile):
@@ -66,7 +84,7 @@ def item_key(src, root, cam_id, profile, ignore=None, style="join"):
 
 class Link:
     def __init__(self, ffmpeg, ffprobe, root, var_dir, cameras, cfg,
-                 log=None, on_done=None):
+                 log=None, on_done=None, notifier=None):
         self.ffmpeg = ffmpeg
         self.ffprobe = ffprobe
         self.root = root
@@ -75,6 +93,7 @@ class Link:
         self.cfg = cfg
         self.log = log or (lambda m: None)
         self.on_done = on_done
+        self.notifier = notifier      # Notifier.offer(cam_name, "motion")，None=不通知
 
         # 统一走 runtime 的夹取函数：`x or 默认值` 会把 0 悄悄吞成默认值，
         # 而 0 在这里是"用户设错了"，应该夹到下限 1 而不是变成 6
@@ -425,6 +444,49 @@ class Link:
 
     # ------------------------------------------------------------ 消费
 
+    def _notify_motion(self, it, res):
+        """帧差判定有活动窗口 → 移动侦测通知入队（开关与 cooldown 在 Notifier 里）。"""
+        if not self.notifier or not (res.get("windows") or []):
+            return
+        try:
+            self.notifier(it.get("name") or it["cam"], "motion")
+        except Exception:
+            pass
+
+    def _ai_windows(self, dname, date_dir, src_name):
+        """同分片 AI 台账窗口（当天钟点秒 → 分片内秒），已过 trigger 闸。
+
+        读 ai:<src_name> 源（detect worker 每 5 分钟桶写一份）。没有 AI 数据、
+        台账读失败、或全部窗口被 trigger 闸剔除 → 空列表（调用方按纯帧差走）。
+        """
+        if not (date_dir and src_name):
+            return []
+        try:
+            det = self.cfg.get("detect") if isinstance(self.cfg.get("detect"), dict) else {}
+            trig = det.get("trigger") if isinstance(det.get("trigger"), dict) \
+                else detect.DETECT_DEFAULTS["trigger"]
+            d = ledger.load(self.root, dname, date_dir)
+            srcs = (d or {}).get("sources") or {}
+            ai = srcs.get("ai:%s" % src_name)
+            if not isinstance(ai, dict):
+                return []
+            start = float(ai.get("start") or 0.0)
+            out = []
+            for w in (ai.get("windows") or []):
+                try:
+                    s, e = float(w[0]), float(w[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                cls = w[2] if len(w) > 2 and isinstance(w[2], dict) else None
+                if not detect.trigger_ok(cls, trig):
+                    continue          # 未勾选类别时段：按静止画面剔除
+                if e > s:
+                    out.append((s - start, e - start))
+            return out
+        except Exception as e:
+            self.log("AI 台账读取失败（按纯帧差继续）：%r" % e)
+            return []
+
     def _process(self, it):
         src = it["path"]
         if not os.path.isfile(src):
@@ -472,14 +534,24 @@ class Link:
                 self.log("台账写入失败 %s/%s/%s" % (it.get("dir") or it["cam"],
                                               date_dir, os.path.basename(src)))
 
+        # AI 检测窗口合并（0.9.60）：同一分片的 ai:<src> 台账源里记着这一片
+        # 检到的人/车窗口（原始 cls，未过闸）。物化切割前先过 trigger 闸
+        # ——未勾选类别产生的时段按静止画面剔除，不进切片。帧差窗口照旧。
+        windows = list(res.get("windows") or [])
+        ai_wins = self._ai_windows(it.get("dir") or it["cam"], date_dir,
+                                   os.path.basename(src))
+        if ai_wins:
+            windows = _merge_windows(windows + ai_wins)
+
         # 虚拟缩时：判定完就收工，不产出任何视频文件。画面回放全靠全时录像
         # 按需 seek，常驻重编码归零 —— 这正是无核显机器上最大的收益。
         if self.condense_mode_of(it["cam"]) == "virtual":
+            self._notify_motion(it, res)
             return {"ok": True, "silent": bool(res.get("silent")),
                     "ledger_only": True, "bytes_in": size_in, "bytes_out": 0,
                     "detail": res}
 
-        if res["silent"]:
+        if res["silent"] and not ai_wins:
             # 整段没有值得留的变化：不产出文件，只记账。
             # 源文件不删 —— 全时录像的删除权归保留策略，压缩层不能越界。
             return {"ok": True, "silent": True, "bytes_in": size_in,
@@ -489,7 +561,7 @@ class Link:
         if it.get("style") == "split":
             # 活动切片：每个区间独立成片（帧级切点，QSV 失败自动回落软编/流复制）
             w = condense.write_split(self.ffmpeg, src, out[:-4],
-                                     res["windows"],
+                                     windows,
                                      os.path.join(self.var_dir, "tmp", it["key"]),
                                      hw="qsv",
                                      speed=self.clip_speed_of(it["cam"]))
@@ -505,7 +577,7 @@ class Link:
             return {"ok": True, "silent": False, "bytes_in": size_in,
                     "bytes_out": size_out, "out": out, "detail": res,
                     "parts": w.get("parts", 0)}
-        w = condense.write_one(self.ffmpeg, src, out, res["windows"],
+        w = condense.write_one(self.ffmpeg, src, out, windows,
                                os.path.join(self.var_dir, "tmp", it["key"]),
                                speed=self.clip_speed_of(it["cam"]))
         if not w["ok"]:

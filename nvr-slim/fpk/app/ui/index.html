@@ -21,6 +21,9 @@ if(d)document.documentElement.dataset.theme="dark";}catch(e){}})();</script>
   --fill:#eef1f5; --track:#e3e7ee; --sw-off:#dfe3ea; --hover:#fbfcfd;
   --primary-soft2:#e0e9ff; --primary-line:#c8d8ff; --warn-fg:#8a5a00;
   --stage:#e9ebf0; --dot:#2b3a55; --live:#22b573;
+  /* 事件类别色（0.9.62，0.9.67 定版）：橙=移动侦测 蓝=人员 绿=车辆（含两轮车）。
+     车辆原来用紫，3px 细线上和蓝分不出来，换成绿后三者色相拉开 40°/220°/145° */
+  --ev-veh:#0f9d58;
   --pw:390px; --ph:844px;
 }
 /* 深色：跟随系统（html[data-theme=dark]，由 head 内联脚本与下方 THEME 引擎控制） */
@@ -35,6 +38,7 @@ html[data-theme="dark"]{
   --fill:#242833; --track:#2c313c; --sw-off:#3b4250; --hover:#232830;
   --primary-soft2:#263352; --primary-line:#35476e; --warn-fg:#e6c07c;
   --stage:#0a0c10; --dot:#8fa0bd; --live:#2fd08b;
+  --ev-veh:#34d399;
 }
 html[data-theme="dark"] .card{box-shadow:0 1px 2px rgba(0,0,0,.45)}
 html[data-theme="dark"] .toast{background:rgba(8,10,14,.94)}
@@ -415,6 +419,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .btnline{width:100%;height:37px;border-radius:10px;background:var(--primary-soft);color:var(--primary);
   font-size:13px;font-weight:500;margin-top:10px}
 .btnline:active{background:var(--primary-soft2)}
+/* 待确认态（0.9.64）：与「删除」的 .delbtn.armed 同一套语言——误触只变色不变天 */
+.btnline.armed{background:var(--warn-soft);color:var(--warn-fg)}
 .logbox{background:#0e1013;color:#d5dbe4;border-radius:10px;padding:10px 12px;margin-top:10px;
   height:190px;overflow-y:auto;font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;
   font-size:11px;line-height:1.6}
@@ -930,6 +936,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .strow .vv em{display:block;font-style:normal;font-size:9px;color:var(--faint)}
 .dline{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.6}
 .dline b{color:var(--text2);font-weight:600}
+/* 键值对形式的 dline（AI 检测诊断卡用）：左标签右值，长值自动换行不撑破卡片 */
+.dline.kv{display:flex;align-items:baseline;gap:8px}
+.dline .k{flex:0 0 auto;min-width:74px;color:var(--faint)}
+.dline .v{flex:1;min-width:0;text-align:right;word-break:break-all}
 .pathchip{display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 9px;border-radius:8px;
   background:var(--fill);font-size:10px;color:var(--muted)}
 .pathchip code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
@@ -950,22 +960,66 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
    真正的 seek 连播随 P1 的常驻画面区一起落地。 */
 .vtl{position:relative;height:1500px}
 .vtl .vhour{position:absolute;left:0;right:0;border-top:1px solid var(--line);font-size:9.5px;color:var(--faint);padding:2px 0 0 6px;pointer-events:none}
-.vtl .vtrack{position:absolute;left:46px;width:24px;border-radius:3px;background:var(--track)}
-.vtl .vavail{position:absolute;left:46px;width:24px;border-radius:3px;background:var(--primary);opacity:.82}
-.vtl .vavail.arch{opacity:.4}
-/* 活动时段块：与蓝轨同列的橙色块，全时/活动筛选下都常亮（v0.9.48：
-   用户反馈全时模式看不到活动标记 —— 之前只在活动筛选时点亮，被蓝轨压住了） */
-.vtl .vevspan{position:absolute;left:46px;width:24px;border-radius:3px;background:var(--warn);opacity:.85;z-index:2;pointer-events:none}
+.vtl .vtrack{position:absolute;left:46px;width:60px;border-radius:3px;background:var(--track)}
+/* 画面可用性（有录像的时段）：0.9.69 起从「满饱和蓝」降到 30% 淡蓝。
+   以前它和人员色用同一个 --primary、只差 18% 透明度，人一走、尾巴一长，
+   整段深蓝尾巴压在深蓝底色上等于没画（用户 0.9.67 反馈「颜色区别不明显」
+   的同一个根因）。现在底色退成背景，橙/蓝/绿三色才是前景。 */
+.vtl .vavail{position:absolute;left:46px;width:60px;border-radius:3px;background:var(--primary);opacity:.3}
+.vtl .vavail.arch{opacity:.14}
+/* ---------- 事件类别色（0.9.62，0.9.67 三色定版）----------
+   时间轴「一眼分型」的公共口径：
+     橙 = 移动侦测（帧差，台账无 cls） · 蓝 = 人员 · 绿 = 车辆（含两轮车）
+   0.9.63 起车辆不再区分车型；0.9.67 把车辆色从紫换成绿 —— 紫和蓝在
+   3px 细线上几乎分不出来（用户反馈「颜色区别不明显」），橙/蓝/绿
+   三色相拉开约 40°/220°/145°，深浅主题下都一眼可辨。
+   色片（.c-*）给时段块与横线段共用；文字色（.t-*）给气泡摘要用。 */
+.c-motion{background:var(--warn)}
+.c-person{background:var(--primary)}
+.c-veh{background:var(--ev-veh)}
+.t-motion{color:var(--warn)}
+.t-person{color:var(--primary)}
+.t-veh{color:var(--ev-veh)}
+/* 活动时段块：全时/活动筛选下都常亮（v0.9.48：用户反馈全时模式看不到活动标记
+   —— 之前只在活动筛选时点亮，被蓝轨压住了）。
+   活动时段块（0.9.69 起与横线同一套三格）：以前是一整块 60px 宽的色块、
+   一律按主导类别上色——于是时间轴上出现两种「横线」：60px 的时段块和 19px
+   的类别线，用户看不出它们是同一件事的两种表达。
+   现在时段块也收进三格（左 1/3 移动侦测 · 中 1/3 人员 · 右 1/3 车辆），
+   每格的高度 = 这段持续多久（最小 4px 地板：默认 120px/h 下 2 秒只有
+   0.07px，不给地板等于没画）。头顶那根 3px 亮线是事件起点（.vmark），
+   尾巴是真实在场时长——「车来了」是线，「待了多久」是尾巴高度。 */
+.vtl .vevspan{position:absolute;left:46px;width:60px;z-index:2;pointer-events:none}
+.vtl .vevspan i{position:absolute;top:0;width:19px;border-radius:2px;display:block;opacity:.85}
+.vtl .vevspan i.mot{left:0}
+.vtl .vevspan i.per{left:20px}
+.vtl .vevspan i.veh{left:40px}
 .vtlcard.actmode .vtrack,.vtlcard.actmode .vavail{opacity:.16}
 .vtlcard.actmode .vavail.arch{opacity:.1}
-/* Aqara 式横线标注：细橙线一枚 = 一个（组）事件，点线弹标注气囊，点空白处跳播；
-   命中区 16px 高保证指尖可点，线只画 2px（与时刻线同粗细级） */
-.vtl .vmark{position:absolute;left:80px;right:8px;height:16px;margin-top:-8px;cursor:pointer;z-index:3}
-.vtl .vmark i{display:block;width:28px;height:2px;border-radius:2px;background:var(--warn);margin-top:7px}
-.vtl .vmark.grp i{width:46px}
-.vtl .vmark.on i{background:var(--primary)}
+/* Aqara 式横线标注：一枚 = 一个（组）事件，点线弹标注气囊，点空白处跳播。
+   命中区 18px 高保证指尖可点，线只画 3px（与时刻线同粗细级）。
+   0.9.67 三车道：加宽后的轨道 60px 三等分，每类各占 1/3、位置固定互不重叠——
+     左 1/3（left:0）   = 移动侦测（橙）
+     中 1/3（left:20px）= 人员（蓝）
+     右 1/3（left:40px）= 车辆（青绿，含两轮车）
+   没有的类别留空位，不画空线：位置本身就是类别语义，扫一眼不用看图例。
+   （0.9.63 那版是「车道①全宽移动侦测 + 车道②车中/人右」，两类信息挤在
+   同一条线上互相压；0.9.67 起三足鼎立，谁在左中右永远不变） */
+.vtl .vmark{position:absolute;left:46px;width:60px;height:18px;margin-top:-9px;cursor:pointer;z-index:3}
+.vtl .vmark .lanes{position:absolute;inset:0}
+/* 线在命中区里的落点：盒子 18px 高、margin-top:-9px（盒子中心 = 事件时刻），
+   3px 线要中心对齐盒子中心就该落在 7.5px。0.9.67 写的是 5px（线中心 6.5），
+   整整差 2.5px —— 默认 120px/h 下等于标记比真实时刻早 1 分 15 秒。 */
+.vtl .vmark .lanes i{position:absolute;top:7.5px;display:block;height:3px;border-radius:2px}
+.vtl .vmark .lanes i.mot{left:0;width:19px}
+.vtl .vmark .lanes i.per{left:20px;width:19px}
+.vtl .vmark .lanes i.veh{left:40px;width:19px}
+/* 类别筛选未命中的时段/横线整体变淡（0.9.60）：不是没录，是这一条不看你选的类别。
+   保留类别色只降透明度 —— 变淡的那条也该看得出来是哪一类 */
+.vtl .vevspan.dim{opacity:.18}
+.vtl .vmark.dim .lanes{opacity:.22}
 /* 标注气囊：点横线弹出，随轨道滚动，列表行/播放钮直接跳播 */
-.vbubble{position:absolute;left:76px;z-index:6;min-width:190px;max-width:272px;background:var(--surface);
+.vbubble{position:absolute;left:114px;z-index:6;min-width:190px;max-width:272px;background:var(--surface);
   border:1px solid var(--line);border-radius:13px;padding:10px 12px;
   box-shadow:0 14px 36px rgba(10,14,22,.26);cursor:default}
 .vbubble .bt{font-size:13px;font-weight:600;color:var(--text)}
@@ -974,13 +1028,19 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .vbubble .row:active{background:var(--hover)}
 .vbubble .row b{font-variant-numeric:tabular-nums}
 .vbubble .row .d{margin-left:auto;font-size:10.5px;color:var(--primary);white-space:nowrap}
+/* 事件气泡里的类别摘要（0.9.60）：加粗 + 类别色 + 小色片，和时间轴横线段同一套色。
+   顶部全天摘要（#vtlSum）复用同一套类，故不限定在 .vbubble 内。
+   色片类名用 cd 不用 d：.vbubble .row .d 是「播放 ▸」，会撞 */
+.clsw{display:inline-flex;align-items:center;gap:3px;font-weight:600;white-space:nowrap}
+.clsw .cd{display:block;width:8px;height:3px;border-radius:2px;flex:0 0 auto}
+.csep{color:var(--faint2);margin:0 1px}
 .vbubble .go{margin-top:8px;width:100%;height:30px;border-radius:9px;border:0;background:var(--primary);
   color:#fff;font-size:12px;font-weight:600;cursor:pointer;padding:0}
 /* 固定时刻线：钉在滚动视口自下而上 2/3 高度（top 由 JS 按 vtlscroll 实测位置设置），
    1px 红色细线无光晕只盖住轨道区，播放时时间轴内容在它下面向上滚（Aqara 式）；
    左侧时刻文字与线互相居中——线正好对准数字的中腰 */
 .vnowline{position:absolute;left:0;right:0;pointer-events:none;z-index:5;margin-top:-1px}
-.vnowline i{display:block;width:34px;height:1px;background:var(--danger);border-radius:1px;margin-left:41px}
+.vnowline i{display:block;width:64px;height:1px;background:var(--danger);border-radius:1px;margin-left:44px}
 .vnowline em{position:absolute;left:2px;top:0;transform:translateY(-50%);font-style:normal;font-weight:600;font-size:9px;
   color:var(--danger);background:var(--surface);border-radius:4px;padding:1px 3px;font-variant-numeric:tabular-nums}
 /* 回放页菜单栏：更矮更轻（仅回放页，不动其它页的 .hdr） */
@@ -1027,6 +1087,38 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .pseg{margin-left:auto;display:flex;background:var(--fill);border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .pseg button{border:0;background:none;color:var(--muted);font-size:11px;padding:5px 9px;cursor:pointer;font-family:inherit}
 .pseg button.on{background:var(--primary);color:#fff;font-weight:600}
+/* 活动类别筛选（0.9.60）：只在「活动」模式出现。三个全关 = 活动模式没有目标，
+   由点击拦截兜住（见 data-pvcls 绑定），不会出现空转。
+   pvcatwrap 把筛选 chips 与类别图例包在一起：全屏模式下整块变成右下角绝对定位，
+   图例叠在 chips 上方（0.9.62），两行共用同一个锚点，不会互相压 */
+.pvcatwrap{flex:0 0 auto}
+.pcat{display:none;align-items:center;gap:5px;margin:6px 12px 0;flex:0 0 auto}
+.pcat.on{display:flex}
+.pcatlab{font-size:11px;color:var(--faint2);margin-right:1px}
+.pcat button{border:1px solid var(--line);background:var(--fill);color:var(--muted);
+  font-size:11px;padding:4px 10px;border-radius:20px;cursor:pointer;font-family:inherit}
+.pcat button.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+body.fsmode #page-play.on .pvcatwrap{position:absolute;left:12px;right:12px;z-index:21;
+  bottom:calc(54px + env(safe-area-inset-bottom) + 6px);
+  display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+body.fsmode #page-play.on .pcat{margin:0;justify-content:flex-end}
+body.fsmode #page-play.on .pcat button{background:rgba(0,0,0,.45);border-color:rgba(255,255,255,.32);color:rgba(255,255,255,.86)}
+body.fsmode #page-play.on .pcat button.on{background:rgba(255,255,255,.94);color:#111;border-color:transparent}
+/* 类别图例（0.9.62，0.9.67 改三车道图示）：常驻，时间轴配色的一眼对照表。
+   每项带一枚 18×6 迷你轨道，色片落在轨道里的实际位置（左/中/右各 1/3），
+   图例本身就是「位置语义」的说明书。AI 没开（台账无 cls）时两个 AI 类别降透明度 */
+.evlegend{display:flex;align-items:center;gap:11px;margin:7px 12px 0;flex:0 0 auto;
+  font-size:10px;color:var(--faint2);line-height:1}
+.evlegend .lg{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.evlegend .lg .d{position:relative;display:block;width:18px;height:6px;border-radius:2px;flex:0 0 auto;
+  background:var(--track)}
+.evlegend .lg .d i{position:absolute;top:2px;display:block;height:2px;border-radius:1px}
+.evlegend .lg .d.mot i{left:0;width:6px}
+.evlegend .lg .d.per i{left:6px;width:6px}
+.evlegend .lg .d.veh i{left:12px;width:6px}
+.evlegend.noai .lg.ai{opacity:.3}
+body.fsmode #page-play.on .evlegend{margin:0;justify-content:flex-end;
+  color:rgba(255,255,255,.7);text-shadow:0 1px 2px rgba(0,0,0,.7)}
 /* 倍速弹层：从操作条向上弹的小网格 */
 .vspop{position:absolute;right:0;bottom:36px;z-index:24;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:5px;
   display:none;grid-template-columns:repeat(2,1fr);gap:3px;box-shadow:0 12px 30px rgba(10,14,22,.24)}
@@ -1230,6 +1322,24 @@ body.rot .vtlscroll{touch-action:none}
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
         </button>
       </div>
+      <!-- 活动类别筛选（0.9.60，0.9.67 起三类并列可筛）：只在「活动」模式出现，
+           时间轴上不命中的时段同步变淡。图例行常驻：每项带一枚迷你车道图示，
+           色片位置就是时间轴里的实际位置（左 1/3 / 中 1/3 / 右 1/3） -->
+      <div class="pvcatwrap">
+        <div class="pcat" id="pvCatRow">
+          <span class="pcatlab">只看</span>
+          <button data-pvcls="motion">移动侦测</button>
+          <button data-pvcls="person">人员</button>
+          <button data-pvcls="vehicle">车辆</button>
+        </div>
+        <!-- 默认带 noai（AI 类别降透明度）：等台账回来确认真有 AI 事件再点亮，
+             不摆用不上的色 -->
+        <div class="evlegend noai" id="evLegend">
+          <span class="lg"><i class="d mot"><i class="c-motion"></i></i>移动侦测</span>
+          <span class="lg ai"><i class="d per"><i class="c-person"></i></i>人员</span>
+          <span class="lg ai"><i class="d veh"><i class="c-veh"></i></i>车辆</span>
+        </div>
+      </div>
       <div class="vtlcard" id="vtlCard">
         <div class="heatcap">
           <b id="vtlTitle">全天</b>
@@ -1411,13 +1521,13 @@ body.rot .vtlscroll{touch-action:none}
 let demoSeeded = false;
 const CAMERAS = [
   { id:"cam-01", name:"车库入口", ch:"CH01", res:"4MP",   online:true,
-    main:"rtsp://192.168.2.108:8554/ch1", sub:"rtsp://192.168.2.108:8554/ch3" },
+    main:"rtsp://192.0.2.10:8554/ch1", sub:"rtsp://192.0.2.10:8554/ch3" },
   { id:"cam-02", name:"一楼大堂", ch:"CH02", res:"4MP",   online:true,
-    main:"rtsp://192.168.2.116:554/Streaming/Channels/101", sub:"rtsp://192.168.2.116:554/Streaming/Channels/102" },
+    main:"rtsp://192.0.2.16:554/Streaming/Channels/101", sub:"rtsp://192.0.2.16:554/Streaming/Channels/102" },
   { id:"cam-03", name:"货梯走廊", ch:"CH03", res:"1080p", online:true,
-    main:"rtsp://192.168.2.121:554/cam/realmonitor?channel=1&subtype=0", sub:"rtsp://192.168.2.121:554/cam/realmonitor?channel=1&subtype=1" },
+    main:"rtsp://192.0.2.21:554/cam/realmonitor?channel=1&subtype=0", sub:"rtsp://192.0.2.21:554/cam/realmonitor?channel=1&subtype=1" },
   { id:"cam-04", name:"后门通道", ch:"CH04", res:"1080p", online:true,
-    main:"rtsp://192.168.2.130:554/video1", sub:"rtsp://192.168.2.130:554/video2" },
+    main:"rtsp://192.0.2.30:554/video1", sub:"rtsp://192.0.2.30:554/video2" },
 ];
 
 /* 录像引擎（全时存储）设置 */
@@ -1630,6 +1740,10 @@ function defaultCamParams(cam, i){
     clipDays: 10,
     /* 单路分片长度（秒）；0 = 跟随「通用设置」。这是真正写进 ffmpeg 命令行的值 */
     segSec: 0,
+    /* AI 检测（0.9.60）：follow=跟随全局总闸与类别；on/off 显式覆盖本路。
+       detectCls 三键完整状态，缺键一律 False（服务端口径一致，不会偷偷补全局） */
+    detect: "follow",
+    detectCls: { person:true, two_wheeler:true, vehicle:true },
     masks: { ignore:[] }
   };
 }
@@ -1688,6 +1802,9 @@ function refreshRes(){
     .then(r=> r.json())
     .then(d=>{
       if(!d || d.ok === false) throw new Error((d && d.error) || "status 失败");
+      /* AI 检测 / 通知状态快照：设置页状态行与诊断卡吃这份 */
+      if(d.detect){ DET.st = d.detect; }
+      if(d.notify){ NT.st = d.notify; }
       const r = d.res || {};
       RES.ok = true;
       RES.at = Date.now();
@@ -1732,11 +1849,31 @@ const LK = {
   mode:"live",
   intervalH:6,        // 1~24
   segSec:300,         // 分片长度
+  /* 分片 MP4（0.9.71 默认开）：moov 写在文件头、每个关键帧一个 moof，
+     进程被硬杀/断电后已写的部分仍能播，损失上限是一个 GOP 而不是整片。
+     关掉退回整片 moov（必须正常收尾才完整，硬杀即残片）。 */
+  frag:true,
   clipStyle:"join",   // 通用切分方式：join=整段拼接 | split=活动切片（每路可用 clipMode 覆盖）
   condenseMode:"virtual", // 缩时方案：virtual=只记台账 | materialize=产出片段 | off（服务端 _ENUM_KEYS 白名单）
   archEnable:true,     // 夜间归档裁剪开关（仅虚拟缩时有意义）
-  archDays:90,         // 归档片段保留天数
+  archDays:7,         // 归档片段保留天数
   archBatch:120,       // 单晚最多裁多少个分片（跨夜分批）
+  /* ---- AI 检测（0.9.60）：全局默认，每路可覆盖。全部进 pushCfg body ——
+     只改内存不推送就是「假设置」，这个坑本项目踩过不止一次。 ---- */
+  detEnable:false,     // 总闸：关时每路开了也不检
+  detMode:"snap",      // snap=快照节奏 | live=实时（P1）
+  detDevice:"auto",    // auto | cpu | gpu（P1）
+  detCls:{ person:true, two_wheeler:true, vehicle:true },  // 全局默认检测类别
+  detSens:"std",       // 灵敏度：high | std | low → 分品类阈值
+  detTrigger:{ motion:true, person:true, vehicle:true },   // 缩时触发：未勾选=静止画面
+  detFps:5,            // 实时帧率（P1）
+  detNight:"throttle", // 夜间策略（P1）
+  /* ---- 通知（0.9.60）：三开关 + 自定义 Webhook + 冷却 ---- */
+  ntWebhook:"",
+  ntMotion:false,
+  ntPerson:false,
+  ntVehicle:false,
+  ntCooldown:60,
   pending:0,          // 待处理数 —— 以 /api/link 返回为准，不再本地编数
   done:0,
   silent:0,
@@ -2224,9 +2361,14 @@ function activatePage(page){
   if(page !== "play") pvStop();   // 离开回放页就停播，不让画面区在后台空转
   if(page === "play"){
     camPickShow(false);
-    /* 回放页与文件页共享 camId/dayIdx；录像清单可能还没拉过，补一次 */
-    if(!state.rec) fetchRecordings();
-    renderPlay();
+    /* 进回放页 = 直接定位到默认落点开播（0.9.72）。以前这里不定位，
+       必须手点播放钮才出画面；而首次点击常撞上「清单还没拉回来」或
+       「落点贴在段尾只剩 1 秒」，表现出来就是要点几下才能开始播。
+       清单没拉过时 pvAutoEnter 自己会拉一次再定位。 */
+    renderPlay(true);
+    /* 页签刚切过来时布局可能还没落定（clientHeight 量不到）：下一帧补测一次，
+       上下留白才能按真实视口高度算出来（0.9.68） */
+    setTimeout(syncVnowline, 30);
   }
 }
 
@@ -2277,7 +2419,7 @@ document.querySelectorAll(".tb").forEach(b=>{
   if(vtlBox) vtlBox.addEventListener("click", e=>{
     vtlBubbleHide();
     const r = vtlBox.getBoundingClientRect();
-    const t = (e.clientY - r.top - VTL_TOP) / vtlPxh * 3600;
+    const t = (e.clientY - r.top - vtlTop()) / vtlPxh * 3600;
     if(!(t >= 0) || t > 86400) return;
     if(!pvSegAt(t)){ toast("toast2", "该时段无录像"); return; }
     pvPlayAt(t);
@@ -2316,6 +2458,27 @@ document.querySelectorAll(".tb").forEach(b=>{
       renderVtl(vtlData, vtlDay);
     };
   });
+  /* 活动类别筛选（0.9.60）：勾/取消某类，活动导航与时间轴淡出同步变。
+     至少留一类——全关时活动模式没有可跳的目标，等于把回放卡死在原地。
+     改完立刻重绘时间轴，正在播的如果已经掉出筛选结果，交给 pvSkipStatic 处理 */
+  document.querySelectorAll("[data-pvcls]").forEach(b=>{
+    b.onclick = e=>{
+      e.stopPropagation();
+      const k = b.dataset.pvcls;
+      if(!(k in PPLAY.cls)) return;
+      const next = Object.assign({}, PPLAY.cls);
+      next[k] = !next[k];
+      if(!next.motion && !next.person && !next.vehicle){
+        toast("toast2", "至少保留一个类别 · 全关等于没有活动可看");
+        return;
+      }
+      PPLAY.cls = next;
+      try{ localStorage.setItem("nvr_pvcls", JSON.stringify(PPLAY.cls)); }catch(err){}
+      pvSyncCtl();
+      renderVtl(vtlData, vtlDay);
+      if(PPLAY.on) pvOnTime();
+    };
+  });
   /* 倍速：从操作条向上弹的小网格；1× 是全时连播默认，快进态下不生效 */
   const spd = document.getElementById("btnPvSpeed");
   const spop = document.getElementById("vspop");
@@ -2352,7 +2515,7 @@ document.querySelectorAll(".tb").forEach(b=>{
     vtlSeekTmr = setTimeout(()=>{
       if(!PPLAY.on || Date.now() - vtlHold > 900) return;
       const t = Math.max(0, Math.min(86400,
-        (sc.scrollTop + sc.clientHeight / 3 - VTL_TOP) / vtlPxh * 3600));
+        (sc.scrollTop + sc.clientHeight / 3 - vtlTop()) / vtlPxh * 3600));
       if(Math.abs(t - PPLAY.t) < 1.2) return;   // 停在原进度附近就不折腾
       if(pvSegAt(t)) pvPlayAt(t, { quiet:true });
     }, 400);
@@ -2371,7 +2534,8 @@ document.querySelectorAll(".tb").forEach(b=>{
     const r = sc.getBoundingClientRect();
     const my = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top;
     pinch = { d: tdist(e.touches) || 1, pxh0: vtlPxh,
-              t: (sc.scrollTop + my - VTL_TOP) / vtlPxh * 3600, y: my };
+              t: Math.max(0, Math.min(86400,
+                (sc.scrollTop + my - vtlTop()) / vtlPxh * 3600)), y: my };
   }, {passive:true});
   sc.addEventListener("touchmove", e=>{
     if(!pinch || e.touches.length !== 2) return;
@@ -3623,6 +3787,10 @@ function pushCfg(){
              /* 每路缩时方案：follow=跟随全局；virtual/materialize/off 显式覆盖。
                 服务端 link 按 link.condense_mode_of() 消费它决定只写台账还是双写导出 */
              condense_mode: p.condenseMode || "follow",
+             /* 每路 AI 检测（0.9.60）：follow/on/off；显式配了类别才推
+                detect_classes（三键完整状态，服务端缺键=False） */
+             detect: p.detect || "follow",
+             detect_classes: p.detectCls || null,
              /* 单路分片长度：0 表示跟随通用设置。必须真的推上去 ——
                 它是 ffmpeg 命令行的物理参数，只存在 localStorage 等于没设。 */
              segment_sec: p.segSec || 0,
@@ -3638,6 +3806,9 @@ function pushCfg(){
                     recorder 的分片长度、link 的节奏都是读服务端配置的，
                     所以「改分片长度没反应」其实是推都没推。 */
                  record_segment_sec: LK.segSec,
+                 /* 录像封装：分片 MP4 让硬杀/断电后已写片段仍可播。
+                   必须推 —— 它是 ffmpeg 的 -movflags，留在前端等于没设。 */
+                 record_frag: !!LK.frag,
                  link_mode: LK.mode,
                  clip_style: LK.clipStyle,
                  condense_mode: LK.condenseMode,
@@ -3646,6 +3817,15 @@ function pushCfg(){
                  archive_batch: LK.archBatch,
                  link_interval_h: LK.intervalH,
                  concurrency: GS.conc,
+                 /* AI 检测 / 通知两块（0.9.60）：嵌套结构，服务端 norm_detect/
+                    norm_notify 强校（enum 白名单 + 夹取 + trigger 至少一项） */
+                 detect: { enable: !!LK.detEnable, mode: LK.detMode,
+                           device: LK.detDevice, classes: LK.detCls,
+                           trigger: LK.detTrigger, live_fps: LK.detFps,
+                           night: LK.detNight },
+                 notify: { webhook: LK.ntWebhook, motion: !!LK.ntMotion,
+                           person: !!LK.ntPerson, vehicle: !!LK.ntVehicle,
+                           cooldown: LK.ntCooldown },
                  /* 必须是枚举值：以前推的是 !!GS.gpu 布尔，后端把 "auto" 顶成了
                     true，于是"核显不可用 → 强制单路"的降级保护静默失效 */
                  gpu: (GS.gpu === false ? "off" : "auto") };
@@ -3678,12 +3858,34 @@ function applyServerCfg(c){
   if(typeof c.archive_enable === "boolean") LK.archEnable = c.archive_enable;
   if(c.archive_days){ const v = +c.archive_days; if(v >= 1) LK.archDays = v; }
   if(c.archive_batch){ const v = +c.archive_batch; if(v >= 10) LK.archBatch = v; }
+  /* AI 检测 / 通知回读（0.9.60）：服务端是强校后的真相，本地以它为准 */
+  if(c.detect && typeof c.detect === "object"){
+    const d = c.detect;
+    if(typeof d.enable === "boolean") LK.detEnable = d.enable;
+    if(d.mode) LK.detMode = d.mode;
+    if(d.device) LK.detDevice = d.device;
+    if(d.classes && typeof d.classes === "object") LK.detCls = Object.assign({}, LK.detCls, d.classes);
+    if(d.trigger && typeof d.trigger === "object") LK.detTrigger = Object.assign({}, LK.detTrigger, d.trigger);
+    if(d.live_fps) LK.detFps = +d.live_fps || 5;
+    if(d.night) LK.detNight = d.night;
+  }
+  if(c.notify && typeof c.notify === "object"){
+    const n = c.notify;
+    if(typeof n.webhook === "string") LK.ntWebhook = n.webhook;
+    if(typeof n.motion === "boolean") LK.ntMotion = n.motion;
+    if(typeof n.person === "boolean") LK.ntPerson = n.person;
+    if(typeof n.vehicle === "boolean") LK.ntVehicle = n.vehicle;
+    if(n.cooldown) LK.ntCooldown = +n.cooldown || 60;
+  }
   if(c.link_interval_h){
     const h = +c.link_interval_h;
     if(h && h !== LK.intervalH) LK.intervalH = h;
   }
   if(c.record_dir) REC.dir = c.record_dir;
   if(typeof c.record_enable === "boolean") REC.enabled = c.record_enable;
+  /* 录像封装：服务端是权威（recorder 真正读的这份）。老配置里没有这个键，
+     缺键时保持默认开 —— 不能因为读不到就当作用户关掉了。 */
+  if(typeof c.record_frag === "boolean") LK.frag = c.record_frag;
   if(c.cleanup_at) REC.cleanupAt = c.cleanup_at;
   /* 判读条件回读：服务端 profiles 才是判定真正用的那份参数。
      正在编辑这一路时跳过，否则会把用户的草稿来源改掉。 */
@@ -3738,6 +3940,13 @@ function applyServerCams(list){
     if(src.clip_mode != null) p.clipMode = ["follow","join","split"].indexOf(src.clip_mode) >= 0 ? src.clip_mode : "follow";
     if(src.condense_mode != null) p.condenseMode = ["follow","virtual","materialize","off"].indexOf(src.condense_mode) >= 0 ? src.condense_mode : "follow";
     if(src.segment_sec != null) p.segSec = +src.segment_sec || 0;
+    /* 每路 AI 检测（0.9.60）：服务端 cameras 数组带 detect + detect_classes，
+       以服务端为准回读（与 clip_mode 同一口径：白名单 + 三键完整状态） */
+    if(src.detect != null) p.detect = ["follow","on","off"].indexOf(src.detect) >= 0 ? src.detect : "follow";
+    if(src.detect_classes && typeof src.detect_classes === "object"){
+      const dc = src.detect_classes;
+      p.detectCls = { person: !!dc.person, two_wheeler: !!dc.two_wheeler, vehicle: !!dc.vehicle };
+    }
     if(src.masks) p.masks = normMasks(src.masks);
     p.judge = normJudge(p.judge, null);
     if(src.enabled === false) p.enabled = false;
@@ -4435,7 +4644,7 @@ function drawLiveScene(cv, idx){
    genOpen / diagOpen 是两个大分区；acc 是摄像头编辑里的手风琴（一次只开一段）；
    adv / outOpen 是缩时压制里的两个小节（进阶判读 / 输出画质）。 */
 const SET = { open:null, editing:false, draft:null, adv:false, armed:null,
-              genOpen:false, diagOpen:false,
+              genOpen:false, diagOpen:false, addArmed:false,
               acc:"base", outOpen:false };
 
 function esc(s){
@@ -4483,7 +4692,7 @@ function recBudgetText(){
     if(eff === "materialize")
       clip += dayGB * 0.07 * p.clipDays;      /* 缩时片段 ≈ 活动占比 7% */
     else if(eff === "virtual")
-      arch += dayGB * 0.07 * (LK.archDays || 90);  /* 归档同量级，但时长随全时过期滚动 */
+      arch += dayGB * 0.07 * (LK.archDays || 7);  /* 归档同量级，但时长随全时过期滚动 */
   });
   const need = full + clip + arch;
   const free = (REC.diskFreeGB == null || isNaN(REC.diskFreeGB)) ? null : +REC.diskFreeGB;
@@ -4604,16 +4813,21 @@ function cardLink(){
     + '</div>' : '')
     + (LK.condenseMode==="virtual" ? '<div class="srow">'
       + '<div class="top"><span class="n">夜间归档裁剪</span>'
-        + '<span class="v">归档保留 ' + (LK.archDays || 90) + ' 天</span></div>'
+        + '<span class="v">归档保留 ' + (LK.archDays || 7) + ' 天</span></div>'
       + '<div class="swrow" style="border:none;padding:6px 0 0"><span>开启（夜间任务时刻自动执行）</span>'
         + '<div class="sw ' + (LK.archEnable?"on":"") + '" data-archen="1"></div></div>'
       + '<div class="chips" style="margin-top:8px">'
-        + [30,90,180,365].map(v=>'<button class="chip ' + ((LK.archDays||90)===v?"on":"")
-          + '" data-archdays="' + v + '">' + v + ' 天</button>').join("")
+        + '<button class="chip" data-archdec="1" aria-label="减少一天">−</button>'
+        + '<input id="archDaysInput" type="number" inputmode="numeric" min="1" max="3650" step="1" value="'
+          + (LK.archDays || 7) + '" style="width:76px;height:34px;text-align:center;'
+          + 'border:1px solid var(--line);border-radius:8px;background:transparent;'
+          + 'color:inherit;font-size:13.5px;padding:0 6px">'
+        + '<button class="chip" data-archinc="1" aria-label="增加一天">＋</button>'
+        + '<span style="align-self:center;color:var(--muted);font-size:12px">天 · 自定义 1–3650</span>'
       + '</div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">全时到期前夜，把台账标记的活动窗口裁进 <code style="font-size:10.5px">_archive</code>'
         + '（体积 ≈ 活动占比），全时目录次日就能被正常清理删掉。三层寿命：'
-        + '<b>全时（各路自定）→ 归档 ' + (LK.archDays || 90) + ' 天 → 台账永久</b>。'
+        + '<b>全时（各路自定）→ 归档 ' + (LK.archDays || 7) + ' 天 → 台账永久</b>。'
         + '无台账的临期日期会跳过并计入「未归档」，不在临期前夜临时算判定。'
         + '单晚最多裁 ' + (LK.archBatch || 120) + ' 个分片，裁不完的跨夜继续。</div>'
       + '<div class="h" id="archStatus" style="color:var(--muted)">' + (ARCH.sum || "候选情况加载中…") + '</div>'
@@ -4653,6 +4867,16 @@ function cardLink(){
       + '<div class="h">分片越短，"录完"到"开压"的间隔越短；太碎又会让静止判定的上下文不够。5 分钟是平衡点。</div>'
     + '</div>'
     + '<div class="srow">'
+      + '<div class="top"><span class="n">录像封装</span><span class="v" style="color:'
+        + (LK.frag ? "var(--primary)" : "var(--keep)") + '">'
+        + (LK.frag ? "分片 MP4" : "整片 MP4") + '</span></div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (LK.frag?"on":"") + '" data-linkfrag="1">分片 MP4 · 断电也能播</button>'
+        + '<button class="chip ' + (!LK.frag?"on":"") + '" data-linkfrag="0">整片 MP4 · 兼容优先</button>'
+      + '</div>'
+      + '<div class="h">分片 MP4 让每个关键帧自带索引，进程被强杀或断电时已经写下的部分仍能播放，最多丢 1~2 秒；整片 MP4 必须正常收尾，被强杀就整段打不开（残片）。只有在老播放器播不动时才需要切回。</div>'
+    + '</div>'
+    + '<div class="srow">'
       + '<div class="top"><span class="n">同时处理</span><span class="v">' + GS.conc + ' 路</span></div>'
       + '<div class="chips">'
         + '<button class="chip ' + (GS.conc===1?"on":"") + '" data-conc="1">串行 · 1 路</button>'
@@ -4672,6 +4896,131 @@ function cardLink(){
   + '</div>';
 }
 
+
+/* ---------------- 检测：移动侦测 + AI 识别（0.9.61 合并为一个菜单） ----------------
+   用户不需要区分「帧差」和「AI」是两套实现——面对的都是「检测」：
+   组 1 移动侦测（像素差，不需要 AI、随缩时方案运行、无总闸，只做说明与指路）；
+   组 2 AI 识别（总闸/类别/灵敏度，缩在闸后）；
+   组 3 触发与通知（缩时触发三勾选 + 通知三开关，刻意放在总闸之外——
+   移动侦测的通知不需要 AI，以前藏在 detEnable 里导致关了 AI 就配不了）。
+   每路开关与判读参数在摄像头手风琴「检测」段；台账 cls 消费在回放页筛选 chips。
+   所有选项都进 pushCfg body（LK.det 系列 / LK.nt 系列），
+   服务端 norm_detect/norm_notify 强校。 */
+const DET = { st:null };   /* /api/status 的 detect 快照：loaded/error/avg_ms/per_cam */
+const NT  = { st:null };   /* /api/status 的 notify 快照：recent/pending */
+
+function detStatusLine(){
+  const st = DET.st;
+  if(!LK.detEnable) return '<span class="v">已关闭</span>';
+  if(!st || !st.running) return '<span class="v" style="color:var(--warn)">未运行</span>';
+  if(st.error) return '<span class="v" style="color:var(--warn)">不可用 · ' + esc(String(st.error).slice(0,60)) + '</span>';
+  if(!st.loaded) return '<span class="v">加载中…</span>';
+  const cams = st.per_cam || {};
+  let today = 0, hits = 0;
+  Object.keys(cams).forEach(id=>{
+    today += cams[id].today || 0;
+    const cl = cams[id].cls || {};
+    Object.keys(cl).forEach(k=>{ hits += cl[k]; });
+  });
+  return '<span class="v">已加载 · CPU · 今日 ' + today + ' 帧 / 命中 ' + hits + ' 次'
+    + (st.avg_ms ? ' · ' + st.avg_ms + 'ms/帧' : '') + '</span>';
+}
+
+function cardDetect(){
+  const clsRow = (k, label, hint) =>
+    '<div class="swrow"><span>' + label + '</span>'
+    + '<div class="sw ' + (LK.detCls[k]?"on":"") + '" data-detcls="' + k + '"></div></div>'
+    + (hint ? '<div class="h" style="margin-top:2px">' + hint + '</div>' : '');
+  const trigRow = (k, label) =>
+    '<div class="swrow" style="border:none;padding:5px 0 0"><span>' + label + '</span>'
+    + '<div class="sw ' + (LK.detTrigger[k]?"on":"") + '" data-dettrig="' + k + '"></div></div>';
+  const ntRow = (k, label, on) =>
+    '<div class="swrow" style="border:none;padding:5px 0 0"><span>' + label + '</span>'
+    + '<div class="sw ' + (on?"on":"") + '" data-ntsw="' + k + '"></div></div>';
+  return '<div class="gcard">'
+    + '<h3>检测 <span class="sub">移动侦测 + AI 识别 · 所有摄像头共用 · 每路可单独覆盖</span></h3>'
+    /* 组 1：移动侦测（像素差）。不需要 AI、没有自己的总闸——它随「缩时与存储
+       方案」运行，方案关闭就不判定。参数在每路「检测」段，这里只做说明与指路，
+       免得用户到处找「帧差设置在哪」。 */
+    + '<div class="srow" style="padding-top:0;border-top:none">'
+      + '<div class="top"><span class="n">移动侦测（像素差）</span>'
+        + '<span class="v">' + (LK.condenseMode === "off"
+            ? "未启用 · 缩时方案已关闭" : "运行中 · 随缩时方案") + '</span></div>'
+      + '<div class="h" style="margin-top:8px;line-height:1.55">不需要 AI：ffmpeg 把画面缩到 320×180 后逐像素比对，'
+        + '变化超过门槛的时段记为活动，写进活动台账。它随「缩时与存储方案」运行——'
+        + '方案选「关闭」就<b>不判定</b>，回放页时间轴也不会有活动标记。'
+        + '灵敏度、判读引擎、像素差门槛等参数在<b>摄像头设置 → 检测段</b>，每路可单独调；'
+        + '判读滤镜是否可用见「诊断与日志 · 环境自检」。</div>'
+    + '</div>'
+    /* 组 2：AI 识别。总闸关时下面全部收起，不出现假选项 */
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">AI 识别（人 / 两轮车 / 车）</span>' + detStatusLine() + '</div>'
+      + '<div class="swrow" style="border:none;padding:6px 0 0"><span>开启（每 5 秒/路抽帧 · CPU 推理）</span>'
+        + '<div class="sw ' + (LK.detEnable?"on":"") + '" data-deten="1"></div></div>'
+      + '<div class="h" style="margin-top:8px;line-height:1.55">默认关闭。开启后每 5 秒对每路抽 1 帧推理（YOLO11n · CPU），'
+        + '检出的人 / 两轮车 / 车辆按<b>每路勾选的类别</b>记进活动台账，与移动侦测的台账合并后'
+        + '一起供给回放页筛选、缩时触发和通知。不换硬件也能跑：i3-12100 扛 5 路只占约半个核。</div>'
+    + '</div>'
+    + (LK.detEnable ? (
+      /* 检测类别（全局默认）：每路三开关初值从这里拷过去 */
+      '<div class="srow">'
+      + '<div class="n">检测类别（全局默认）</div>'
+      + clsRow("person", "人员", "")
+      + clsRow("two_wheeler", "两轮车（自行车 / 电动车 / 摩托车合并）", "远距离是小目标，阈值已系统性放低换召回；夜间红外画面检出率会下降。")
+      + clsRow("vehicle", "车辆（汽车 / 卡车 / 巴士）", "")
+      + '<div class="h" style="margin-top:6px">只为需要的内容花算力。每路可在摄像头设置的「检测」段单独覆盖（如院子检车和人、客厅只检人）。</div>'
+    + '</div>'
+      /* 灵敏度三档 → 分品类阈值 */
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">灵敏度</span><span class="v">'
+        + (LK.detSens==="high" ? "高" : LK.detSens==="low" ? "低" : "标准") + '</span></div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (LK.detSens==="high"?"on":"") + '" data-detsens="high">高</button>'
+        + '<button class="chip ' + (LK.detSens==="std"?"on":"") + '" data-detsens="std">标准</button>'
+        + '<button class="chip ' + (LK.detSens==="low"?"on":"") + '" data-detsens="low">低</button>'
+      + '</div>'
+      + '<div class="h">高=多报（阈值 人.45/两轮.28/车.35），低=少报（.55/.38/.45）。漏检比误检好——误检会污染台账和缩时。</div>'
+    + '</div>'
+      /* P1 项：模式（置灰 + 说明，不装可用） */
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">检测模式</span><span class="v">快照检测</span></div>'
+      + '<div class="chips">'
+        + '<button class="chip on">快照检测（每 5 秒/路）</button>'
+        + '<button class="chip" disabled style="opacity:.45">实时检测（下个版本）</button>'
+      + '</div>'
+      + '<div class="h">实时模式（子码流 5fps + 核显推理）在下个版本提供；快照模式对「有人 / 有车经过」的台账事件已经够用，成本差一个数量级。</div>'
+    + '</div>'
+    ) : '')
+    /* 组 3：触发与通知。刻意放在 AI 总闸之外——移动侦测的通知不需要 AI，
+       以前这两组缩在 detEnable 里，「关了 AI 就配不了移动侦测通知」。 */
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">缩时触发</span><span class="v">未勾选的类别按静止画面剔除</span></div>'
+      + trigRow("motion", "移动侦测（像素差，不需要 AI）")
+      + trigRow("person", "人员")
+      + trigRow("vehicle", "车辆（含两轮车）")
+      + '<div class="h" style="margin-top:6px;line-height:1.55">台账照实记录所有检出类别（回放页可分别筛选）；'
+        + '<b>算不算活动、进不进缩时</b>由这里裁决。至少保留一项。AI 关闭时只有「移动侦测」一项生效，行为与以前完全一致。</div>'
+    + '</div>'
+    + '<div class="srow">'
+      + '<div class="n">通知</div>'
+      + ntRow("motion", "移动侦测通知", LK.ntMotion)
+      + ntRow("person", "人员检测通知", LK.ntPerson)
+      + ntRow("vehicle", "车辆检测通知（含两轮车）", LK.ntVehicle)
+      + '<div class="swrow" style="border:none;padding:8px 0 0"><span>冷却（同路同类最小间隔）</span>'
+        + '<div class="stepper"><button data-ntcd="-30">−</button><span class="val">' + LK.ntCooldown + ' 秒</span><button data-ntcd="30">+</button></div></div>'
+      + '<input type="url" class="mono" id="ntWebhook" placeholder="https://example.com/webhook" value="' + esc(LK.ntWebhook) + '"'
+        + ' style="margin-top:8px;width:100%;box-sizing:border-box;height:36px;padding:0 10px;'
+        + 'border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font-size:12.5px">'
+      + '<div class="h" style="margin-top:6px;line-height:1.55">经自定义 Webhook 发送（飞书 / 钉钉 / 企业微信 / Server酱 / Bark 等标准格式）。'
+        + 'fnOS 未开放应用级系统通知接口，故不走系统通知中心。没有冷却，移动侦测通知能把手机炸掉。</div>'
+      + '<div style="display:flex;gap:8px;margin-top:8px">'
+        + '<button class="btnline" id="btnNtTest" style="flex:1">测试发送</button>'
+        + '<button class="btnline" id="btnNtSave" style="flex:1">保存 Webhook</button>'
+      + '</div>'
+      + '<div class="hint" id="ntOut" style="margin-top:6px"></div>'
+    + '</div>'
+  + '</div>';
+}
 
 function cardLook(){
   return '<div class="gcard">'
@@ -4986,7 +5335,12 @@ function renderCamList(){
       h += SET.editing ? renderCamEdit(c, SET.draft) : renderCamRead(c, p2);
     }
   });
-  h += '<button class="btnline" data-addcam="1" style="margin-top:3px">＋ 添加摄像头</button>';
+  /* 添加：两段确认（0.9.64）。这个按钮是全宽的，滚动列表时很容易蹭到，
+     而以前误触一下就直接弹出新摄像头编辑页（还顺手往 CAMERAS 插了一条）。
+     现在第一点只进入待确认态（按钮变色 + toast，3.2 秒自动取消），
+     与「删除这个摄像头」的两段确认同一套语言。 */
+  h += '<button class="btnline' + (SET.addArmed ? " armed" : "") + '" data-addcam="1" style="margin-top:3px">'
+    + (SET.addArmed ? "再点一次确认添加" : "＋ 添加摄像头") + '</button>';
   h += '</div>';
   return h;
 }
@@ -5131,12 +5485,12 @@ function renderCamEdit(c, p){
       + '<input type="text" class="mono" value="' + esc(p.main) + '" data-k="main" placeholder="'
       + (c.hasUrl && !p.main
           ? "已保存在 NAS（本机不显示明文）· 留空 = 不修改"
-          : "rtsp://192.168.2.108:554/stream1") + '"></div>'
+          : "rtsp://192.0.2.10:554/stream1") + '"></div>'
     + '<div class="fld2"><label>子码流 RTSP · 预览用（可空，留空则用主码流）</label>'
       + '<input type="text" class="mono" value="' + esc(p.sub) + '" data-k="sub" placeholder="'
       + (c.hasSub && !p.sub
           ? "已保存在 NAS（本机不显示明文）· 留空 = 不修改"
-          : "rtsp://192.168.2.108:554/stream2") + '"></div>'
+          : "rtsp://192.0.2.10:554/stream2") + '"></div>'
     + '<div class="hint" style="margin:6px 0 10px;font-size:10.5px">需要认证就把用户名密码写进地址：'
       + '<code style="font-size:10px">rtsp://user:pass@ip:554/...</code></div>'
     + '<div class="swrow"><div><span class="n">该摄像头启用</span>'
@@ -5211,6 +5565,74 @@ function renderCamEdit(c, p){
       ) : (cm === "virtual"
         ? '<div class="hint" style="margin:6px 0 10px">这一路用<b>虚拟缩时</b>：判定照常跑、只写活动台账（回放页时间轴可看），不产出缩时视频。切分方式/输出倍速/片段保留仅在物化切片下生效。</div>'
         : '<div class="hint" style="margin:6px 0 10px">这一路缩时已<b>关闭</b>：只录全时、不判定，回放页时间轴没有活动标记。已有片段不会被删除。</div>'))
+    /* 输出画质属于「压制产物」参数，留本段；判读参数已搬到「检测」段（0.9.61） */
+    + '<div class="' + (on ? "" : "dim") + '">'
+      + '<div class="subfold" data-outopen="1"><b>输出画质</b>'
+        + '<span class="st" style="margin-left:auto">' + (SET.outOpen ? "" : esc(qualLine(p))) + '</span>'
+        + '<span class="chev">' + (SET.outOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>'
+      + (SET.outOpen ? (
+          '<div class="chips" style="margin:8px 0 2px">'
+            + '<button class="chip ' + (p.mode==="fast"?"on":"") + '" data-mode2="fast">快速 · 流复制</button>'
+            + '<button class="chip ' + (p.mode==="fine"?"on":"") + '" data-mode2="fine">精细 · 重编码</button>'
+          + '</div>'
+          + (p.mode==="fast" ? '<div class="note" style="margin-top:8px">流复制只按关键帧裁切、不重编码，下面的画质参数<b>不生效</b>。</div>' : '')
+          + '<div class="' + (p.mode==="fast"?"dim":"") + '" style="margin-top:9px">'
+            + '<div class="chips" style="margin:0 0 9px">'
+              + '<button class="chip ' + (!isNight?"on":"") + '" data-prof="day">白天 · 彩色</button>'
+              + '<button class="chip ' + (isNight?"on":"") + '" data-prof="night">夜间 · 黑白</button>'
+            + '</div>'
+            + rangeRow("画质 CRF", PFX + ".crf", pr.crf, 18, 34, 1, isNight ? "黑白细节少，可用更高 CRF" : "彩色别超 26，否则车牌颜色会糊")
+            + rangeRow("帧率", PFX + ".fps", pr.fps, 5, 30, 1, "12 帧在手机上看不出差别，体积减半")
+            + rangeRow("分辨率", PFX + ".scale", pr.scale, 40, 100, 5, pr.scale<100 ? "降到约 " + Math.round(4*pr.scale/100*10)/10 + "MP" : "保持原始分辨率")
+            + rangeRow("去噪强度", PFX + ".dn", pr.dn, 0, 3, 1, isNight ? "红外噪声是码率元凶，先降噪" : "白天轻量即可，过强会糊掉人脸")
+          + '</div>'
+          + '<div class="swrow" style="margin-top:6px"><span>按昼夜自动分档</span>'
+            + '<div class="sw ' + (p.autoDN?"on":"") + '" data-dn="1"></div></div>'
+          + '<div class="sumline" id="outSub" style="margin-top:6px">约 ' + mb.toFixed(1) + ' Mbps · '
+            + (mb * 0.44 * 24).toFixed(1) + ' GB/天</div>'
+        ) : '')
+    + '</div>'
+    + (on ? '' : '<div class="hint" style="margin:6px 0 0">缩时已关闭：以上画质参数暂不生效，开启后恢复。侦测参数在下方「检测」段，不受影响。</div>');
+
+  /* ---- ④ 检测忽略区 ---- */
+  const maskCnt = (p.masks && p.masks.ignore) ? p.masks.ignore.length : 0;
+  /* ---- ④ 检测（0.9.60）：每路 AI 开关 + 类别，忽略区原样复用 ----
+     每路 detect：follow=跟随全局总闸与类别；on/off 显式覆盖。
+     detect_classes 三键完整状态，初值拷全局默认，用户改哪个推哪个。 */
+  const camDet = p.detect || "follow";
+  const camCls = p.detectCls || { person:true, two_wheeler:true, vehicle:true };
+  const camDetOn = camDet === "on" || (camDet === "follow" && LK.detEnable);
+  const detClsRow = (k, label) =>
+      '<div class="swrow" style="border:none;padding:5px 0 0"><span>' + label + '</span>'
+      + '<div class="sw ' + (camCls[k]?"on":"") + '" data-camdetcls="' + k + '"></div></div>';
+  const bodyDetect =
+      '<div class="srow" style="padding-top:6px">'
+      + '<div class="top"><span class="n">本路 AI 识别</span>'
+        + '<span class="v">' + (camDet === "follow" ? "跟随全局（" + (LK.detEnable ? "开" : "关") + "）"
+          : camDet === "on" ? "开" : "关") + '</span></div>'
+      + '<div class="chips">'
+        + [["follow","跟随全局"],["on","开"],["off","关"]].map(([v,l])=>
+            '<button class="chip ' + (camDet===v?"on":"") + '" data-camdet="' + v + '">' + l + '</button>').join("")
+      + '</div>'
+      + '<div class="h">跟随全局 = 用「通用设置 · 检测」里 AI 识别的总闸与类别。全局关闭时本段整体不生效。</div>'
+    + '</div>'
+    + (camDetOn ? (
+        '<div class="srow">'
+      + '<div class="n">本路检测类别</div>'
+      + detClsRow("person", "人员")
+      + detClsRow("two_wheeler", "两轮车")
+      + detClsRow("vehicle", "车辆")
+      + '<div class="h" style="margin-top:6px">只为需要的内容花算力：院子可配「人员 + 车辆」、客厅只留「人员」。全关等于不检测。</div>'
+    + '</div>'
+      ) : (camDet === "off" ? '<div class="hint" style="margin:6px 0 10px">本路已<b>强制关闭</b> AI 识别：不抽帧、不推理、不通知，下面的移动侦测（像素差）不受影响。</div>' : ""))
+    /* 移动侦测（像素差）组：0.9.61 从「缩时压制」段搬来，与 AI 识别并列——
+       用户面对的是一个「检测」段，不该猜到帧差参数藏在缩时段落里 */
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">移动侦测（像素差）</span>'
+        + '<span class="v">' + (on ? SENS_NAME[j.sens] + " · " + ENGINE_NAME[j.engine] : "未启用 · 缩时已关闭") + '</span></div>'
+      + '<div class="h" style="margin-top:6px;line-height:1.55">不需要 AI：ffmpeg 把画面缩到 320×180 后逐像素比对，'
+        + '变化超过门槛的时段记为活动。它随本路缩时方案运行（方案关闭 = 不判定），与上面的 AI 识别各自独立。</div>'
+    + '</div>'
     + '<div class="' + (on ? "" : "dim") + '">'
       + chipRow("灵敏度", "judge.sens", j.sens,
           [["low","低"],["mid","标准（推荐）"],["high","高"]], "sens",
@@ -5244,38 +5666,10 @@ function renderCamEdit(c, p){
             + ' · 最短 ' + JUDGE_DEFAULTS.minEvent + ' 秒 · 模糊 ' + JUDGE_DEFAULTS.blur
             + ' · 抽样 ' + JUDGE_DEFAULTS.fps + ' 帧/秒 · 合并 ' + JUDGE_DEFAULTS.mergeGap + ' 秒</div>'
         ) : '')
-      + '<div class="subfold" data-outopen="1"><b>输出画质</b>'
-        + '<span class="st" style="margin-left:auto">' + (SET.outOpen ? "" : esc(qualLine(p))) + '</span>'
-        + '<span class="chev">' + (SET.outOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>'
-      + (SET.outOpen ? (
-          '<div class="chips" style="margin:8px 0 2px">'
-            + '<button class="chip ' + (p.mode==="fast"?"on":"") + '" data-mode2="fast">快速 · 流复制</button>'
-            + '<button class="chip ' + (p.mode==="fine"?"on":"") + '" data-mode2="fine">精细 · 重编码</button>'
-          + '</div>'
-          + (p.mode==="fast" ? '<div class="note" style="margin-top:8px">流复制只按关键帧裁切、不重编码，下面的画质参数<b>不生效</b>。</div>' : '')
-          + '<div class="' + (p.mode==="fast"?"dim":"") + '" style="margin-top:9px">'
-            + '<div class="chips" style="margin:0 0 9px">'
-              + '<button class="chip ' + (!isNight?"on":"") + '" data-prof="day">白天 · 彩色</button>'
-              + '<button class="chip ' + (isNight?"on":"") + '" data-prof="night">夜间 · 黑白</button>'
-            + '</div>'
-            + rangeRow("画质 CRF", PFX + ".crf", pr.crf, 18, 34, 1, isNight ? "黑白细节少，可用更高 CRF" : "彩色别超 26，否则车牌颜色会糊")
-            + rangeRow("帧率", PFX + ".fps", pr.fps, 5, 30, 1, "12 帧在手机上看不出差别，体积减半")
-            + rangeRow("分辨率", PFX + ".scale", pr.scale, 40, 100, 5, pr.scale<100 ? "降到约 " + Math.round(4*pr.scale/100*10)/10 + "MP" : "保持原始分辨率")
-            + rangeRow("去噪强度", PFX + ".dn", pr.dn, 0, 3, 1, isNight ? "红外噪声是码率元凶，先降噪" : "白天轻量即可，过强会糊掉人脸")
-          + '</div>'
-          + '<div class="swrow" style="margin-top:6px"><span>按昼夜自动分档</span>'
-            + '<div class="sw ' + (p.autoDN?"on":"") + '" data-dn="1"></div></div>'
-          + '<div class="sumline" id="outSub" style="margin-top:6px">约 ' + mb.toFixed(1) + ' Mbps · '
-            + (mb * 0.44 * 24).toFixed(1) + ' GB/天</div>'
-        ) : '')
     + '</div>'
-    + (on ? '' : '<div class="hint" style="margin:6px 0 0">总开关已关闭：以上判定 / 画质 / 忽略区参数暂不生效，开启后恢复。</div>');
-
-  /* ---- ④ 检测忽略区 ---- */
-  const maskCnt = (p.masks && p.masks.ignore) ? p.masks.ignore.length : 0;
-  const bodyMask =
-      '<div class="mtip" style="margin:6px 0 8px"><b style="color:var(--warn)">忽略区</b>：这块区域里的画面变化'
-      + '<b>不算事件</b>，不会触发片段切出；录像本身完整保留。适合树影、马路、晃动的广告牌。'
+    + (on ? '' : '<div class="hint" style="margin:6px 0 0">本路缩时已关闭：以上侦测参数暂不生效，开启后恢复；AI 识别不受影响。</div>')
+    + '<div class="mtip" style="margin:10px 0 8px"><b style="color:var(--warn)">检测忽略区</b>：框中心落进忽略格的检出结果'
+      + '<b>直接丢弃</b>（后端过滤、不改画面），AI 识别与移动侦测<b>共用</b>这块忽略区。'
       + '<b>按住拖动多选，点一下已选的格子取消。</b></div>'
     + '<div class="maskstage"><img class="mimg" id="maskImg-ig" alt=""><canvas id="maskCv-ig"></canvas></div>'
     + '<div class="mlist" id="mlist"></div>'
@@ -5299,8 +5693,15 @@ function renderCamEdit(c, p){
                + " · " + speed + "× · " + p.clipDays + " 天")
              : '<span style="color:var(--faint)">已关闭 · 只录全时</span>'),
         bodyCond, openAcc === "condense")
-    + camAcc("mask", 4, "检测忽略区",
-        "已选 " + maskCnt + " 格", bodyMask, openAcc === "mask")
+    + camAcc("mask", 4, "检测",
+        (!LK.detEnable ? "AI 未开启"
+          : camDet === "off" ? "AI 识别已关"
+          : (camCls.person||camCls.two_wheeler||camCls.vehicle) ? "AI 开 · " +
+            [camCls.person?"人":"", camCls.two_wheeler?"两轮":"", camCls.vehicle?"车":""].filter(Boolean).join("+")
+          : "AI 开 · 类别全关")
+        + " · 侦测 " + (on ? SENS_NAME[j.sens] : "随缩时关闭")
+        + " · 忽略区 " + maskCnt + " 格",
+        bodyDetect, openAcc === "mask")
     + '<div class="dz"><button class="delbtn' + (SET.armed === c.id ? " armed" : "") + '" data-delcam="' + c.id + '">'
       + (SET.armed === c.id ? "再点一次确认删除" : "删除这个摄像头") + '</button>'
       + '<div class="sumline" style="margin-top:7px;text-align:center">已录的文件不会被删除</div></div>'
@@ -5685,7 +6086,7 @@ function renderGenZone(){
     + '<div><b>通用设置</b><div class="zs">所有摄像头共用 · 录制 / 压制 / 外观</div></div>'
     + '<span class="chev">' + (SET.genOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>';
   if(SET.genOpen){
-    h += cardRec() + cardLink() + cardLook()
+    h += cardRec() + cardLink() + cardDetect() + cardLook()
       + '<div class="editbar"><button class="ok" data-gensave="1">保存通用设置</button></div>';
   }else{
     h += '<div class="gcard genfold"><div class="genline">' + genSummary() + '</div>'
@@ -5716,19 +6117,36 @@ function diagSummary(){
   const on = ch.filter(c=>c.state === "recording").length;
   const bad = ch.filter(c=>c.state !== "recording" && (c.error || c.hint)).length;
   const free = REC.diskFreeGB;
+  /* AI 检测摘要（0.9.60）：没开就不提；开了但 worker 没起/推理报错要给个醒 */
+  let det = "";
+  if(LK.detEnable){
+    const st = DET.st;
+    if(!st || !st.running) det = " · <span style='color:var(--warn)'>AI 识别未运行</span>";
+    else if(st.error) det = " · <span style='color:var(--warn)'>AI 推理不可用</span>";
+    else if(st.loaded){
+      const cams = st.per_cam || {};
+      let hits = 0;
+      Object.keys(cams).forEach(id=>{
+        const cl = cams[id].cls || {};
+        Object.keys(cl).forEach(k=>{ hits += cl[k]; });
+      });
+      det = " · AI 命中 " + hits + " 次";
+    }
+  }
   return (ch.length ? (on + "/" + ch.length + " 路在录") : "录制状态未上报")
     + " · 剩余 " + (free == null ? "—" : fmtBytes(free * 1073741824))
-    + (bad ? " · " + bad + " 路异常" : " · 无异常");
+    + (bad ? " · " + bad + " 路异常" : " · 无异常") + det;
 }
 
 function renderDiagZone(){
   let h = '<div class="zone diag">'
     + '<div class="zonehead" data-diagtoggle="1">'
     + '<span class="zi">◎</span>'
-    + '<div><b>诊断与日志</b><div class="zs">存储占用 · 每路录制 · 环境 · 日志</div></div>'
+    + '<div><b>诊断与日志</b><div class="zs">存储占用 · 每路录制 · 环境 · AI 检测 · 日志</div></div>'
     + '<span class="chev">' + (SET.diagOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>';
   if(SET.diagOpen){
-    h += cardStorage() + cardRecCams() + cardEnv() + cardLog() + cardMaint();
+    h += cardStorage() + cardRecCams() + cardEnv() + cardParts()
+       + cardDetectDiag() + cardLog() + cardMaint();
   }else{
     h += '<div class="gcard genfold"><div class="genline" id="diagSum">' + diagSummary() + '</div>'
       + '<button class="minibtn" data-diagtoggle="1">查看</button></div>';
@@ -5812,7 +6230,7 @@ function keepPolicyText(){
   if(!ps.length) return "无摄像头";
   /* 三层寿命：台账永久 > 归档 N 天 > 全时各路自定。归档期用全局值展示
      （每路覆盖在后端生效，界面只报全局口径，避免一处显示两套数） */
-  return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 归档 " + (LK.archDays || 90)
+  return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 归档 " + (LK.archDays || 7)
     + " 天 / 台账永久";
 }
 
@@ -5901,6 +6319,150 @@ function cardEnv(){
     + '<div class="dh">环境自检<span class="tg">版本 / 依赖 / 像素判读</span></div>'
     + '<div class="diagwarn" id="diagWarn" style="display:none;margin-top:0"></div>'
     + '<div class="diagenv" id="diagEnv" style="margin-top:0"><span class="empty">环境自检中…</span></div>'
+    + '</div>';
+}
+
+/* ---------------- 录像残片（0.9.71） ----------------
+   回答一个以前只能靠手机文件管理器一屏屏数的问题：盘上还有几个没封口的
+   .part、各自多大、放了多久、能不能直接封口。残片在此之前是"看不见的死账"——
+   /api/record/file 的白名单只放行 HH-MM-SS.mp4，所以既不能回放、也下载不到，
+   用户唯一的办法是挨个数，而且数完也不知道该删还是能救。 */
+function cardParts(){
+  return '<div class="dcard">'
+    + '<div class="dh">录像残片<span class="tg">未封口的 .part</span></div>'
+    + '<div class="diagenv" id="diagParts" style="margin-top:0"><span class="empty">检查中…</span></div>'
+    + '</div>';
+}
+
+/* 状态口径（与 /api/record/parts 的 moov/kind 一一对应）：
+     待重建 = 无 moov，需要 ffmpeg 扫 mdat 重建索引（静置够久后自动做）
+     可封口 = 有 moov 只是没来得及改名（分片 MP4 下这是常态）
+     已放弃 = 抢救失败改名的 .bad，内容确实没法恢复，可以删 */
+async function loadDiagParts(){
+  const el = document.getElementById("diagParts");
+  if(!el) return;
+  try{
+    const r = await fetch("/api/record/parts?_t=" + Date.now(),
+                          { mode:"same-origin", cache:"no-store" });
+    const d = await r.json();
+    if(!d || !d.ok) throw new Error((d && d.error) || "接口无响应（服务端可能还是旧版本）");
+    if(!d.count){
+      el.innerHTML = "<b class='ok'>✓</b> 没有残片，所有分片都正常封口了";
+      return;
+    }
+    el.innerHTML = '<div class="dline">共 <b>' + d.count + '</b> 个'
+      + (d.bad ? '（其中已放弃 <b>' + d.bad + '</b> 个）' : '')
+      + ' · 占用 <b>' + fmtBytes(d.bytes) + '</b>'
+      + (d.rescuable ? ' · 待抢救 <b style="color:var(--warn)">' + d.rescuable + '</b>' : '')
+      + '</div>'
+      + d.items.slice(0, 30).map(x=>{
+          const mb = (x.size / 1048576).toFixed(1) + " MB";
+          const a = x.age_sec;
+          const age = a < 120 ? (a + " 秒前")
+                    : a < 7200 ? (Math.round(a / 60) + " 分钟前")
+                    : (Math.round(a / 3600) + " 小时前");
+          const tag = x.kind === "bad" ? "<b class='bad'>已放弃</b>"
+                    : x.moov ? "<b class='ok'>可封口</b>"
+                    : '<b style="color:var(--warn)">待重建</b>';
+          return '<div class="dline kv"><span class="k">' + esc(x.cam) + '</span>'
+            + '<span class="v">' + esc(x.name) + ' · ' + mb + ' · ' + age + " " + tag + '</span></div>';
+        }).join("")
+      + (d.count > 30 ? '<div class="dline">另有 ' + (d.count - 30) + ' 个未列出</div>' : '')
+      + '<div class="dline">静置超过 ' + Math.round(d.grace_sec / 60)
+      + ' 分钟的残片会自动重建索引并改名为 .mp4；抢救失败的改名为 .bad，可以放心删。</div>'
+      + '<button class="btnline" id="btnPartsRefresh" style="margin-top:9px">重新检查</button>';
+    const b = document.getElementById("btnPartsRefresh");
+    if(b) b.onclick = ()=>{ el.innerHTML = '<span class="empty">检查中…</span>'; loadDiagParts(); };
+  }catch(e){
+    el.innerHTML = "残片检查失败：" + esc(String((e && e.message) || e));
+  }
+}
+
+/* ---------------- AI 检测诊断卡（0.9.60） ----------------
+   回答三个问题：① 推理到底跑起来没有（runtime/模型/平均耗时）；
+   ② 每路今天抽了多少帧、命中哪些类别；③ 通知最近发了什么、队列堵没堵。
+   没开检测时这张卡只留一行说明，不摆一堆 0 假装在工作。 */
+function cardDetectDiag(){
+  const st = DET.st;
+  const nt = NT.st;
+  const line = (k, v, warn) =>
+    '<div class="dline kv"><span class="k">' + k + '</span><span class="v"'
+    + (warn ? ' style="color:var(--warn)"' : '') + '>' + v + '</span></div>';
+  let head = '<div class="dcard">'
+    + '<div class="dh">AI 检测<span class="tg">YOLO11n · CPU</span></div>';
+  if(!LK.detEnable){
+    return head + '<div class="dline" style="font-size:10.5px;color:var(--faint)">'
+      + '未开启。开启路径：通用设置 · AI 检测。开启后这里会显示推理耗时、每路命中与通知记录。</div>'
+      + '</div>';
+  }
+  if(!st || !st.running){
+    const rw0 = (st && st.runtime) || {};
+    return head + '<div class="dline" style="color:var(--warn)">worker 未运行</div>'
+      + (rw0.python ? line("Python / wheel", "Python " + esc(rw0.python) + " · "
+                           + esc(rw0.ort || "") + (rw0.numpy ? " · " + esc(rw0.numpy) : "")) : "")
+      + '<div class="dline" style="font-size:10px;color:var(--faint)">'
+      + '服务可能是旧版本（没有检测 worker），或刚改完配置还没重启。重开一次服务再刷新。</div>'
+      + '</div>';
+  }
+  const rt = st.error
+    ? line("推理运行时", esc(String(st.error).slice(0, 80)), true)
+    : (st.loaded ? line("推理运行时", "onnxruntime 已加载 · 模型 yolo11n.onnx")
+                 : line("推理运行时", "正在解压 / 加载运行时…"));
+  /* 本机 Python 与随包 wheel 的对应关系：随包带了三套（cp311/312/313，约 99MB），
+     确认 NAS 只跑其中一个版本后可以只留那一套，把包体砍到约 1/3 */
+  const rw = st.runtime || {};
+  const rtLine = rw.python
+    ? line("Python / wheel", "Python " + esc(rw.python) + " · " + esc(rw.ort || "")
+           + (rw.numpy ? " · " + esc(rw.numpy) : ""))
+    : "";
+  const perf = st.avg_ms ? line("平均耗时", st.avg_ms + " ms/帧 · 每路每 5 秒 1 帧")
+                         : line("平均耗时", "还没有样本（等第一帧抽完）");
+  const cams = st.per_cam || {};
+  const ids = Object.keys(cams);
+  let rows = "";
+  if(ids.length){
+    rows = '<div class="dline" style="margin-top:4px"><span class="k">每路今日</span></div>';
+    ids.forEach(id=>{
+      const c = cams[id];
+      const cl = c.cls || {};
+      const parts = [];
+      if((cl.person|0) > 0)      parts.push("人 ×" + (cl.person|0));
+      if((cl.two_wheeler|0) > 0) parts.push("两轮 ×" + (cl.two_wheeler|0));
+      if((cl.vehicle|0) > 0)     parts.push("车 ×" + (cl.vehicle|0));
+      const cam = (typeof CAMERAS !== "undefined" ? CAMERAS : []).find(x=>x && x.id === id);
+      rows += '<div class="dline kv"><span class="k">' + esc(cam ? cam.name : id) + '</span><span class="v">'
+        + "抽帧 " + (c.today || 0) + (parts.length ? " · " + parts.join(" · ") : " · 无命中")
+        + (c.last ? " · 最近 " + c.last : "") + '</span></div>';
+      if(c.last_err){
+        rows += '<div class="dline kv" style="color:var(--warn)"><span class="k">最近错误</span>'
+          + '<span class="v">' + esc(String(c.last_err).slice(0, 70)) + '</span></div>';
+      }
+    });
+  }else{
+    rows = line("每路统计", "暂无（开启后第一轮抽帧完成才有数）");
+  }
+  let ntBlock = "";
+  if(nt){
+    const rec = (nt.recent || []);
+    const pend = nt.pending || 0;
+    ntBlock = line("通知队列", pend ? (pend + " 条待发" + (pend >= 400 ? " · 可能堵了，检查 Webhook" : ""))
+                                    : "空 · 已清空")
+      + (rec.length ? "" : line("通知记录", "还没有发过"));
+    if(rec.length){
+      ntBlock += '<div class="dline" style="margin-top:2px"><span class="k">最近发送</span></div>';
+      rec.slice(0, 5).forEach(r=>{
+        ntBlock += '<div class="dline kv"><span class="k">' + esc(String(r.at || "")) + '</span><span class="v">'
+          + esc(String(r.cam || "")) + " · " + esc(String(r.cat || ""))
+          + (r.ok ? " · 成功 " + (r.ms != null ? r.ms + "ms" : "")
+                  : ' · <span style="color:var(--warn)">失败 ' + esc(String(r.err || "").slice(0, 40)) + "</span>")
+          + '</span></div>';
+      });
+    }
+  }
+  return head + rt + rtLine + perf + rows + ntBlock
+    + '<div class="dline" style="margin-top:8px;font-size:10px;color:var(--faint)">'
+    + '抽帧失败会写进运行日志（带 ffmpeg 真实报错）；命中类别同时写进活动台账，'
+    + '回放页与缩时触发都从台账读，与这里的计数同源。</div>'
     + '</div>';
 }
 
@@ -6059,6 +6621,7 @@ function bindSettings(body){
   const rs = body.querySelector("#btnRestart");
   if(rs) rs.onclick = restartDiag;
   if(body.querySelector("#diagEnv")) loadDiagEnv();
+  if(body.querySelector("#diagParts")) loadDiagParts();
   if(body.querySelector("#diagLogText")) loadDiagLog();
 
   /* 公共：压制衔接 */
@@ -6111,13 +6674,120 @@ function bindSettings(body){
         : "夜间归档已关闭 · 临期全时将直接被清理删除");
     };
   });
-  body.querySelectorAll("[data-archdays]").forEach(el=>{
+  /* 归档保留天数：−/＋ 步进 + 数字直填，范围与服务端 LIMITS 一致（1–3650） */
+  body.querySelectorAll("[data-archdec],[data-archinc]").forEach(el=>{
     el.onclick = ()=>{
-      LK.archDays = +el.dataset.archdays || 90;
+      const dir = el.dataset.archinc ? 1 : -1;
+      LK.archDays = Math.max(1, Math.min(3650, (parseInt(LK.archDays,10)||7) + dir));
       ARCH.at = 0;                     /* 保留期变了，候选摘要重拉 */
       renderCamTabs(); saveCfgSoon();
     };
   });
+  const archInp = body.querySelector("#archDaysInput");
+  if(archInp) archInp.onchange = ()=>{
+    const v = Math.max(1, Math.min(3650, parseInt(archInp.value,10)||7));
+    archInp.value = v;                 /* 非法输入回落：钳到边界并回显 */
+    if(v !== LK.archDays){
+      LK.archDays = v;
+      ARCH.at = 0;                     /* 保留期变了，候选摘要重拉 */
+      renderCamTabs(); saveCfgSoon();
+    }
+  };
+  /* ---- AI 检测（0.9.60）----
+     所有交互最终都落 LK.det 系列 / LK.nt 系列并 saveCfgSoon() 推服务端——
+     这是本项目「假设置」血泪教训的防线：只改内存 = 后端永远收不到。 */
+  body.querySelectorAll("[data-deten]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.detEnable = !LK.detEnable;
+      renderCamTabs(); saveCfgSoon();
+      toast("toast2", LK.detEnable
+        ? "AI 检测已开启 · 每 5 秒/路抽帧推理，稍候在状态行查看加载结果"
+        : "AI 检测已关闭 · 台账与回放行为恢复纯帧差判定");
+    };
+  });
+  body.querySelectorAll("[data-detcls]").forEach(el=>{
+    el.onclick = ()=>{
+      const k = el.dataset.detcls;
+      LK.detCls[k] = !LK.detCls[k];
+      if(!LK.detCls.person && !LK.detCls.two_wheeler && !LK.detCls.vehicle){
+        LK.detCls[k] = true;            /* 全关=不检测，设置页拦下并说明 */
+        toast("toast2", "全关等于不检测 · 至少保留一个类别，或直接关总闸");
+        return;
+      }
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  body.querySelectorAll("[data-detsens]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.detSens = el.dataset.detsens;
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  body.querySelectorAll("[data-dettrig]").forEach(el=>{
+    el.onclick = ()=>{
+      const k = el.dataset.dettrig;
+      LK.detTrigger[k] = !LK.detTrigger[k];
+      if(!LK.detTrigger.motion && !LK.detTrigger.person && !LK.detTrigger.vehicle){
+        LK.detTrigger[k] = true;        /* 至少保留一项（与服务端强校同口径） */
+        toast("toast2", "缩时触发至少保留一项 · 全不勾所有画面都会按静止剔除");
+        return;
+      }
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  body.querySelectorAll("[data-ntcd]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.ntCooldown = Math.max(30, Math.min(600, (parseInt(LK.ntCooldown,10)||60) + parseInt(el.dataset.ntcd,10)));
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  /* 通知三开关：开着但没填 Webhook → 拦下并说明（没有发送目标，开了也发不出去） */
+  body.querySelectorAll("[data-ntsw]").forEach(el=>{
+    el.onclick = ()=>{
+      const k = el.dataset.ntsw;
+      const nk = k === "motion" ? "ntMotion" : k === "person" ? "ntPerson" : "ntVehicle";
+      if(!LK[nk] && !(LK.ntWebhook || "").trim()){
+        toast("toast2", "先填写 Webhook 地址，再开通知开关");
+        return;
+      }
+      LK[nk] = !LK[nk];
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  /* 通知三开关：开着但没填 Webhook → 拦下并说明（发送目标都没有，开了也发不出去） */
+  body.querySelectorAll("#ntWebhook").forEach(inp=>{
+    inp.onchange = ()=>{
+      LK.ntWebhook = (inp.value || "").trim();
+      saveCfgSoon();
+    };
+  });
+  const bNtSave = body.querySelector("#btnNtSave");
+  if(bNtSave) bNtSave.onclick = ()=>{
+    const inp = body.querySelector("#ntWebhook");
+    LK.ntWebhook = ((inp && inp.value) || "").trim();
+    saveCfgSoon();
+    const out = body.querySelector("#ntOut");
+    if(out) out.textContent = LK.ntWebhook ? "已保存 · 记得点右下角「保存通用设置」" : "已清空（保存后不再发送）";
+  };
+  const bNtTest = body.querySelector("#btnNtTest");
+  if(bNtTest) bNtTest.onclick = async ()=>{
+    const inp = body.querySelector("#ntWebhook");
+    const out = body.querySelector("#ntOut");
+    const url = ((inp && inp.value) || "").trim();
+    if(!url){ if(out) out.textContent = "先填 Webhook 地址再测试"; return; }
+    if(out) out.textContent = "发送中…";
+    try{
+      const r = await fetch("/api/notify/test", { method:"POST", mode:"same-origin",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ webhook: url }) });
+      const d = await r.json();
+      if(out) out.textContent = d && d.ok
+        ? ("测试发送成功" + (d.ms ? "（" + d.ms + "ms）" : ""))
+        : ("发送失败：" + ((d && d.error) || "未知原因"));
+    }catch(e){
+      if(out) out.textContent = "发送失败：网络错误";
+    }
+  };
   /* 立即归档：第一次点 = dry_run 预览；第二次点 = 真跑（受 batch 限速） */
   const bArch = body.querySelector("#btnArchNow");
   if(bArch) bArch.onclick = async ()=>{
@@ -6180,6 +6850,16 @@ function bindSettings(body){
       toast("toast2", "分片改为 " + Math.round(LK.segSec/60) + " 分钟，正在按新参数重启录制");
     };
   });
+  body.querySelectorAll("[data-linkfrag]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.frag = el.dataset.linkfrag === "1";
+      renderCamTabs();
+      saveCfgSoon();            /* 进 pushCfg body：ffmpeg 的 -movflags 是物理参数 */
+      toast("toast2", LK.frag
+        ? "已改为分片 MP4：写入即可播，强杀/断电最多丢 1~2 秒"
+        : "已改为整片 MP4：必须正常收尾，被强杀的分片会打不开");
+    };
+  });
   const lkRun = body.querySelector("#btnLinkRun");
   if(lkRun) lkRun.onclick = ()=>{
     lkRun.disabled = true; lkRun.textContent = "正在触发…";
@@ -6208,6 +6888,7 @@ function bindSettings(body){
   body.querySelectorAll("[data-camrow]").forEach(row=>{
     row.onclick = e=>{
       if(e.target.closest("[data-delcam]") || e.target.closest("[data-drag]")) return;
+      SET.addArmed = false;   // 点到别处就取消「待确认添加」
       const id = row.dataset.camrow;
       if(SET.editing && state.camId !== id){
         toast("toast2", "还有未保存的改动 · 先保存或取消");
@@ -6224,6 +6905,7 @@ function bindSettings(body){
   body.querySelectorAll("[data-delcam]").forEach(el=>{
     el.onclick = e=>{
       e.stopPropagation();
+      SET.addArmed = false;
       const id = el.dataset.delcam;
       if(SET.armed === id){ delCamera(id); return; }
       SET.armed = id;
@@ -6233,9 +6915,17 @@ function bindSettings(body){
     };
   });
 
-  /* 添加 */
+  /* 添加：两段确认（0.9.64）。第一点只待确认，第二点才真添加；
+     超时/点到别处自动取消待确认态 */
   body.querySelectorAll("[data-addcam]").forEach(el=>{
-    el.onclick = e=>{ e.stopPropagation(); addCamera(); };
+    el.onclick = e=>{
+      e.stopPropagation();
+      if(SET.addArmed){ SET.addArmed = false; addCamera(); return; }
+      SET.addArmed = true;
+      renderCamTabs();
+      toast("toast2", "再点一次「确认添加」· 3 秒内有效");
+      setTimeout(()=>{ if(SET.addArmed){ SET.addArmed = false; renderCamTabs(); } }, 3200);
+    };
   });
 
   /* 只读 → 编辑 / 收起 */
@@ -6306,6 +6996,30 @@ function bindSettings(body){
   body.querySelectorAll("[data-cmcam]").forEach(el=>{
     el.onclick = ()=>{
       draftSet("condenseMode", el.dataset.cmcam);
+      renderCamTabs();
+    };
+  });
+  /* 本路 AI 检测：follow/on/off（草稿态）。off 时不抽帧不推理，
+     全局总闸关闭时本段整体不生效（由 bodyDetect 的提示文案说明） */
+  body.querySelectorAll("[data-camdet]").forEach(el=>{
+    el.onclick = ()=>{
+      draftSet("detect", el.dataset.camdet);
+      renderCamTabs();
+    };
+  });
+  /* 本路检测类别：person / two_wheeler / vehicle 三开关（草稿态）。
+     只推显式配了的三键，服务端缺键=False，不会把全局类别偷偷补回来。 */
+  body.querySelectorAll("[data-camdetcls]").forEach(el=>{
+    el.onclick = ()=>{
+      const k = el.dataset.camdetcls;
+      const cur = draftGet("detectCls") || { person:true, two_wheeler:true, vehicle:true };
+      const next = Object.assign({}, cur);
+      next[k] = !cur[k];
+      if(!next.person && !next.two_wheeler && !next.vehicle){
+        toast("toast2", "至少保留一个类别 · 全关等于不检测，直接用「关」更省算力");
+        return;
+      }
+      draftSet("detectCls", next);
       renderCamTabs();
     };
   });
@@ -6736,11 +7450,32 @@ function pickCam(id, autoPlay){
    dayList / dayIdx，两页切机位、切日期始终同步。
    P0 范围：全天时间轴渲染 + 定位 + 事件列表；点标记的 seek 连播随 P1
    常驻画面区一起落地。坐标约定与后端一致：当天 0 点起的浮点秒。 */
-const VTL_TOP = 30;                        // 顶部留 30px
+const VTL_TOP = 30;                        // 顶部留 30px（0:00 刻度标签的上方余量）
 const VTL_PXH_DEF = 120, VTL_PXH_MIN = 30, VTL_PXH_MAX = 600;
 let vtlPxh = VTL_PXH_DEF;                  // 1 小时 = 120px（旧版 60 太挤，热点事件互相叠）
 let vtlData = null, vtlDay = null;         // 最近一次台账缓存，缩放重绘时复用
-function vtlY(sec){ return VTL_TOP + sec / 3600 * vtlPxh; }
+/* ---------- 上下留白（0.9.68）----------
+   固定时刻线钉在视口自下而上 2/3 高度（距顶 1/3 处）。以前内容顶端只留 30px、
+   底端 24px，于是滚动到两端时 00:00:00 / 24:00:00 还离时刻线很远 —— 想定位
+   当天最前面/最后面只能凭感觉，全时轴缩到最小时（30px/h）甚至差出小半个屏。
+   现在内容上下各补一段空白：顶上补到「线到视口顶的距离」，底下补到「线到视口底
+   的距离」，滚到两端时 00:00 与 24:00 正好压在线上。留白随视口高度变化（切页、
+   全屏、旋转、窗口缩放都会重算），与缩放倍率无关 —— 倍率只影响 1 小时占多少像素。 */
+let vtlPadTop = 0, vtlPadBot = 0;
+let vtlScH = 0;                            // 上次量到的视口高度，用于发现「高度变了」
+function vtlTop(){ return VTL_TOP + vtlPadTop; }
+function vtlY(sec){ return vtlTop() + sec / 3600 * vtlPxh; }
+/* 按当前视口高度重算上下留白。页面刚显示量不到高度（clientHeight=0）时沿用上次的值 */
+function vtlSyncPad(){
+  const sc = document.getElementById("vtlScroll");
+  let h = (sc && typeof sc.clientHeight === "number") ? sc.clientHeight : 0;
+  if(h < 40) h = vtlScH || 0;
+  vtlScH = h;
+  const line = Math.round(h / 3);            // 固定时刻线距视口顶
+  vtlPadTop = Math.max(0, line - VTL_TOP);
+  vtlPadBot = Math.max(0, h - line - 24);    // 线下那段也要留够（底部 24px 是原留白）
+  return h;
+}
 function vtlClampPxh(v){
   return Math.max(VTL_PXH_MIN, Math.min(VTL_PXH_MAX, v));
 }
@@ -6763,7 +7498,9 @@ function vtlZoom(factor, anchorSec, anchorY){
     }
     if(anchorSec == null){
       anchorY = Math.round(sc.clientHeight / 3);
-      anchorSec = (sc.scrollTop + anchorY - VTL_TOP) / vtlPxh * 3600;
+      /* 落在上下留白里时算出的是负值/超界，夹回当天范围（否则缩放会锚到不存在的时刻） */
+      anchorSec = Math.max(0, Math.min(86400,
+        (sc.scrollTop + anchorY - vtlTop()) / vtlPxh * 3600));
     }
   }
   const np = vtlClampPxh(vtlPxh * factor);
@@ -6786,8 +7523,8 @@ function renderPlay(autoStart){
   renderPlayDates();
   renderPlayCamPick();
   renderVtl(null, curDay());
-  /* 换机位/换日期 = 用户手势内直接定位最新全时录像开播（v0.9.48） */
-  if(autoStart) pvJumpLatest();
+  /* 进页 / 换机位 / 换日期：定位到默认落点开播（0.9.72 起与点播放同一套规则） */
+  if(autoStart) pvAutoEnter(true);
   const day = curDay();
   if(!state.camId || !day) return;   // 空态由时间轴摘要兜住
   fetch("/api/ledger?cam=" + encodeURIComponent(state.camId) + "&date=" + day,
@@ -6797,12 +7534,21 @@ function renderPlay(autoStart){
       renderVtl(d, day);
       const sum = d.summary || {count:0, active_sec:0};
       const sumEl = document.getElementById("vtlSum");
-      if(sumEl) sumEl.textContent = sum.count
-        ? (sum.count + " 个活动 · 累计 " + durText(sum.active_sec))
-        : "暂无活动记录（判定进行中，或这一路的缩时方案是「关闭」）";
+      if(sumEl){
+        /* 摘要用 innerHTML：全天各类别计数带色（与时间轴同色）。无 AI 数据时
+           这段为空串，摘要与旧版逐字一致 */
+        sumEl.innerHTML = sum.count
+          ? (sum.count + " 个活动 · 累计 " + durText(sum.active_sec) + clsDayText(d.events))
+          : "暂无活动记录（判定进行中，或这一路的缩时方案是「关闭」）";
+      }
+      /* 图例：这天一条 AI 类别都没有（AI 没开 / 旧台账）→ 两个 AI 类别降透明度 */
+      const lg = document.getElementById("evLegend");
+      if(lg) lg.classList.toggle("noai", !clsDayText(d.events));
     }).catch(e=>{
       const sumEl = document.getElementById("vtlSum");
       if(sumEl) sumEl.textContent = "台账读取失败";
+      const lg = document.getElementById("evLegend");
+      if(lg) lg.classList.add("noai");
       toast("toast2", String(e.message || e));
     });
 }
@@ -6871,7 +7617,8 @@ function renderVtl(d, day, anchorSec, anchorY){
   if(d){ vtlData = d; vtlDay = day; }
   vtlBubbleHide();
   box.innerHTML = "";
-  box.style.height = (VTL_TOP + 24 * vtlPxh + 24) + "px";
+  vtlSyncPad();   // 上下留白先算：下面的坐标、高度、滚动定位全依赖它
+  box.style.height = (vtlTop() + 24 * vtlPxh + vtlPadBot + 24) + "px";
   /* 刻度步进随缩放变精细：默认 120px/h 仍是 1 小时刻度，
      放大到 150px/h 起 30 分 → 15 分 → 5 分；缩太小则 2/3/6 小时一格 */
   const TICKS = [[480,5],[240,10],[150,30],[90,60],[45,120],[22,180],[0,360]];
@@ -6890,13 +7637,25 @@ function renderVtl(d, day, anchorSec, anchorY){
   track.style.height = (24 * vtlPxh) + "px";
   box.appendChild(track);
   const av = (d && d.avail) || {};
-  /* 活动清单先算好：横线标注与活动时段块共用 */
+  /* 服务端时基（0.9.72）：录像分片按 NAS 时钟命名，所以「现在」也用 NAS 给的，
+     别用浏览器 Date —— 手机与 NAS 差几分钟时，蓝块会画到红线之外，
+     看着就是「真实时间还没到，已经显示录了视频」。d.now 只在今天有值。 */
+  const srvNow = (d && typeof d.now === "number") ? d.now : null;
+  /* 活动清单先算好：横线标注与活动时段块共用。
+     pvClsMatch 过一遍类别筛选：不命中的时段块/横线整体变淡（0.9.60），
+     但历史事件（无 cls）永远不淡——升级不该把旧活动藏掉 */
   const evs = ((d && d.events) || []).slice().sort((a,b)=>a.s-b.s);
+  const evHit = evs.map(pvClsMatch);
   (av.full || []).forEach(iv=>{
+    /* 兜底夹紧：服务端已经按 now 夹过（ledger.avail_spans），这里再夹一次，
+       防止老版本服务端 / 缓存响应把蓝块画到未来 */
+    let e2 = iv[1];
+    if(srvNow != null) e2 = Math.min(e2, srvNow);
+    if(e2 <= iv[0]) return;
     const el = document.createElement("div");
     el.className = "vavail";
     el.style.top = vtlY(iv[0]) + "px";
-    el.style.height = Math.max(4, vtlY(iv[1]) - vtlY(iv[0])) + "px";
+    el.style.height = Math.max(4, vtlY(e2) - vtlY(iv[0])) + "px";
     box.appendChild(el);
   });
   (av.archive || []).forEach(iv=>{
@@ -6906,25 +7665,39 @@ function renderVtl(d, day, anchorSec, anchorY){
     el.style.height = Math.max(4, vtlY(iv[1]) - vtlY(iv[0])) + "px";
     box.appendChild(el);
   });
-  /* 活动时段块：蓝轨同列的橙色块，「活动」筛选时点亮（其余区域变淡） */
-  evs.forEach(ev=>{
+  /* 活动时段块（0.9.69）：与横线同一套三格，高度 = 这段持续多久。
+     最小 4px 地板——默认 120px/h 下 2 秒只有 0.07px，不给地板等于没画。
+     尾巴从事件起点向下长，头顶正好压着同一时刻的那根 3px 亮线：
+     线回答「什么时候开始的」，尾巴回答「待了多久」。 */
+  evs.forEach((ev, k)=>{
     const el = document.createElement("div");
-    el.className = "vevspan";
+    el.className = "vevspan" + (evHit[k] ? "" : " dim");
     el.style.top = vtlY(ev.s) + "px";
-    el.style.height = Math.max(4, vtlY(ev.e) - vtlY(ev.s)) + "px";
+    const h = Math.max(4, vtlY(ev.e) - vtlY(ev.s));
+    el.innerHTML = vtlLanes(evKind(ev), h, true);
     box.appendChild(el);
   });
-  // 事件层：Aqara 式橙色横线标注（3px 细线，命中区 16px）。
-  // 挤在一起（间距 < 6px）的合并为一根长线（组），点线弹标注气囊，点空白处直接跳播。
-  const GAP = 6;   // 线高 3 + 间隙 3
+  // 事件层：类别色短横线标注（0.9.62 分色，0.9.67 起三车道）。
+  // 挤在一起（间距 < 20px）的合并为一根线（组），点线弹标注气囊，点空白处直接跳播。
+  // 组的线段取组内各类别并集 —— 一簇里既有人又有车，左中右三格都点亮。
+  const GAP = 20;   // 标记命中区 18px，留 2px 呼吸
   let i = 0;
   while(i < evs.length){
     let j = i;
     while(j + 1 < evs.length && vtlY(evs[j + 1].s) - vtlY(evs[i].s) < GAP) j++;
     const ev0 = evs[i], cnt = j - i + 1, lo = i, hi = j;   // 闭包捕获：i/j 循环里会变，必须先存局部
+    /* 组内只要有一个命中就不淡（整组共用一个点击目标，分开算会让用户点不到） */
+    let grpHit = false;
+    const uk = { motion:false, person:false, vehicle:false };
+    for(let k = lo; k <= hi; k++){
+      if(evHit[k]) grpHit = true;
+      const kd = evKind(evs[k]);
+      for(const key in uk) if(kd[key]) uk[key] = true;
+    }
     const el = document.createElement("div");
-    el.className = "vmark" + (cnt > 1 ? " grp" : "");
+    el.className = "vmark" + (cnt > 1 ? " grp" : "") + (grpHit ? "" : " dim");
     el.style.top = vtlY(ev0.s) + "px";
+    el.innerHTML = '<div class="lanes">' + vtlLanes(uk) + "</div>";
     el.onclick = e=>{ e.stopPropagation();
       vtlBubbleShow(e.currentTarget, ev0, cnt > 1 ? evs.slice(lo, hi + 1) : null); };
     box.appendChild(el);
@@ -6936,8 +7709,14 @@ function renderVtl(d, day, anchorSec, anchorY){
   if(PPLAY.on && PPLAY.day === day && PPLAY.camId === state.camId){
     nowSec = PPLAY.t;
   }else if(day === jsToday()){
-    const t = new Date();
-    nowSec = t.getHours() * 3600 + t.getMinutes() * 60 + t.getSeconds();
+    if(srvNow != null){
+      /* 红线与蓝块必须共用同一个「现在」：一个用 NAS 时钟、一个用手机时钟，
+         差几分钟就会出现线落在蓝块外面，看起来像"未来也有录像" */
+      nowSec = srvNow;
+    }else{
+      const t = new Date();
+      nowSec = t.getHours() * 3600 + t.getMinutes() * 60 + t.getSeconds();
+    }
   }else{
     nowSec = evs.length ? evs[evs.length - 1].e : 12 * 3600;
   }
@@ -6968,15 +7747,34 @@ function syncVnowline(){
   const sc = document.getElementById("vtlScroll");
   const ln = document.getElementById("vnowline");
   if(!sc || !ln) return;
-  ln.style.top = (sc.offsetTop + Math.round(sc.clientHeight / 3)) + "px";
+  const lineY = Math.round(sc.clientHeight / 3);
+  ln.style.top = (sc.offsetTop + lineY) + "px";
+  /* 视口高度变了（进全屏 / 转屏 / 页面刚显示 / 窗口缩放）：上下留白必须跟着重算，
+     否则两端还是滚不到线。锚住线下的时刻重绘，视线不跳。 */
+  if(vtlData && sc.clientHeight > 60 && Math.abs(sc.clientHeight - vtlScH) > 2){
+    const t = Math.max(0, Math.min(86400,
+      (sc.scrollTop + lineY - vtlTop()) / vtlPxh * 3600));
+    renderVtl(vtlData, vtlDay, t, lineY);
+    return;   // renderVtl 末尾会再调一次本函数（此时高度已同步，不会再进来）
+  }
   const em = document.getElementById("vnowTime");
   if(!em) return;
   if(PPLAY.on){ em.textContent = hms(PPLAY.t); return; }
   const t = Math.max(0, Math.min(86400,
-    (sc.scrollTop + sc.clientHeight / 3 - VTL_TOP) / vtlPxh * 3600));
+    (sc.scrollTop + sc.clientHeight / 3 - vtlTop()) / vtlPxh * 3600));
   em.textContent = hms(t);
 }
 
+/* 运动佐证（0.9.69）：事件起止是不是帧差确认的。
+   mv=1 → 边界来自移动侦测（车真的进来了 / 真的走了）；
+   mv=0 → 有帧差管线，但这段时间画面没动过（AI 可能误检，如实提示）；
+   mv=-1 / 缺 → 这条台账没有帧差数据，边界就是 AI 自己判的，不额外解释。 */
+function mvText(ev){
+  const mv = ev && ev.mv;
+  if(mv === 1) return '<div class="bi">起止由移动侦测确认（车来了 → 车走了）</div>';
+  if(mv === 0) return '<div class="bi">这段时间画面没有变化 · AI 单独判定</div>';
+  return "";
+}
 /* 标注气囊：点横线弹出（再点同一根 = 关）；列表行/播放钮直接跳播 */
 let vtlBubbleEl = null, vtlBubbleRef = null;
 function vtlBubbleHide(){
@@ -6984,6 +7782,40 @@ function vtlBubbleHide(){
   vtlBubbleRef = null;
 }
 function densText(d){ return d >= 0.3 ? " · 高密度" : d >= 0.1 ? " · 中密度" : " · 低密度"; }
+/* 事件类别摘要（0.9.60）：台账 events_of 聚合出的各类别计数。
+   纯帧差时代的事件没有 cls，返回空串——不显示"0 人 0 车"这种误导信息 */
+/* 气泡里的类别摘要：加粗 + 类别色 + 小色片，与时间轴横线段同一套配色。
+   0.9.63 起两轮车并入车辆：车 = 车辆 + 两轮车计数。
+   旧台账没有 cls → 返回空串，不出现「0 人 0 车」这种误导信息 */
+function clsText(ev){
+  const c = ev && ev.cls;
+  if(!c) return "";
+  const parts = [];
+  if((c.person|0) > 0)
+    parts.push('<b class="clsw t-person"><i class="cd c-person"></i>人 ×' + (c.person|0) + "</b>");
+  const v = (c.vehicle|0) + (c.two_wheeler|0);
+  if(v > 0)
+    parts.push('<b class="clsw t-veh"><i class="cd c-veh"></i>车 ×' + v + "</b>");
+  return parts.length ? ' <span class="csep">·</span> ' + parts.join(' <span class="csep">·</span> ') : "";
+}
+/* 顶部摘要里的全天各类别计数（0.9.62，0.9.63 起两轮车并入车辆）：
+   与时间轴同色，扫一眼就知道这天人/车各多少。
+   只有真检出过才拼这段 —— AI 没开或旧台账时摘要保持原样，不摆零 */
+function clsDayText(evs){
+  let p = 0, v = 0;
+  (evs || []).forEach(ev=>{
+    const c = ev && ev.cls;
+    if(!c) return;
+    p += (c.person|0); v += (c.vehicle|0) + (c.two_wheeler|0);
+  });
+  if(!p && !v) return "";
+  const seg = (n, lab, cls)=> n
+    ? '<b class="clsw ' + cls + '"><i class="cd ' + cls.replace("t-", "c-") + '"></i>' + lab + " " + n + "</b>"
+    : "";
+  return ' <span class="csep">·</span> ' + [seg(p, "人", "t-person"), seg(v, "车", "t-veh")]
+    .filter(Boolean).join(' <span class="csep">·</span> ');
+}
+
 function vtlBubbleShow(anchor, ev0, list){
   const boxv = document.getElementById("vtl");
   if(!boxv || !anchor) return;
@@ -6995,13 +7827,14 @@ function vtlBubbleShow(anchor, ev0, list){
     let html = '<div class="bt">' + hms(list[0].s) + " 附近 · " + list.length + " 个事件</div>";
     list.forEach(ev=>{
       html += '<div class="row" data-t="' + Math.max(0, ev.s - PV_ROLL) + '"><b>' + hms(ev.s) + '</b>'
-        + '<span>' + durText(ev.e - ev.s) + densText(ev.d) + '</span>'
+        + '<span>' + durText(ev.e - ev.s) + densText(ev.d) + clsText(ev) + '</span>'
         + '<span class="d">播放 ▸</span></div>';
     });
     el.innerHTML = html;
   }else{
     el.innerHTML = '<div class="bt">' + hms(ev0.s) + '</div>'
-      + '<div class="bi">' + durText(ev0.e - ev0.s) + densText(ev0.d) + '</div>'
+      + '<div class="bi">' + durText(ev0.e - ev0.s) + densText(ev0.d) + clsText(ev0) + '</div>'
+      + mvText(ev0)
       + '<button class="go" data-t="' + Math.max(0, ev0.s - PV_ROLL) + '">▶ 从此处播放</button>';
   }
   el.style.top = (parseFloat(anchor.style.top) + 10) + "px";
@@ -7020,13 +7853,9 @@ function vtlBubbleShow(anchor, ev0, list){
   }
 }
 
-/* 播放位置所在事件的横线高亮（轻量，不重绘时间轴） */
-function vtlMarkActive(){
-  const on = PPLAY.on && ((vtlData && vtlData.events) || []).find(ev=> PPLAY.t >= ev.s && PPLAY.t < ev.e);
-  const y = on ? vtlY(on.s) : null;
-  document.querySelectorAll("#vtl .vmark").forEach(x=>
-    x.classList.toggle("on", y != null && Math.abs(parseFloat(x.style.top) - y) < 0.5));
-}
+/* 0.9.67 起取消「播放落点胶囊」：以前手指点到时间轴某处（正好落在活动上）
+   会弹出一颗软底小胶囊把整根标记圈起来，看着像凭空冒出来的浮层，
+   还把类别色压淡。位置信息交给固定的红色时刻线就够了，这里不再高亮 */
 
 /* ================= 回放页常驻画面区（P1）=================
    与文件页的弹出播放器相互独立：这里只服务 Aqara 回放页的
@@ -7039,7 +7868,13 @@ const PV_ROLL = 3.0;
 /* filter：full=全时连播；act=活动连播（按预设跳过静止段）。
    speed：全时/平时的倍速（浏览器上限 16×）；silent 仍是活动模式下静止段的预设方案。 */
 const PPLAY = { on:false, filter:"full", silent:"skip",
-                day:null, camId:null, segs:[], segIdx:-1, t:0, ff:null, speed:1, endHit:false };
+                day:null, camId:null, segs:[], segIdx:-1, t:0, ff:null, speed:1,
+                endHit:false, inAct:false, seekTo:null, seekAt:0,
+                /* 活动类别筛选（0.9.60，0.9.63 车辆含两轮车，0.9.67 三类并列）：
+                   未勾的类别不参与活动导航、时间轴上同步变淡。
+                   移动侦测 = 没有任何 AI 类别的纯帧差事件（与 evKind 同一口径）。
+                   全勾 = 不过滤，与旧行为完全一致 */
+                cls:{ motion:true, person:true, vehicle:true } };
 /* 归档面板状态：sum=候选摘要文案；arm=预览已出待确认；out=最近一次结果 */
 const ARCH = { sum:"", out:"", arm:null, at:0, loading:false };
 try{
@@ -7048,6 +7883,22 @@ try{
   if([1,2,4,8,16].indexOf(sp) >= 0) PPLAY.speed = sp;
   const s = localStorage.getItem("nvr_silent");
   if(s === "16" || s === "32") PPLAY.silent = s;
+  /* 活动类别筛选回读（0.9.60，0.9.63 迁移车辆，0.9.67 加移动侦测）：
+     缺键按「勾选」算，保证旧偏好/脏数据不缩小结果集 */
+  const cs = localStorage.getItem("nvr_pvcls");
+  if(cs){
+    try{
+      const o = JSON.parse(cs);
+      if(o && typeof o === "object"){
+        /* 旧偏好里没有 motion 键（0.9.67 之前只有人员/车辆）→ 勾上，不藏事件 */
+        PPLAY.cls.motion  = o.motion !== false;
+        PPLAY.cls.person  = o.person !== false;
+        /* 0.9.63 起两轮车并入车辆：旧偏好里 two_wheeler 的勾选取并集，
+           避免升级后原本能看的两轮车事件被筛选藏掉 */
+        PPLAY.cls.vehicle = (o.vehicle !== false) || (o.two_wheeler !== false);
+      }
+    }catch(e){}
+  }
 }catch(e){}
 let pvCur = pvA, pvNxt = pvB, pvPreloadSeg = -1;
 
@@ -7071,6 +7922,18 @@ function pvStop(){
   pvSyncVtl();
 }
 
+/* 回放页专用播放：进页面自动播可能被浏览器策略拦（从返回键/历史恢复进来不算用户手势）。
+   被拦时把 PPLAY.on 退回 false —— 大播放钮必须留在画面上，
+   否则状态显示「已定位在播」、按钮却已隐藏，用户找不到重新播放的入口。
+   不直接用 safePlay：那个是直播/文件页共用的静默版本，不能改它的语义。 */
+function pvSafePlay(){
+  const back = ()=>{ PPLAY.on = false; pvSyncCtl(); };
+  try{
+    const p = pvCur.play();
+    if(p && p.catch) p.catch(back);
+  }catch(e){ back(); }
+}
+
 /* 跳播：t = 当天钟点秒。目标无画面时提示并拒绝（宁可不播也不黑屏） */
 function pvPlayAt(t, opts){
   opts = opts || {};
@@ -7083,6 +7946,11 @@ function pvPlayAt(t, opts){
   PPLAY.on = true; PPLAY.segIdx = hit.idx;
   PPLAY.t = Math.max(seg.s, t);
   PPLAY.day = curDay(); PPLAY.camId = state.camId; PPLAY.ff = null;
+  PPLAY.endHit = false;   // 重新定位 = 离开尽头状态，重试资格恢复（收播后点播放续看也走这里）
+  /* 落点是否在活动内：决定「过了最后一个活动」时该收播还是照常播（手动跳播不算播完） */
+  PPLAY.inAct = PPLAY.filter === "act" && pvInEvent(PPLAY.t);
+  PPLAY.seekTo = PPLAY.t;   // 落点守卫：timeupdate 里等 currentTime 真的到位再认位置
+  PPLAY.seekAt = Date.now();
   /* 下一段已预加载好 = 热切换；否则冷启动整个 src（避免清空再加载的黑帧） */
   if(pvPreloadSeg === hit.idx && pvNxt.getAttribute("src") === seg.file){
     const old = pvCur;
@@ -7097,7 +7965,7 @@ function pvPlayAt(t, opts){
   pvCur.classList.add("on");
   try{ pvCur.currentTime = Math.max(0, PPLAY.t - seg.s); }catch(e){}
   pvRate();
-  safePlay(pvCur);
+  pvSafePlay();
   pvSyncOsd(); pvSyncCtl(); pvPreloadNext(); pvSyncVtl();
   return true;
 }
@@ -7111,10 +7979,70 @@ function pvPreloadNext(){
   try{ if(v.getAttribute("src") !== nx.file){ v.src = nx.file; v.load(); } }catch(e){}
 }
 
+/* ---------- 事件类别与配色（0.9.62，0.9.63 起车辆含两轮车）----------
+   时间轴「一眼分型」的公共口径：
+     橙 = 移动侦测（帧差，台账无 cls） · 蓝 = 人员 · 青绿 = 车辆（含两轮车）
+   - 时段块（.vevspan）取主色：计数最高的类别，并列按 人 > 车 的优先级，
+     保证同一段永远是同一个颜色，不会因为计数相等在两帧渲染间跳色；
+   - 横线（.vmark）三车道：左 1/3 移动侦测、中 1/3 人员、右 1/3 车辆，互不重叠；
+   - 组（多个事件挤在一起合并成一根线）取组内各类别的并集。 */
+const CLS_COLOR = { motion:"motion", person:"person", vehicle:"veh" };
+/* 某事件出现了哪些类别。
+   - 没有 cls（旧台账 / 纯帧差）→ 只有移动侦测；
+   - cls 存在但全 0（极端情况）→ 回落移动侦测，别渲染成一条没颜色的线；
+   - mv===1（0.9.69）→ 移动侦测格也点亮：帧差确认了这次进出的边界，
+     移动侦测从此不只属于「AI 没看懂」的时段，而是人员/车辆的辅助判断条件。
+     三格是宽度方向互不重叠，同时点亮不同格不冲突。
+   0.9.63 起两轮车并入车辆：台账里的 two_wheeler 计数算进 vehicle */
+function evKind(ev){
+  const c = ev && ev.cls;
+  if(!c) return { motion:true, person:false, vehicle:false };
+  const k = { motion:(ev.mv === 1),
+              person:(c.person|0) > 0,
+              vehicle:((c.vehicle|0) + (c.two_wheeler|0)) > 0 };
+  if(!k.person && !k.vehicle) k.motion = true;
+  return k;
+}
+/* 时段块的三格 HTML（0.9.69）：与横线同一套位置（左 0 / 中 20 / 右 40，各 19px），
+   h 是这段的像素高度（真实在场时长，4px 地板）。 */
+function vtlLanes(kind, h, styleOnly){
+  const st = (styleOnly && h != null)
+    ? ' style="height:' + (Math.round(h * 10) / 10) + 'px"' : "";
+  let out = "";
+  if(kind.motion)  out += '<i class="c-motion mot"' + st + "></i>";
+  if(kind.person)  out += '<i class="c-person per"' + st + "></i>";
+  if(kind.vehicle) out += '<i class="c-veh veh"' + st + "></i>";
+  return out;
+}
+
+/* 活动类别筛选（0.9.60，0.9.63 车辆含两轮车，0.9.67 加移动侦测）：
+   某事件是否落在当前勾选的类别里。cls 是台账聚合的各类别计数（events_of 输出）。
+   「移动侦测」= 没有任何 AI 类别的纯帧差事件（与 evKind 完全同一口径）——
+   被 AI 认出人/车的那一段属于人员/车辆，勾「移动侦测」不再重复收到它，
+   这样三类筛选互不重叠，用户才能真正筛到「AI 没看懂、但画面上有动静」的部分。
+   旧台账事件没有 cls（纯帧差时代）→ 同样按移动侦测算，默认勾选，升级不藏活动。
+   vehicle 口径含 two_wheeler：勾「车辆」时两轮车的计数也算命中。 */
+function pvClsMatch(ev){
+  const c = ev && ev.cls;
+  const hasP = !!(c && (c.person|0) > 0);
+  const hasV = !!(c && ((c.vehicle|0) + (c.two_wheeler|0)) > 0);
+  const hasM = !hasP && !hasV;      /* 没有 AI 类别 = 纯移动侦测 */
+  const cl = PPLAY.cls || {};
+  if(cl.motion  && hasM) return true;
+  if(cl.person  && hasP) return true;
+  if(cl.vehicle && hasV) return true;
+  return false;
+}
+/* 当前筛选下的活动清单（已按开始时间排序） */
+function pvEvents(){
+  const evs = (vtlData && vtlData.events) || [];
+  return evs.filter(pvClsMatch);
+}
+
 /* 下一个播放目标：活动筛选 = 下一个活动起点（垫 PV_ROLL）；全时 = 下一分片起点 */
 function pvNextTarget(){
   if(PPLAY.filter === "act"){
-    const evs = (vtlData && vtlData.events) || [];
+    const evs = pvEvents();
     for(let k = 0; k < evs.length; k++){
       if(evs[k].s > PPLAY.t + 0.25) return { t: Math.max(0, evs[k].s - PV_ROLL) };
     }
@@ -7148,21 +8076,34 @@ function pvAdvance(){
       });
       return;
     }
-    pvFinish();
+    /* endHit 已置位 = 有一次刷新在途，收播/续播由它的回调裁决；
+       这里再收一次会和回调抢（分片尾与刷新同时到时提前弹提示） */
     return;
   }
   PPLAY.endHit = false;   // 正常推进，恢复「尽头重试」资格
   /* 静止段快进：不 seek，继续播但加速静音，到下一活动起点恢复原速。
      注意先 pvPlayAt 再设 ff（pvPlayAt 内部会清 ff，顺序反了会被吃掉） */
   if(PPLAY.filter === "act" && PPLAY.silent !== "skip"){
-    const target = tgt.t + PV_ROLL;   // 快进直达活动本体（不需要落点余量）
-    if(PPLAY.t >= target){ pvPlayAt(target, { quiet:true }); return; }
+    const evT = tgt.t + PV_ROLL;      // 活动本体起点（不需要落点余量）
+    const seg = PPLAY.segs[PPLAY.segIdx];
+    /* 已到分片尾/当前片已不在：光设 ff 不会换片，画面会停在结束帧——
+       必须真换片（0.9.59 修：16× 模式在分片尾卡死） */
+    if(!seg || PPLAY.t >= seg.e - 0.05 || PPLAY.t >= evT){
+      pvPlayAt(Math.max(evT, PPLAY.t + 0.2), { quiet:true });
+      return;
+    }
     if(!pvSegAt(PPLAY.t)){
       const nx = PPLAY.segs.find(sg => sg.e > PPLAY.t);
       if(nx && !pvPlayAt(nx.s, { quiet:true })) return;
     }
-    PPLAY.ff = target;
+    PPLAY.ff = evT;
     pvRate();
+    return;
+  }
+  /* 活动模式 + 直接跳过：落点走 pvActTarget（不跨回上一分片、只准前进），
+     否则「活动起点-3 秒」贴在分片边界时会 29/30 秒死循环；全时模式维持原样 */
+  if(PPLAY.filter === "act"){
+    pvPlayAt(pvActTarget(tgt.t + PV_ROLL, PPLAY.t + 0.2), { quiet:true });
     return;
   }
   pvPlayAt(tgt.t, { quiet:true });
@@ -7209,24 +8150,68 @@ function pvRate(){
    判定窗口用 s-PV_ROLL：跳播落点本身就垫在活动前 3 秒，不能把它当成静止段，否则死循环 */
 function pvSkipStatic(){
   if(PPLAY.filter !== "act") return false;
-  const evs = (vtlData && vtlData.events) || [];
+  const evs = pvEvents();
   if(!evs.length) return false;
   let cur = false, nxt = null;
   for(let k = 0; k < evs.length; k++){
     if(PPLAY.t >= evs[k].s - PV_ROLL - 0.01 && PPLAY.t < evs[k].e){ cur = true; break; }
     if(evs[k].s > PPLAY.t){ nxt = evs[k]; break; }
   }
-  if(cur || !nxt) return false;   /* 在活动内；没有下一个 = 播完，交给分片结束逻辑 */
-  if(PPLAY.silent === "skip") return pvPlayAt(Math.max(0, nxt.s - PV_ROLL), { quiet:true });
+  if(cur){ PPLAY.inAct = true; return false; }   /* 在活动内，继续播 */
+  if(!nxt){
+    /* 已经过了最后一个活动。只有「从活动里自然播出来」才收播——
+       手动跳播/进回放落在静止区（inAct=false）不该立刻弹「已播完最后一个活动」，
+       那是 0.9.57 的回归：点任意时刻都被判成播完。自然播完仍走 pvAdvance 的
+       尽头重试（先刷清单/台账，可能刚判出新活动），endHit 防重复触发 */
+    if(PPLAY.inAct){
+      PPLAY.inAct = false;
+      if(!PPLAY.endHit) pvAdvance();
+    }
+    return false;
+  }
+  PPLAY.inAct = false;   /* 已离开活动，正走向下一个活动 */
+  if(PPLAY.silent === "skip") return pvPlayAt(pvActTarget(nxt.s, PPLAY.t + 0.2), { quiet:true });
   if(PPLAY.ff == null){ PPLAY.ff = nxt.s; pvRate(); }
   return false;
+}
+
+/* 某时刻是否落在活动窗口内（含落点余量 PV_ROLL）——跳播后用它判定「是不是从活动里开始」 */
+function pvInEvent(t){
+  const evs = pvEvents();
+  for(let k = 0; k < evs.length; k++){
+    if(t >= evs[k].s - PV_ROLL - 0.01 && t < evs[k].e) return true;
+  }
+  return false;
+}
+
+/* 活动跳播落点：常规垫 PV_ROLL 吸收关键帧误差；两个硬约束——
+   ① 不许跨回上一分片：活动紧贴分片边界时（如 23:30:02 的活动，s-3 = 23:29:59）
+      落点会掉进上一分片的最后一秒，播完那一秒分片就结束、pvAdvance 又把同一落点
+      算回来，于是在 29/30 秒之间死循环（0.9.59 修）；
+   ② 不许后退：floorT 保证每次跳播都往前，杜绝原地打转 */
+function pvActTarget(evS, floorT){
+  let t = Math.max(0, evS - PV_ROLL);
+  const hit = pvSegAt(evS);           // 活动起点所在分片
+  if(hit && t < hit.seg.s) t = hit.seg.s;
+  if(floorT != null && t < floorT) t = floorT;
+  return t;
 }
 
 function pvOnTime(){
   if(!PPLAY.on) return;
   const v = pvCur, seg = PPLAY.segs[PPLAY.segIdx];
   if(!seg) return;
-  PPLAY.t = seg.s + (v.currentTime || 0);
+  /* seek 未落定时 currentTime 还是 0/旧值，拿它算位置会被当成分片起点：
+     活动模式据此「跳到下一个活动」、全时据此误判分片到头。落定前一律不处理 */
+  if(v.seeking) return;
+  const nt = seg.s + (v.currentTime || 0);
+  if(PPLAY.seekTo != null){
+    /* 落点没生效就等下一个 timeupdate；超过 3 秒还没对上（文件比预期短/seek 被钳制）
+       按实际位置继续，不能卡死在守卫里 */
+    if(Math.abs(nt - PPLAY.seekTo) > 5 && Date.now() - (PPLAY.seekAt || 0) < 3000) return;
+    PPLAY.seekTo = null;
+  }
+  PPLAY.t = nt;
   if(PPLAY.ff != null && PPLAY.t >= PPLAY.ff){ PPLAY.ff = null; pvRate(); }
   if(pvSkipStatic()) return;
   if(PPLAY.t >= seg.e - 0.05 || v.ended){ pvAdvance(); return; }
@@ -7249,6 +8234,11 @@ function pvSyncCtl(){
   if(pg) pg.classList.toggle("pvplaying", nowPlaying);
   document.querySelectorAll("[data-pvfilter]").forEach(x=>
     x.classList.toggle("on", x.dataset.pvfilter === PPLAY.filter));
+  /* 活动类别筛选：只在活动模式显示；勾选态跟着 PPLAY.cls */
+  const catRow = document.getElementById("pvCatRow");
+  if(catRow) catRow.classList.toggle("on", PPLAY.filter === "act");
+  document.querySelectorAll("[data-pvcls]").forEach(x=>
+    x.classList.toggle("on", !!PPLAY.cls[x.dataset.pvcls]));
   /* 播放/暂停图标随真实状态变（暂停/切分片/快进都会触发 pause 事件） */
   const ico = document.getElementById("playTogIco");
   if(ico){
@@ -7267,7 +8257,6 @@ function pvSyncVtl(){
   if(sc && PPLAY.on && Date.now() - vtlHold > 2000)
     sc.scrollTop = Math.max(0, vtlY(PPLAY.t) - Math.round(sc.clientHeight / 3));
   syncVnowline();
-  vtlMarkActive();
 }
 
 /* 换机位/换日期：停播并重装分片清单 */
@@ -7279,56 +8268,92 @@ function pvLoadDay(){
   }
   PPLAY.segs = (state.camId && day ? realSegs(state.camId, day, "full") : []) || [];
   PPLAY.endHit = false;   // 新清单装好，「尽头重试」资格恢复
+  PPLAY.inAct = false;    // 换日/换机位：不继承上一个清单的「在活动内」状态
   const cam = CAMERAS.find(c=>c.id === state.camId);
   const oc = document.getElementById("playOsdCam");
   if(oc) oc.textContent = cam ? cam.ch : "—";
 }
 
-/* 换机位/换日期：自动定位到这一路最新一段全时录像，往前回溯 PV_BACK 秒开播，
-   让画面立即动起来（落点必须落在分片内，否则 pvPlayAt 会拒绝） */
-const PV_BACK = 30;
-function pvJumpLatest(){
-  /* 选中的日期还没有全时分片（比如"今天"刚补进下拉）：回退到最近有录像的一天 */
-  if(!PPLAY.segs.length){
-    const list = (state.dayList || []).slice().reverse();
-    for(const d of list){
-      const sg = realSegs(state.camId, d, "full");
-      if(sg && sg.length){
-        state.daySel = d;
-        state.dayIdx = (state.dayList || []).indexOf(d);
-        pvLoadDay();
-        renderPlayDates();          // 实际回退到了别的日期，菜单栏显示跟上
-        renderVtl(null, curDay());
-        break;
-      }
-    }
-  }
+/* ===== 回放默认落点（0.9.72）=====
+   今天      → 最新一段的段首
+   历史日期  → 当天第一段的段首
+   活动筛选  → 当天第一个活动前 PV_ROLL 秒（0.9.60 起的语义，这里不动）
+
+   为什么不再用「段尾往前 30 秒」：0.9.48 用 last.e-30 想让画面贴近"现在"，
+   但录制一停 last.e 就是很久以前，而且落点只剩一两秒可播 —— ended 之后
+   pvAdvance 找不到下一段就 pvFinish 收播，用户看到的是「点一下、闪一下、没了」，
+   再点还是闪一下。段首落点一定能连播满一整段，关键帧也天然对齐。 */
+function pvEnterStart(){
   const segs = PPLAY.segs;
-  if(!segs.length) return false;
-  const last = segs[segs.length - 1];
-  return pvPlayAt(Math.max(last.s, last.e - PV_BACK));
+  if(!segs.length) return null;
+  return curDay() === jsToday() ? segs[segs.length - 1].s : segs[0].s;
 }
 
-/* 大播放钮 / 轻点画面：有断点就续播，没有就从「第一个活动 / 现在时刻」开始 */
+/* 选中的日期没有全时分片（今天还没落盘 / 这是条空日期）→ 退到最近有录像的一天。
+   返回是否发生了切换（切完 PPLAY.segs 已是新日期的清单）。 */
+function pvFallbackDay(){
+  if(PPLAY.segs.length) return false;
+  const list = (state.dayList || []).slice().reverse();   // 旧→新，从最近的往前找
+  for(const d of list){
+    const sg = realSegs(state.camId, d, "full");
+    if(sg && sg.length){
+      state.daySel = d;
+      state.dayIdx = (state.dayList || []).indexOf(d);
+      pvLoadDay();
+      renderPlayDates();          // 实际回退到了别的日期，菜单栏显示跟上
+      renderVtl(null, curDay());
+      return true;
+    }
+  }
+  return false;
+}
+
+/* 自动入场：进回放页 / 换机位 / 换日期 / 点播放都走这里。
+   force=true 时即使正在播也重新定位（换机位、换日期必须跳）；
+   清单还没拉回来就先拉一次，回来后自己再进来 —— 不再误报「该时刻无录像」。
+   拉清单用 3 秒节流而不是布尔锁：锁一旦因异常路径没复位，
+   之后进页就再也不会自动定位了（这类哑弹只有真机才摸得到）。 */
+let pvEnterAt = 0;
+function pvAutoEnter(force){
+  if(!state.camId) return;
+  if(!state.rec){                        // 清单没拉到：拉一次再来
+    const now = Date.now();
+    if(now - pvEnterAt < 3000) return;   // 3 秒内只拉一次，避免重复请求
+    pvEnterAt = now;
+    fetchRecordings(function(){ if(state.rec) pvAutoEnter(force); });
+    return;
+  }
+  if(!force && PPLAY.on) return;         // 已经在播：重绘不打断
+  pvLoadDay();                           // 清单可能刚回来，段列表按最新数据重装
+  pvFallbackDay();
+  if(!PPLAY.segs.length) return;
+  const t = pvEnterStart();
+  if(t == null) return;
+  pvPlayAt(t);
+}
+
+/* 大播放钮 / 轻点画面：有断点就续播，没有就从默认落点开始 */
 function pvDefaultStart(){
-  const evs = (vtlData && vtlData.events) || [];
+  const evs = pvEvents();
   if(PPLAY.filter === "act" && evs.length) return Math.max(0, evs[0].s - PV_ROLL);
-  const t = new Date();
-  const now = t.getHours() * 3600 + t.getMinutes() * 60 + t.getSeconds();
-  /* 今天优先落在「现在」所在或之前最近的一分片；没有就从头 */
-  let best = null;
-  PPLAY.segs.forEach(sg=>{ if(sg.s <= now) best = sg; });
-  return best ? Math.max(best.s, Math.min(now, best.e - 1)) :
-         (PPLAY.segs.length ? PPLAY.segs[0].s : now);
+  return pvEnterStart();
 }
 function pvResume(){
   if(PPLAY.segIdx >= 0 && pvCur.getAttribute("src")){
     PPLAY.on = true;
-    safePlay(pvCur);
+    pvSafePlay();
     pvSyncCtl();
     return;
   }
-  pvPlayAt(pvDefaultStart());
+  const t = pvDefaultStart();
+  if(t == null){
+    /* 清单没到 / 这天确实没片子：交给 pvAutoEnter 去拉清单或回退日期，
+       不再直接弹「该时刻无录像」—— 那对用户等于「点了没用」 */
+    if(!state.rec) toast("toast2", "正在读取录像清单…");
+    pvAutoEnter();
+    return;
+  }
+  pvPlayAt(t);
 }
 
 [pvA, pvB].forEach(v=>{

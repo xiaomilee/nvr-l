@@ -201,8 +201,8 @@ def main():
         check("/api/archive 返回归档面板载荷",
               s == 200 and d.get("ok") is True and "todo_count" in d
               and "next_run" in d and "policy" in d, (s, b[:120]))
-        check("/api/archive 默认开启且保留 90 天",
-              d.get("enable") is True and d.get("archive_days") == 90,
+        check("/api/archive 默认开启且保留 7 天",
+              d.get("enable") is True and d.get("archive_days") == 7,
               (d.get("enable"), d.get("archive_days")))
         s, b = req("/api/storage/usage")
         d = json.loads(b)

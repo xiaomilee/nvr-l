@@ -145,6 +145,35 @@ def probe_cmd(ffprobe, src):
             "-show_format", "-show_streams", src]
 
 
+def rescue_cmd(ffmpeg, src, out):
+    """抢救未封口的 mp4（没有 moov），只重封装不重编码。
+
+    ffmpeg 读这种文件时不会因为缺索引就放弃：它按 mdat 里逐个 sample 的
+    长度字段扫一遍，重建出索引 —— 这正是 `-c copy` 能救回内容的原理。
+    代价只是 CPU 极低的一次顺序读盘（比实时快几十倍），画质无损。
+
+    三个选项都是必须的，缺一个就会在第一条坏帧上放弃：
+      -err_detect ignore_err   摄像头断连处常有截断的 NAL，默认策略会中止
+      -fflags +genpts          开头时间戳可能从上一个进程的残留值起跳
+      -fflags +discardcorrupt  真正的坏包直接丢，不带着它往下走
+
+    输出仍走临时名（由调用方决定），成功后再原子改名，不会产生半个 .mp4。
+    **`-f mp4` 必须显式给**：临时文件不以 .mp4 结尾（否则会被录像扫描当成
+    正常分片列进回放页），ffmpeg 靠扩展名推断不出容器就会报
+    "Unable to find a suitable output format" —— 0.9.2 那次 .part 改名的同款坑。
+    """
+    return _head(ffmpeg) + [
+        "-err_detect", "ignore_err",
+        "-fflags", "+genpts+discardcorrupt",
+        "-i", src,
+        "-map", "0:v:0", "-c", "copy",
+        "-avoid_negative_ts", "make_zero",
+        "-movflags", "+faststart",
+        "-f", "mp4",
+        "-y", out,
+    ]
+
+
 def redact_filter(cells, cols=16, rows=9):
     """遮蔽区格号 → drawbox 滤镜串（保留给导出/测试用）。
 

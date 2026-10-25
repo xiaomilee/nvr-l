@@ -31,6 +31,8 @@ import sysinfo  # noqa: E402
 import ffmpeg_cmd  # noqa: E402
 import pixdiff  # noqa: E402
 import ledger  # noqa: E402
+import detect  # noqa: E402
+import notify  # noqa: E402
 import archive  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
@@ -59,7 +61,21 @@ _STREAM_LOCK = threading.Lock()
 # ---------------------------------------------------------------- 运行日志
 # 诊断日志一条不落：内存环形缓冲（前端直接读）+ 落盘文件（重启后还能看）。
 # 快照失败、录制异常、调度报错都走这里，真机「无画面」先看它。
+#
+# 0.9.73 起**业务日志与 HTTP 访问日志分开两个缓冲**：
+#   以前共用 800 条，一次手机回放就能刷 780 多条 /api/record/file（浏览器
+#   分段下载，一个分片被请求 114 次是正常行为，不是 bug），业务行被整段挤掉，
+#   用户点开诊断页只剩 1 条 —— 排查时等于没有日志。现在访问行进自己的
+#   120 条小环，且按「同一路径连续」折叠成一条 + 次数，磁盘文件也少写。
 _LOG = deque(maxlen=800)
+_ACCESS = deque(maxlen=120)
+_ACCESS_TOTAL = [0]                     # 本次启动累计请求数（诊断页看量级）
+_ACCESS_AGG = {"path": None, "n": 0, "shown": 0}
+_ACCESS_PATH = re.compile(r"\s(/\S*?)(?:\?\S*)?(?:\s|$)")
+# 折叠计数是「读-改-写」，而 HTTPServer 每个请求一个线程（回放时并发度很高）。
+# deque.append 本身原子，但 n += 1 不是 —— 丢几次计数不影响判断，可要是
+# 计数看起来比实际少一半，还不如不统计。RLock 是因为 flush 与 record 会互相调用。
+_ACCESS_LOCK = threading.RLock()
 
 
 def _log_path():
@@ -92,9 +108,8 @@ def _fmt_exc(e):
     return "%s: %s" % (type(e).__name__, e)
 
 
-def _record(line):
-    line = _CRED.sub(r'\1***@', line)
-    _LOG.append(line)
+def _emit(line):
+    """落盘 + stdout。内存缓冲放哪个环由调用方决定（业务 / 访问分开，见上）。"""
     print(line, flush=True)
     # 常驻句柄：高频日志（请求行、快照失败）每行 open/close 一次，
     # 在 NAS 的机械盘上就是实打实的多余 I/O。
@@ -126,15 +141,100 @@ _LOG_FH = None
 _LOG_FH_PATH = None
 
 
+def _record(line):
+    """业务日志：进 800 条主环（诊断页与 /api/log 只读它）。"""
+    line = _CRED.sub(r'\1***@', line)
+    _LOG.append(line)
+    _emit(line)
+
+
+def _access_path(line):
+    """从访问行里取路径（丢掉 query，query 里是机位名/分片名，一请求一变）。"""
+    m = _ACCESS_PATH.search(line)
+    return m.group(1) if m else line
+
+
+def _access_tail_locked():
+    """（须持锁）把折叠掉的重复次数补一行进环。
+
+    **只在「一段连续同路径请求真正结束」（路径变了）时调用**。早先版本在每次
+    读取 /api/log 时也 flush 一次，结果诊断页自己每轮询一次就多一条「累计 N 次」，
+    120 条小环被尾巴填满 —— 修 bug 的动作不该制造新的刷屏。
+    """
+    agg = _ACCESS_AGG
+    extra = agg["n"] - agg["shown"]
+    if agg["path"] and extra > 1:
+        line = "        └ 同类请求 %s 累计 %d 次" % (agg["path"], agg["n"])
+        _ACCESS.append(line)
+        _emit(line)
+        agg["shown"] = agg["n"]
+
+
+def _access_snapshot():
+    """(累计次数, 最近的访问行)。必须整段持锁：deque 边迭代边被 append 会抛
+    RuntimeError: deque mutated during iteration。
+
+    还没结束的那一段（仍在连续来同一个路径）把尾巴**附在返回值里**，不写进环，
+    这样「读一次日志 = 环里多一条」的副作用就没了。
+    """
+    with _ACCESS_LOCK:
+        lines = list(_ACCESS)
+        agg = _ACCESS_AGG
+        extra = agg["n"] - agg["shown"]
+        if agg["path"] and extra > 1:
+            lines.append("        └ 同类请求 %s 累计 %d 次（进行中）"
+                         % (agg["path"], agg["n"]))
+            agg["shown"] = agg["n"]
+        return _ACCESS_TOTAL[0], lines
+
+
+def _record_access(line):
+    """HTTP 访问行：进独立的 120 条小环，**不碰业务缓冲**。
+
+    浏览器流式播放同一个分片会连发上百个 Range 请求，逐个记下来既没用又
+    会把真问题挤掉，所以「同一路径连续」折叠：首条照记，后续只加计数，
+    次数在 _access_tail_locked() 里补一行。总量 _ACCESS_TOTAL 照常累加，
+    诊断页仍能看出「这次到底发生了多少请求」。
+    """
+    line = _CRED.sub(r'\1***@', line)
+    with _ACCESS_LOCK:
+        _ACCESS_TOTAL[0] += 1
+        path = _access_path(line)
+        agg = _ACCESS_AGG
+        if agg["path"] == path:
+            agg["n"] += 1
+            return
+        _access_tail_locked()
+        _ACCESS.append(line)
+        _emit(line)
+        _ACCESS_AGG.update({"path": path, "n": 1, "shown": 1})
+
+
 def log_line(msg):
     """业务日志入口：统一加 [nvr] 前缀与时间戳。"""
     _record("[nvr] %s %s" % (time.strftime("%H:%M:%S"), msg))
+
+
+def _log_line(msg):
+    """log_line 的模块级别名：给各 worker 工厂当 log= 回调用。
+
+    必须定义在模块作用域：_make_detect_worker / _sync_detect_worker 是模块级
+    函数，以前 _log_line 只在 main() 里定义成局部闭包，AI 总闸一开（启动时
+    main 走到 _sync_detect_worker，或设置页热切换）就
+    NameError: name '_log_line' is not defined，整个服务起不来／被带死
+    （0.9.65 真机事故修复，回归见 test/test_detect_boot.py）。
+    """
+    log_line(msg)
 
 
 def log_clear():
     """清空内存缓冲与落盘文件（用户点「清除日志」时用）。"""
     global _LOG_FH, _LOG_FH_PATH
     _LOG.clear()
+    with _ACCESS_LOCK:
+        _ACCESS.clear()
+        _ACCESS_TOTAL[0] = 0
+        _ACCESS_AGG.update({"path": None, "n": 0, "shown": 0})
     try:
         if _LOG_FH is not None:
             _LOG_FH.close()
@@ -179,7 +279,15 @@ def log_export_text():
             c.get("segment_sec") or "默认",
             c.get("full_days"), c.get("clip_days"),
             len((c.get("masks") or {}).get("ignore") or [])))
-    body = ["==== 日志（最近 %d 条）====" % len(_LOG)] + list(_LOG)
+    body = ["==== 日志（最近 %d 条业务日志）====" % len(_LOG)] + list(_LOG)
+    # HTTP 访问行单独一段（0.9.73 之前它和业务日志抢同一个 800 条缓冲，
+    # 一次手机回放就能把「录制 X 中断」挤干净）。这里放最近若干条 + 总请求数，
+    # 需要看某次播放到底拉了多少分片时，靠他判断是不是浏览器分段下载。
+    acc_total, acc_lines = _access_snapshot()
+    body.append("")
+    body.append("==== HTTP 访问（本次启动累计 %d 次，下列为最近 %d 条）===="
+                % (acc_total, len(acc_lines)))
+    body.extend(acc_lines)
     # 录制失败的命令行 + 完整 stderr：日志里只有一行摘要，排"为什么录不上"
     # 必须看到原始的 Stream mapping 和 ffmpeg 完整说法。这里一并带上，
     # 用户点一次"导出诊断"就够，不用再教他去某个目录捞文件。
@@ -376,6 +484,14 @@ def norm_cameras(raw):
         # 每路切分方式：follow=跟随通用 clip_style；join/split 显式覆盖。
         # split（活动切片）对这一路强制「录完即切」，即使通用选了定时批量。
         out[-1]["clip_mode"] = runtime.clip_mode(c.get("clip_mode"))
+        # 每路 AI 检测（0.9.60）：follow/on/off 三 chips；detect_classes 是三键
+        # 完整状态（人员/两轮车/车辆，缺键=False），显式给了才写，没给就跟随全局。
+        dm = str(c.get("detect") or "follow").strip().lower()
+        out[-1]["detect"] = dm if dm in ("follow", "on", "off") else "follow"
+        dc = c.get("detect_classes")
+        if isinstance(dc, dict):
+            out[-1]["detect_classes"] = detect.norm_cam_classes(
+                dc, detect.DETECT_DEFAULTS["classes"])
         # 单路分片长度：只在显式给了正数时才写，0/缺失表示"跟随通用设置"。
         # 写进来的必须是夹取过的值，否则前端传个 5 秒会让录制器疯狂切文件。
         if c.get("segment_sec"):
@@ -418,6 +534,8 @@ def _safe_dir_name(name, fallback, used):
 
 def cameras():
     cfg = runtime.load_config(STATE["var_dir"])
+    det = cfg.get("detect") if isinstance(cfg.get("detect"), dict) else {}
+    det_on = detect._as_bool(det.get("enable"), False)
     raw = cfg.get("cameras") or CAMERA_DEFAULTS
     out = []
     used_dirs = set()
@@ -459,6 +577,10 @@ def cameras():
             # 想让"改了立刻生效"真正成立，就得让它成为每路可配、可被录制器比对的值。
             "segment_sec": runtime.segment_sec(c.get("segment_sec"))
                            if c.get("segment_sec") else 0,
+            # AI 检测（0.9.60）：follow=跟随全局总闸与类别，on/off 显式覆盖。
+            # 全局总闸关闭时一律 off（总闸语义，见 detect.cam_detect_mode）。
+            "detect": detect.cam_detect_mode(c, det_on),
+            "detect_classes": detect.cam_classes(c, det.get("classes")),
         })
         # 检测忽略区要一路透传到压制判定（condense），否则「设置页画了、判定不理」
         m = c.get("masks")
@@ -880,33 +1002,111 @@ def ledger_payload(cam_id, date):
             else:
                 combined["sources"].update(d["sources"])
     ev = ledger.events_of(combined)
+    cfg = runtime.load_config(STATE["var_dir"])
+    det = cfg.get("detect") if isinstance(cfg.get("detect"), dict) else {}
+    trig = det.get("trigger") if isinstance(det.get("trigger"), dict) \
+        else detect.DETECT_DEFAULTS["trigger"]
+    # 缩时触发闸（0.9.60，消费侧裁决）：帧差窗口按 trigger.motion，
+    # AI 窗口按 cls 命中 trigger.person/vehicle；未勾选类别时段按静止画面剔除。
+    # AI 关闭时 trigger 默认全 true、且没有 AI 窗口 → 行为与旧版完全一致。
+    ev = [e for e in ev if detect.trigger_ok(e.get("cls") or None, trig)]
     # 画面可用性（全时）：分片按文件名起点排，覆盖到下一片起点，末片按分片长度兜底
-    seg = runtime.segment_sec(runtime.load_config(STATE["var_dir"]).get("record_segment_sec"))
-    full = []
+    # 分片长度是**每路**可覆盖的（院子 R 60 秒、车库 120 秒、其余跟随全局），
+    # 先用这一路真正在用的值当初始参考，再让 avail_spans 按起点间隔自己校准
+    # （摄像头 GOP 不整除时实际片长会略超配置，实测车库配 120、真实 132）。
+    seg_cfg = runtime.segment_sec(cfg.get("record_segment_sec"))
+    rec = STATE.get("recorder")
+    seg = rec.seg_of(cam) if rec is not None else seg_cfg
     starts = []
     for dn in dirs:
         for f in _scan_day_dirs(os.path.join(root, dn)).get(date, []):
             st = ledger.src_start(f["n"])
             if st is not None:
                 starts.append(st)
-    starts = sorted(set(starts))
-    for i, st in enumerate(starts):
-        en = starts[i + 1] if i + 1 < len(starts) else min(86400.0, st + seg)
-        if full and st <= full[-1][1]:
-            full[-1][1] = max(full[-1][1], en)   # 相邻片首尾相接 → 并成一个区间
-        else:
-            full.append([st, en])
+    # 今天要夹紧到「现在」（0.9.72）：分片长度是名义值，录制中途停了还按 st+seg
+    # 往后画，就会出现「真实时间还没到、时间轴已经显示录了这一段」——用户点进去
+    # 播不动，只能以为录像坏了。历史日期没有"现在"的概念，不夹紧。
+    now_sec = ledger.day_sec_now() if date == time.strftime("%Y-%m-%d") else None
+    full = ledger.avail_spans(starts, seg, now_sec)
+    seg = ledger.seg_typ_of(starts, seg)   # 回给前端的是校准后的实际片长
     cfg = runtime.load_config(STATE["var_dir"])
     cm = _cam_condense_mode(cam)
     if cm == "follow":
         cm = str(cfg.get("condense_mode") or "virtual")
     return {"ok": True, "cam": cam_id, "date": date,
             "mode": cm, "segment_sec": seg,
+            "now": now_sec,          # 今天 = 服务端此刻的钟点秒；历史日期 = None
             "updated_at": (combined or {}).get("updated_at"),
             "events": ev,
+            "trigger": det.get("trigger") if isinstance(det.get("trigger"), dict)
+                       else detect.DETECT_DEFAULTS["trigger"],
+            "detect": {"enable": detect._as_bool(det.get("enable"), False),
+                       "cam_mode": detect.cam_detect_mode(cam, detect._as_bool(det.get("enable"), False)),
+                       "cam_classes": detect.cam_classes(cam, det.get("classes"))},
             "summary": {"count": len(ev),
                         "active_sec": round(sum(e["e"] - e["s"] for e in ev), 2)},
             "avail": {"full": full, "archive": []}}
+
+
+def parts_payload(cam_filter=""):
+    """残片诊断：列出所有未封口的 `.mp4.part` 与已放弃的 `.bad`。
+
+    为什么需要这个端点：`/api/record/file` 的白名单只放行 `HH-MM-SS.mp4`，
+    残片既跑不到回放页、也下载不到 —— 想数清楚"到底积了几个"，用户只能在
+    文件管理器里一屏一屏截图。2026-10-26 车库那次就是靠两张手机截图才数出
+    20 个文件 / 12 个残片，太原始了。
+
+    每项都带 `age_sec` 与 `moov`：前者判断「是不是还在写」，后者直接给出
+    「能不能直接改名救活」（有 moov 说明只是没来得及改名；没 moov 才要
+    ffmpeg 重建索引，见 recorder._rescue_part）。`kind=bad` 是抢救失败后
+    改名的，留着是证据，用户可以放心删。
+    """
+    root = record_dir()
+    now = time.time()
+    items = []
+    for c in cameras():
+        if cam_filter and c["id"] != cam_filter:
+            continue
+        cname = c.get("name") or c["id"]
+        for dname in cam_storage_dirs(c):
+            base = os.path.join(root, dname)
+            try:
+                days = sorted(d for d in os.listdir(base)
+                              if len(d) == 10 and d[4] == "-" and d[7] == "-")
+            except OSError:
+                continue
+            for d in days:
+                full = os.path.join(base, d)
+                try:
+                    names = sorted(n for n in os.listdir(full)
+                                   if n.lower().endswith((".mp4.part", ".part.bad")))
+                except OSError:
+                    continue
+                for n in names:
+                    p = os.path.join(full, n)
+                    try:
+                        st = os.stat(p)
+                    except OSError:
+                        continue
+                    is_part = n.lower().endswith(".mp4.part")
+                    items.append({
+                        "cam": cname, "id": c["id"], "date": d, "name": n,
+                        "size": st.st_size,
+                        "age_sec": int(max(0, now - st.st_mtime)),
+                        "moov": recorder._has_moov(p) if is_part else False,
+                        "kind": "part" if is_part else "bad",
+                    })
+    items.sort(key=lambda x: x["age_sec"])       # 越新越靠前：正在写的那几个在最上面
+    grace = recorder.PART_GRACE_SEC
+    return {"ok": True, "root": root, "grace_sec": grace,
+            "count": len(items),
+            "parts": sum(1 for x in items if x["kind"] == "part"),
+            "bad": sum(1 for x in items if x["kind"] == "bad"),
+            # 可抢救 = 未封口但已静置够久，且不在抢救预算之外
+            "rescuable": sum(1 for x in items
+                             if x["kind"] == "part" and x["age_sec"] >= grace),
+            "bytes": sum(x["size"] for x in items),
+            "items": items}
 
 
 def recordings_payload():
@@ -1284,6 +1484,64 @@ def cleanup_loop(stop_event):
             log_line("cleanup error: %s" % e)
 
 
+# ---------------------------------------------------------------- AI 检测 worker
+
+def _detect_cfg_snapshot():
+    """DetectWorker 每轮问一次：(detect 配置块, 摄像头列表)。"""
+    cfg = runtime.load_config(STATE["var_dir"])
+    det = cfg.get("detect") if isinstance(cfg.get("detect"), dict) else {}
+    return det, cameras()
+
+
+def _make_detect_worker(cfg):
+    ff = STATE.get("ffmpeg_bin")
+    if not ff:
+        return None                # 没 ffmpeg 检测不了：状态行如实说明
+    engine = detect.Engine(STATE["app_dir"], STATE["var_dir"], log=_log_line)
+    nt = STATE.get("notifier")
+    return detect.DetectWorker(
+        engine, ff, STATE["var_dir"], record_dir, cameras,
+        cfg_fn=_detect_cfg_snapshot,
+        interval=5, timeout=10, log=_log_line,
+        notifier=(nt.offer if nt else None))
+
+
+def _sync_detect_worker(cfg=None):
+    """AI 检测总闸热生效：开启→起 worker（含线程死亡自救），关闭→停。
+
+    没有 ffmpeg 时不起（诚实：诊断页状态行显示「AI 检测不可用：未找到 ffmpeg」）。
+    """
+    cfg = cfg or runtime.load_config(STATE["var_dir"])
+    det = cfg.get("detect") if isinstance(cfg.get("detect"), dict) else {}
+    on = detect._as_bool(det.get("enable"), False)
+    w = STATE.get("detect_worker")
+    if on and (w is None or not w.alive()):
+        if w is not None:
+            w.stop()
+        w = _make_detect_worker(cfg)
+        if w is None:
+            return
+        STATE["detect_worker"] = w
+        w.start()
+        _log_line("AI 检测已开启（快照模式，每 5 秒/路）")
+    elif not on and w is not None:
+        w.stop()
+        _log_line("AI 检测已关闭")
+
+
+def detect_status():
+    """给 /api/status：加载态 + 失败原因 + 平均耗时 + 每路今日计数 + 运行时口径。"""
+    w = STATE.get("detect_worker")
+    rt = detect.runtime_wheel_names()
+    if w is None:
+        return {"running": False, "loaded": False, "error": "", "avg_ms": 0,
+                "per_cam": {}, "runtime": rt}
+    st = w.status()
+    st["running"] = True
+    st["runtime"] = rt
+    return st
+
+
 def status_payload():
     cfg = runtime.load_config(STATE["var_dir"])
     g = gpu()
@@ -1330,6 +1588,9 @@ def status_payload():
         "slots": pool.status(),
         "queue": queue,
         "link": ls if lo is not None else None,
+        "detect": detect_status(),
+        "notify": (STATE["notifier"].status() if STATE.get("notifier")
+                   else {"recent": [], "pending": 0}),
         "scan_label": runtime.SCAN_LABEL.get(cfg.get("scan_mode"), "?"),
         "dirs": {"var": STATE["var_dir"], "ui": STATE["ui_dir"], "app": STATE["app_dir"]},
     }
@@ -1429,7 +1690,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if any(q in line for q in self.QUIET):
             return
-        _record("%s %s" % (time.strftime("%H:%M:%S"), line))
+        # 访问行只进独立小环（0.9.73）：回放一次能刷几百条，绝不能挤业务日志
+        _record_access("%s %s" % (time.strftime("%H:%M:%S"), line))
 
 
     def _send(self, code, body, ctype="application/json; charset=utf-8"):
@@ -1514,6 +1776,9 @@ class Handler(BaseHTTPRequestHandler):
                 force=(qs.get("force") or ["0"])[0] in ("1", "true")))
         if path == "/api/record/probe":
             return self._record_probe(urlparse(self.path).query)
+        if path == "/api/record/parts":
+            qs = parse_qs(urlparse(self.path).query)
+            return self._send(200, parts_payload((qs.get("cam") or [""])[0]))
         if path == "/api/record/file":
             return self._record_file(urlparse(self.path).query)
         if path == "/api/retention":
@@ -1529,9 +1794,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": False, "reason": "未找到 ffmpeg"})
             return self._send(200, pixdiff.self_test(ff))
         if path == "/api/log":
+            # lines/text 只给业务日志；访问行单独 access（前端日志页默认不展开）。
+            # 末尾补一行总量，用户仍知道"这次到底有多少请求"，又不会被刷屏。
+            acc_total, acc_lines = _access_snapshot()
+            body = "\n".join(_LOG)
+            if acc_total:
+                body += ("\n\n（另有 %d 次 HTTP 访问请求未在此列出 —— 看具体请求"
+                         "请用「导出诊断」，那份带 HTTP 访问段）" % acc_total)
             return self._send(200, {"ok": True, "version": runtime.VERSION,
                                     "lines": list(_LOG),
-                                    "text": "\n".join(_LOG)})
+                                    "text": body,
+                                    "access": acc_lines,
+                                    "access_total": acc_total})
         if path == "/api/log/export":
             # 诊断导出：一次下载整份（状态摘要 + 全量日志），凭据已脱敏。
             # 以前这个按钮只弹一个 toast，什么都没发生。
@@ -1967,10 +2241,18 @@ class Handler(BaseHTTPRequestHandler):
                 cfg["snapshot_interval"] = max(1, min(10, int(cfg["snapshot_interval"])))
             except (TypeError, ValueError):
                 cfg["snapshot_interval"] = 10
+            # 嵌套配置块（detect/notify）的强校说明单独记日志：前端「保存成功」
+            # 但值被服务端修正时（如 trigger 全假回落），日志里能查到原因。
+            if isinstance(body.get("detect"), dict):
+                _v, notes = detect.norm_detect(body["detect"])
+                for n in notes:
+                    log_line("配置强校：%s" % n)
             if changed:
                 cfg["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 runtime.save_config(STATE["var_dir"], cfg)
                 log_line("配置已更新：%s" % "、".join(changed))
+            # AI 检测总闸热生效：开了起 worker、关了停（不重启服务）
+            _sync_detect_worker(cfg)
             # 设置推送即热生效：分片长度 / 录制开关 / 摄像头列表不必等重启
             fresh = cameras()
             if STATE.get("recorder"):
@@ -1992,6 +2274,17 @@ class Handler(BaseHTTPRequestHandler):
                                     "config": runtime.redact_cfg(cfg),
                                     "restart_hint": ("部分参数需重启服务才生效"
                                                      if "record_dir" in changed else "")})
+
+        if path == "/api/notify/test":
+            # 设置页「测试发送」：同步发一条到指定 webhook，如实反馈成败与耗时
+            url = str(body.get("webhook") or "").strip()
+            if not url:
+                return self._send(200, {"ok": False, "error": "Webhook 地址为空"})
+            nt = STATE.get("notifier")
+            if nt is None:
+                return self._send(200, {"ok": False, "error": "通知服务未就绪"})
+            ok, ms, err = nt.test(url)
+            return self._send(200, {"ok": ok, "ms": ms, "error": err})
 
         if path == "/api/scan":
             # 「扫描」按钮的落地实现：不碰解码，只列磁盘上每个通道有没有数据、
@@ -2244,8 +2537,8 @@ def main():
                      name="cleanup").start()
 
     # ---------------------------------------------------------- 录制 + 衔接调度
-    def _log_line(msg):
-        log_line(msg)
+    # _log_line 是模块级别名（定义处见上），这里不再建局部闭包——
+    # 两份定义正是 0.9.65「AI 启动 NameError 带死服务」的成因。
 
     ff = g.get("ffmpeg") or runtime.find_ffmpeg(a.app)
     fp = runtime.find_ffprobe(a.app)
@@ -2273,16 +2566,33 @@ def main():
                             reconnect_sec=cfg.get("record_reconnect_sec", 5),
                             log=_log_line,
                             enabled=bool(cfg.get("record_enable", True)),
-                            var_dir=a.var)
+                            var_dir=a.var,
+                            frag=bool(cfg.get("record_frag", True)))
     lk = link_mod.Link(ff, fp, rec_root, a.var, cameras(), cfg, log=_log_line)
     STATE["recorder"] = rec
     STATE["link"] = lk
+    # 通知分发器（AI 检测 / 移动侦测 → Webhook）：独立线程 + 队列 + cooldown
+    ntf = notify.Notifier(cfg_fn=lambda: runtime.load_config(a.var), log=_log_line)
+    ntf.reconfigure(cfg)
+    ntf.start()
+    STATE["notifier"] = ntf
+    lk.notifier = ntf.offer
     snap = snapshots.SnapshotWorker(
         ff, a.var, cameras,
         interval_fn=lambda: (runtime.load_config(a.var).get("snapshot_interval") or 10),
         interval=cfg.get("snapshot_interval", 10), timeout=8, log=_log_line)
     STATE["snapshots"] = snap
     snap.start()
+
+    # AI 检测 worker：总闸开了才起（默认关，opt-in）。
+    # 外面裹 try：AI 初始化出任何问题都不能把服务带死——录制/预览/缩时是主业，
+    # 检测挂了顶多是诊断页一行状态（detect.py 设计底线第 1 条：
+    # 「绝不拖垮预览/录制/缩时任何既有链路」）。0.9.65 真机事故的教训：
+    # 这个调用点曾经一个 NameError 就让端口 18080 再也起不来。
+    try:
+        _sync_detect_worker(cfg)
+    except Exception as e:
+        _log_line("AI 检测启动失败（不影响录制/预览）：%r" % e)
 
     rec.start()
     lk.start()
@@ -2309,6 +2619,10 @@ def main():
         stop_event.set()
         try:
             STATE.get("snapshots").stop()
+        except Exception:
+            pass
+        try:
+            STATE.get("detect_worker").stop()
         except Exception:
             pass
         try:

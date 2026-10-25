@@ -47,12 +47,12 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
 done
 
 # ---- 场景 1：设备 A 配好两路地址 ----
-post -d '{"cameras":[{"id":"cam-01","name":"车库","url":"rtsp://admin:pw@192.168.2.108:554/ch1","sub_url":"rtsp://admin:pw@192.168.2.108:554/ch3"},{"id":"cam-02","name":"后院","url":"rtsp://admin:pw@192.168.2.116:554/101"}],"snapshot_interval":10}' \
+post -d '{"cameras":[{"id":"cam-01","name":"车库","url":"rtsp://admin:pw@192.0.2.10:554/ch1","sub_url":"rtsp://admin:pw@192.0.2.10:554/ch3"},{"id":"cam-02","name":"后院","url":"rtsp://admin:pw@192.0.2.16:554/101"}],"snapshot_interval":10}' \
   "$BASE/api/config" | grep -q '"ok": *true' \
   && ok "设备A：写入两路地址" || bad "设备A：写入失败"
 
 DISK1="$(url_of)"
-[ "$DISK1" = "rtsp://admin:pw@192.168.2.108:554/ch1" ] \
+[ "$DISK1" = "rtsp://admin:pw@192.0.2.10:554/ch1" ] \
   && ok "NAS 落盘的是明文地址（录制要用）" || bad "落盘地址异常: $DISK1"
 
 # ---- 场景 2：GET 回给浏览器的是脱敏串，但非空（前端 hasUrl 的依据）----
@@ -67,15 +67,15 @@ esac
 post -d '{"cameras":[{"id":"cam-01","name":"车库改名","url":"","sub_url":""},{"id":"cam-02","name":"后院","url":"","sub_url":""}],"snapshot_interval":5}' \
   "$BASE/api/config" | grep -q '"ok": *true' || bad "设备B：推送失败"
 DISK2="$(url_of)"
-[ "$DISK2" = "rtsp://admin:pw@192.168.2.108:554/ch1" ] \
+[ "$DISK2" = "rtsp://admin:pw@192.0.2.10:554/ch1" ] \
   && ok "设备B推空地址 → NAS 地址原样保留（本 bug 的核心场景）" \
   || bad "地址被抹掉了: $DISK2"
 
 # ---- 场景 4：设备 B 填入新地址 → 直接采用 ----
-post -d '{"cameras":[{"id":"cam-01","name":"车库改名","url":"rtsp://root:toor@10.0.0.9:554/live","sub_url":""}],"snapshot_interval":5}' \
+post -d '{"cameras":[{"id":"cam-01","name":"车库改名","url":"rtsp://root:toor@198.51.100.9:554/live","sub_url":""}],"snapshot_interval":5}' \
   "$BASE/api/config" >/dev/null
 DISK3="$(url_of)"
-[ "$DISK3" = "rtsp://root:toor@10.0.0.9:554/live" ] \
+[ "$DISK3" = "rtsp://root:toor@198.51.100.9:554/live" ] \
   && ok "填入新明文 → 直接采用" || bad "新地址未采用: $DISK3"
 
 # ---- 场景 5：本地曾有明文的浏览器清空保存（url_clear）→ 真清 ----

@@ -558,17 +558,17 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 
 /* ================= 数据（与桌面原型同一套种子，数字一致） ================= */
 const CAMERAS = [
-  { id:"cam-01", name:"车库入口", ch:"CH01", res:"4MP", ip:"192.168.2.108", brand:"TP-LINK", user:"833",
-    main:"rtsp://833:***@192.168.2.108:8554/ch1", sub:"rtsp://833:***@192.168.2.108:8554/ch3",
+  { id:"cam-01", name:"车库入口", ch:"CH01", res:"4MP", ip:"192.0.2.10", brand:"TP-LINK", user:"833",
+    main:"rtsp://833:***@192.0.2.10:8554/ch1", sub:"rtsp://833:***@192.0.2.10:8554/ch3",
     strategy:"连续录像 + 事件", group:"室外", online:true },
-  { id:"cam-02", name:"一楼大堂", ch:"CH02", res:"4MP", ip:"192.168.2.116", brand:"海康", user:"admin",
-    main:"rtsp://admin:***@192.168.2.116:554/Streaming/Channels/101", sub:"rtsp://admin:***@192.168.2.116:554/Streaming/Channels/102",
+  { id:"cam-02", name:"一楼大堂", ch:"CH02", res:"4MP", ip:"192.0.2.16", brand:"海康", user:"admin",
+    main:"rtsp://admin:***@192.0.2.16:554/Streaming/Channels/101", sub:"rtsp://admin:***@192.0.2.16:554/Streaming/Channels/102",
     strategy:"连续录像 + 事件", group:"1 号楼", online:true },
-  { id:"cam-03", name:"货梯走廊", ch:"CH03", res:"1080p", ip:"192.168.2.121", brand:"大华", user:"admin",
-    main:"rtsp://admin:***@192.168.2.121:554/cam/realmonitor?channel=1&subtype=0", sub:"rtsp://admin:***@192.168.2.121:554/cam/realmonitor?channel=1&subtype=1",
+  { id:"cam-03", name:"货梯走廊", ch:"CH03", res:"1080p", ip:"192.0.2.21", brand:"大华", user:"admin",
+    main:"rtsp://admin:***@192.0.2.21:554/cam/realmonitor?channel=1&subtype=0", sub:"rtsp://admin:***@192.0.2.21:554/cam/realmonitor?channel=1&subtype=1",
     strategy:"仅事件录像", group:"室内", online:true },
-  { id:"cam-04", name:"后门通道", ch:"CH04", res:"1080p", ip:"192.168.2.130", brand:"宇视", user:"default",
-    main:"rtsp://default:***@192.168.2.130:554/video1", sub:"rtsp://default:***@192.168.2.130:554/video2",
+  { id:"cam-04", name:"后门通道", ch:"CH04", res:"1080p", ip:"192.0.2.30", brand:"宇视", user:"default",
+    main:"rtsp://default:***@192.0.2.30:554/video1", sub:"rtsp://default:***@192.0.2.30:554/video2",
     strategy:"连续录像 + 事件", group:"室外", online:true },
 ];
 const BRAND_RTSP = {

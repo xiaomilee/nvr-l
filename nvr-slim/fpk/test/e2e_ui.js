@@ -43,7 +43,12 @@ function d2(n) { return String(n).padStart(2, "0"); }
   }
   // 台账 fixture：判定引擎需要 ffprobe（本机没有），按服务端真实格式种一天窗口，
   // 让横线标注/活动时段块/活动筛选跳静止都有数据可断言。窗口 = 当天钟点秒。
-  const W = (h, m, s, dur) => [h * 3600 + m * 60 + s, h * 3600 + m * 60 + s + dur];
+  // 0.9.62 起另种两份 AI 台账（src = "ai:<分片名>"，与帧差 src 平行），窗口全部
+  // 落进对应帧差窗口内部：并集事件数不变（仍是 4 个），但这些事件带上了 cls，
+  // 时间轴才需要按类别上色 —— 这也正是真机上的样子（AI 与帧差对同一段录像各有结论）。
+  // 0.9.63 起回放页车辆不区分车型：two_wheeler 计数并入车辆，图例/摘要/筛选同步。
+  const W = (h, m, s, dur, cls) =>
+      [h * 3600 + m * 60 + s, h * 3600 + m * 60 + s + dur].concat(cls ? [cls] : []);
   fs.mkdirSync(path.join(rec, "_ledger", "cam-01"), { recursive: true });
   fs.writeFileSync(path.join(rec, "_ledger", "cam-01", today + ".json"), JSON.stringify({
     v: 1, cam: "cam-01", date: today, updated_at: today + " 11:05:00",
@@ -51,7 +56,14 @@ function d2(n) { return String(n).padStart(2, "0"); }
       W(10, 2, 15, 12), W(10, 7, 19, 277), W(10, 13, 30, 10),
     ] }, "11-00-00.mp4": { start: 11 * 3600, d: 0.4, windows: [
       W(11, 0, 56, 218),
-    ] } },
+    ] },
+      "ai:10-00-00.mp4": { start: 10 * 3600, d: 0.4, windows: [
+        W(10, 2, 18, 8, { person: 2 }),                        // 人 ×2 → 单人事件
+        W(10, 13, 32, 6, { vehicle: 3, two_wheeler: 1 }),      // 车3+两轮1 → 并入车辆（单色紫）
+      ] },
+      "ai:11-00-00.mp4": { start: 11 * 3600, d: 0.4, windows: [
+        W(11, 1, 0, 60, { person: 1, vehicle: 1 }),            // 人+车 → 双色事件
+      ] } },
   }));
   fs.writeFileSync(path.join(rec, "车库", oldDay, "09-00-00.mp4"), Buffer.alloc(4096));
   // 缩时片段：真实时长要靠 ffprobe 读文件，这里造不出真 mp4，就验证「读不到
@@ -295,9 +307,98 @@ function d2(n) { return String(n).padStart(2, "0"); }
     document.getElementById("vtlSum").textContent);
   check("时间轴标题旁摘要带活动数与累计（台账 fixture：4 个活动）",
         /^4 个活动 · 累计/.test(playSum), playSum);
+  check("摘要带全天各类别计数（AI fixture：人 3 · 车 5，两轮已并入车）",
+        /人 3/.test(playSum) && /车 5/.test(playSum) && !/两轮/.test(playSum), playSum);
   const marks = await page.evaluate(() =>
     document.querySelectorAll("#vtl .vmark").length);
   check("台账事件渲染为 Aqara 式横线标注", marks >= 3, marks);
+  /* --- 0.9.62 事件按类别分色，0.9.67 三色定版 + 三车道 ---
+     色值不写死：拿图例里同类别的色片做基准，深浅主题切换都不受影响。 */
+  const clsr = await page.evaluate(() => {
+    const col = sel => getComputedStyle(document.querySelector(sel)).backgroundColor;
+    const lg = k => col("#evLegend .lg .d." + k + " i");
+    const spans = [...document.querySelectorAll("#vtl .vevspan")];
+    const marks = [...document.querySelectorAll("#vtl .vmark")];
+    const geo = m => [...m.querySelectorAll(".lanes i")].map(i => {
+      const r = i.getBoundingClientRect(), mr = m.getBoundingClientRect();
+      return { cls: i.className, left: Math.round(r.left - mr.left),
+               right: Math.round(r.right - mr.left), col: getComputedStyle(i).backgroundColor };
+    });
+    return {
+      spanCls: { person: spans.filter(s => s.querySelector(".c-person")).length,
+                 veh:   spans.filter(s => s.querySelector(".c-veh")).length,
+                 motion:spans.filter(s => s.querySelector(".c-motion")).length },
+      /* 0.9.69：时段块的三格尾巴高度（px）——同一事件几格必须等高 */
+      spanBars: spans.map(s => [...s.querySelectorAll("i")].map(i =>
+        Math.round(i.getBoundingClientRect().height))),
+      markCls: { person: marks.filter(s => s.querySelector(".c-person")).length,
+                 veh:   marks.filter(s => s.querySelector(".c-veh")).length,
+                 motion:marks.filter(s => s.querySelector(".c-motion")).length },
+      bars: marks.map(geo),
+      markW: marks.length ? Math.round(marks[0].getBoundingClientRect().width) : 0,
+      legendNoai: document.getElementById("evLegend").classList.contains("noai"),
+      legendItems: document.querySelectorAll("#evLegend .lg").length,
+      lg: { person: lg("per"), veh: lg("veh"), motion: lg("mot") },
+    };
+  });
+  /* 0.9.69：时段块也进三格（同一事件几格等高，高度=时长，4px 地板）——
+     10:02 人×2 → 蓝格；10:13 车3+两轮1 → 绿格；11:01 人1+车1 → 蓝+绿两格；
+     10:07 纯帧差 → 橙格。主导类别上色（evDom）已退役 */
+  check("时段块收进三格（人×2 蓝 · 车1+两轮1 绿 · 混类蓝+绿 · 纯帧差橙）",
+        clsr.spanCls.person === 2 && clsr.spanCls.veh === 2
+        && clsr.spanCls.motion === 1, clsr.spanCls);
+  check("同一事件的多格尾巴等高且不低于 4px 地板",
+        clsr.spanBars.every(bs => bs.length > 0
+          && bs.every(h => h >= 4 && h === bs[0])), clsr.spanBars);
+  check("横线同样按类别上色（蓝 2 · 绿 2 · 橙 1）",
+        clsr.markCls.person === 2 && clsr.markCls.veh === 2
+        && clsr.markCls.motion === 1, clsr.markCls);
+  /* 0.9.67 三车道：60px 轨道三等分，每格 19px，互不重叠。
+     10:02+10:07 并组 → 左橙 + 中蓝；10:13 只有右绿；11:01 中蓝 + 右绿 */
+  check("标记三格宽度三等分（每格约 19px，轨道 60px）",
+        clsr.markW === 60
+        && clsr.bars.flat().every(b => b.right - b.left === 19), [clsr.markW, clsr.bars]);
+  check("三格互不重叠（同枚标记内任意两格不交叠）",
+        clsr.bars.every(bs => bs.every((a, i) =>
+          bs.every((b, j) => i === j || a.right <= b.left || b.right <= a.left))),
+        clsr.bars);
+  check("并组那根：左格橙（移动侦测）+ 中格蓝（人员），右格留空",
+        clsr.bars[0].length === 2
+        && clsr.bars[0].some(b => b.cls.includes("mot"))
+        && clsr.bars[0].some(b => b.cls.includes("per")), clsr.bars[0]);
+  check("10:13 那根：只有右格绿（车辆）", (() => {
+    const one = clsr.bars.find(bs => bs.length === 1 && bs[0].cls.includes("veh"));
+    return !!one && one[0].left >= 40;
+  })(), clsr.bars);
+  check("格子颜色与图例色片一致（同源取色，主题切换不失真）",
+        clsr.bars.flat().every(b =>
+          b.col === clsr.lg.person || b.col === clsr.lg.veh
+          || b.col === clsr.lg.motion),
+        [clsr.lg, clsr.bars]);
+  check("类别图例常驻 3 项，有 AI 数据时点亮（不收进 noai）",
+        clsr.legendItems === 3 && !clsr.legendNoai, clsr);
+  check("定位胶囊已移除（播放落点不再弹软底高亮）",
+        await page.evaluate(() =>
+          [...document.querySelectorAll("#vtl .vmark")].every(m => !m.classList.contains("on"))));
+  /* 0.9.68 上下留白：滚到两端时 00:00 / 24:00 正好压在固定时刻线上 */
+  const ended = await page.evaluate(() => {
+    const sc = document.getElementById("vtlScroll");
+    const t = document.getElementById("vnowTime");
+    const h = sc.clientHeight;
+    const before = sc.scrollTop;
+    sc.scrollTop = 0;
+    const topTxt = (syncVnowline(), t.textContent);
+    sc.scrollTop = sc.scrollHeight;
+    const botTxt = (syncVnowline(), t.textContent);
+    const room = sc.scrollHeight - h;
+    sc.scrollTop = before;
+    syncVnowline();
+    return { topTxt, botTxt, room, want: Math.round(24 * vtlPxh) };
+  });
+  check("滚到最顶：时刻线显示 00:00:00", ended.topTxt === "00:00:00", ended);
+  check("滚到最底：时刻线显示 24:00:00", ended.botTxt === "24:00:00", ended);
+  check("可滚动量 = 24 小时行程（上下留白已补齐，不多不少）",
+        Math.abs(ended.room - ended.want) <= 1, ended);
   const gone = await page.evaluate(() => ({
     dates: document.getElementById("playDates") === null,
     evList: document.getElementById("playEvents") === null,

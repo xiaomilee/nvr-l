@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.56"
+VERSION = "0.9.73"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -41,6 +41,10 @@ DEFAULTS = {
     "record_enable": True,
     "record_segment_sec": 300,        # 分片时长 60~900 秒
     "record_reconnect_sec": 5,        # 断流重连退避基数
+    # 分片 MP4（0.9.71 默认开）：moov 写在文件头、每个关键帧一个 moof，
+    # 进程被硬杀/断电后已写下的部分仍能播，损失上限是一个 GOP 而不是整片。
+    # 关掉退回整片 moov（moov 在尾部，必须正常收尾才完整）。
+    "record_frag": True,
     # ---- 录制与压制的衔接方式 ----
     "link_mode": "live",              # live=录完即压 | scheduled=定时批量
     "link_interval_h": 6,             # 定时模式间隔，1~24 小时
@@ -61,6 +65,27 @@ DEFAULTS = {
     # 默认端口 0.9.18 起改为 18080（向导里可改）；已装用户的 config.json
     # 里存的是旧值，merge_defaults 会保留，不受默认值变化影响。
     "service_port": 18080,
+    # ---- AI 检测（人员 / 两轮车 / 车辆，0.9.60）----
+    # 总闸默认关（opt-in）；嵌套块由 detect.norm_detect 强校（enum 白名单 +
+    # 数值夹取 + trigger 至少一项），见 coerce 的 dict 分支。
+    "detect": {
+        "enable": False,
+        "mode": "snap",
+        "device": "auto",
+        "classes": {"person": True, "two_wheeler": True, "vehicle": True},
+        "conf": {"person": 0.50, "two_wheeler": 0.33, "vehicle": 0.40},
+        "trigger": {"motion": True, "person": True, "vehicle": True},
+        "live_fps": 5,
+        "night": "throttle",
+    },
+    # ---- 通知（0.9.60 设计，P1 落地）----
+    "notify": {
+        "webhook": "",
+        "motion": False,
+        "person": False,
+        "vehicle": False,
+        "cooldown": 60,
+    },
     "updated_at": None,
 }
 
@@ -93,6 +118,16 @@ def coerce(key, value):
             return default                    # 只收字符串，别让 dict/list 混成 "{'x': 1}"
         v = value.strip().lower()
         return v if v in _ENUM_KEYS[key] else default
+    if isinstance(default, dict):
+        # 嵌套配置块（detect / notify）：只收 dict，交给各自的 norm_* 强校
+        # （enum 白名单 + 数值夹取 + trigger 至少一项），非法值回落默认。
+        if key == "detect" and isinstance(value, dict):
+            import detect
+            return detect.norm_detect(value)[0]
+        if key == "notify" and isinstance(value, dict):
+            import detect
+            return detect.norm_notify(value)
+        return json.loads(json.dumps(default))   # 深拷贝默认值，防共享引用
     if isinstance(default, bool):
         if isinstance(value, bool):
             return value
@@ -335,6 +370,15 @@ def load_config(var_dir):
         except (ValueError, OSError):
             # 配置损坏不能让服务起不来，回落默认值并在日志里留痕
             cfg["_warning"] = "config.json 解析失败，已使用默认值"
+    # 嵌套配置块归一（0.9.60）：旧配置/手改的坏值在这里自愈，
+    # 与 coerce 的 dict 分支走同一套 norm_*，读写两侧一个口径。
+    try:
+        import detect
+        cfg["detect"] = detect.norm_detect(cfg.get("detect"))[0]
+        cfg["notify"] = detect.norm_notify(cfg.get("notify"))
+    except Exception:
+        cfg["detect"] = json.loads(json.dumps(DEFAULTS["detect"]))
+        cfg["notify"] = json.loads(json.dumps(DEFAULTS["notify"]))
     if key is not None:
         _CFG_CACHE["key"] = key
         _CFG_CACHE["cfg"] = cfg

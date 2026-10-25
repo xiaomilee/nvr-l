@@ -37,6 +37,50 @@ import runtime  # noqa: E402
 MAX_BACKOFF = 300
 STALL_SEC = 75          # 最新分片超过这么久没更新，就判定这一路"假活"
 
+# 「卡住」重启的等待上限。0.9.73 起与「连不上」分开算。
+# 卡住 ≠ 连不上：进程活着、socket 被阻塞，对端在但暂时不吐数据；重连之前
+# 这段时间是**完全不录**的。用 5 分钟的连不上退避去等一个间歇断流的摄像头，
+# 等于每次抖动白丢 5 分钟录像，而且重启越慢、暴露在断流里的时间越长。
+# 真机 2026-10-26：四路每 75–90 秒卡一次，退避被封到 300 秒后，车库一天
+# 出现 254 秒、422 秒的空洞。卡住就该尽快重连：5→10→20→30 封顶。
+STALL_BACKOFF = 30
+
+
+def backoff_wait(tries, reconnect=5):
+    """「连不上」（进程退出）的等待：5→10→20→40→80→160→300 封顶。
+
+    指数用 `min(t-1, 9)` 而不是 4：4 意味着 5×2⁴=80 秒就到顶了，
+    MAX_BACKOFF=300 形同虚设（0.9.70 之前的真 bug）。
+    抽成函数是为了让测试直接验真值 —— 测试里照抄公式等于没测。
+    """
+    t = max(1, int(tries))
+    return min(MAX_BACKOFF, max(1, int(reconnect)) * (2 ** min(t - 1, 9)))
+
+
+def stall_wait(tries, reconnect=5):
+    """「卡住」重启的等待：5→10→20→30 封顶（见 STALL_BACKOFF 的注释）。"""
+    t = max(1, int(tries))
+    return min(STALL_BACKOFF, max(1, int(reconnect)) * (2 ** min(t - 1, 9)))
+
+# 收尾宽限：SIGINT 之后给 ffmpeg 多久把 moov 写完，再补一次，最后才 SIGKILL。
+# 真机 2026-10-26 车库实测：卡死的 ffmpeg 被直接 SIGKILL，12 个分片永久留在
+# .part（合计约 75 MB 有效画面）。SIGINT 是可捕获的，segment muxer 会立刻
+# 收尾；只有真正僵死（读盘卡住）的进程才需要走到 SIGKILL。
+KILL_SOFT_SEC = 15
+KILL_HARD_SEC = 10
+
+# 残片抢救：静置这么久才动手（正在写的那一个绝不能碰），每轮最多处理几个。
+# 抢救本身是 -c copy 重封装，不重编码，几十倍实时，但仍是顺序读盘，所以设上限。
+PART_GRACE_SEC = 600
+PART_RESCUE_PER_RUN = 1
+
+# 封口前的静置时间。分片 MP4（0.9.71 起默认）**从第一秒起就有 moov**，
+# 所以「有 moov」不再等于「写完了」—— 还必须确认文件已经不再增长。
+# 30 秒足够覆盖任意写盘节奏，又远小于最短分片（60 秒），回放页最多晚半分钟
+# 看到新片段。少了这道闸，正在写的分片会被改名成 .mp4，而 ffmpeg 还握着
+# 原来的 fd 继续写，那个文件从此不再被任何扫描看见（等于无声丢一段录像）。
+SEAL_GRACE_SEC = 30
+
 # 拉流阶段的「可选输入选项」。任何一项被 ffmpeg 报 Unrecognized option，就由
 # _absorb_bad_opts() 自动剔除并立刻重试（不等退避）—— 这是唯一安全的做法：
 # 不预探测、不猜，只按 ffmpeg 自己说的话删。0.9.11 的 -rw_timeout、0.9.13 的
@@ -72,30 +116,71 @@ def out_pattern(root, cam_id):
 
 
 def _has_moov(path):
-    """轻量判断一个 mp4 是否已封口：segment muxer 未开 faststart，moov 在文件尾部。
+    """这个分片现在能不能播：**顶层 box 结构**里有没有 moov。
 
-    封口 = ffmpeg 已经把这个分片写完（moov box 落地）。只扫尾部 256KB，
-    不整读文件，几百 KB 的一次 seek 对 2 秒一轮的巡检来说可以忽略。
+    两种文件都要认（0.9.71 起录制默认走分片 MP4）：
+
+      分片 MP4（`+empty_moov`）：`ftyp + moov + (moof + mdat)…`，moov 在最前面、
+        内容为空，索引靠每个 fragment 自带的 moof —— 从写下第一秒起就可播，
+        不需要任何收尾；
+      整片 MP4（老数据、或关掉 record_frag）：`ftyp + mdat + moov`，moov 在尾部，
+        必须等 ffmpeg 正常退出才完整。
+
+    为什么不用「在文件头/尾直接搜 b"moov"」：H.264 码流里出现这四个字节是纯随机
+    事件，64 KB 里约 3 万分之一的命中率 —— 一旦命中，正在写的分片会被判成"已封口"
+    并改名，而 ffmpeg 还握着 fd 往里写，直接毁掉一段录像。按 box 结构走一遍（每个
+    box 只读 8 字节头）顶多几十次 seek，代价可以忽略。
     """
     try:
+        size = os.path.getsize(path)
+        if size < 16:
+            return False
         with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            if size < 256:
-                return False
-            f.seek(max(0, size - 262144))
-            tail = f.read()
+            off = 0
+            for _ in range(64):          # 顶层 box 不会很多，同时防死循环
+                if off + 8 > size:
+                    return False
+                f.seek(off)
+                hdr = f.read(8)
+                if len(hdr) < 8:
+                    return False
+                bsize = int.from_bytes(hdr[:4], "big")
+                typ = hdr[4:8]
+                if bsize == 1:           # largesize：后面再跟 8 字节真实长度
+                    if off + 16 > size:
+                        return False
+                    ext = f.read(8)
+                    if len(ext) < 8:
+                        return False
+                    bsize = int.from_bytes(ext, "big")
+                if typ == b"moov":
+                    return True
+                if bsize == 0:           # 0 = 一直到文件尾，后面不可能再有 box
+                    return False
+                if bsize < 8 or off + bsize > size:
+                    return False         # box 越界 = 还在写 / 被截断
+                off += bsize
+            return False
     except OSError:
         return False
-    return b"moov" in tail
 
 
-def finalize_parts(root, cam_id):
-    """把已封口的 `.mp4.part` 改名成 `.mp4`。
+def finalize_parts(root, cam_id, rescue=None, grace=PART_GRACE_SEC, budget=None):
+    """把已封口的 `.mp4.part` 改名成 `.mp4`；没封口的交给 rescue 抢救。
 
     判定用 moov 而非「目录里有没有更新的分片」：后者在 ffmpeg 崩溃、下个
     进程又写了新分片后，会把上一个没封口的半截文件误当成完整文件。
     改名是原子的（os.replace），读者要么看到 .part 要么看到完整 .mp4。
+
+    rescue(src, dst) -> bool 是残片抢救钩子（ffmpeg 重建索引）。没有 moov 的
+    分片以前只是 `continue` 跳过 —— 不记录、不重试、永远躺在盘上，用户只能
+    在文件管理器里看到一堆打不开的 .part。现在按三条纪律处理：
+
+      1. **只碰静置超过 grace 秒的**：正在写的那个 mtime 是滚动的，绝不动它；
+      2. **每轮限量**（budget 是可变单元素列表，跨摄像头共享）：抢救是顺序
+         读盘，跟正在录的进程抢 IO，不能一次把 20 个一起啃；
+      3. **失败改名 `.bad`**：不留原名，否则每个 tick 都会重试一次，
+         20 个坏文件能把 CPU 和盘 IO 长期钉住。
     """
     base = os.path.join(root, cam_id)
     if not os.path.isdir(base):
@@ -114,6 +199,19 @@ def finalize_parts(root, cam_id):
                            if n.lower().endswith(".mp4.part"))
         except OSError:
             continue
+        # 抢救中途被杀（升级、断电、SIGKILL）会留下 `.rescuing`：它既不是录像
+        # 也不是待救的残片，静置够久就删掉，否则会一直占着与源文件同等的空间。
+        try:
+            leftovers = [n for n in os.listdir(full) if n.endswith(".rescuing")]
+        except OSError:
+            leftovers = []
+        for n in leftovers:
+            lp = os.path.join(full, n)
+            try:
+                if time.time() - os.path.getmtime(lp) > grace:
+                    os.remove(lp)
+            except OSError:
+                pass
         for n in parts:
             src = os.path.join(full, n)
             dst = src[:-5]                # 去掉 ".part"
@@ -123,11 +221,47 @@ def finalize_parts(root, cam_id):
                 except OSError:
                     pass
                 continue
-            if _has_moov(src):             # 只有真正封口了才改名
+            if _has_moov(src):             # 结构上已经可播
+                # 分片 MP4 从第一秒起就有 moov，它和「记录结束」是两件事：
+                # 必须再确认文件已静置，否则会把正在写的分片改名走。
+                try:
+                    if time.time() - os.path.getmtime(src) < SEAL_GRACE_SEC:
+                        continue
+                except OSError:
+                    continue
                 try:
                     os.replace(src, dst)
                 except OSError:
                     pass
+                continue
+            if not rescue:
+                continue
+            try:
+                if time.time() - os.path.getmtime(src) < grace:
+                    continue               # 还在写（或刚写完），下一轮再说
+            except OSError:
+                continue
+            if budget is not None:
+                if budget[0] <= 0:
+                    continue
+                budget[0] -= 1
+            try:
+                ok = rescue(src, dst)
+            except Exception:              # 抢救是兜底，不能让它打断巡检
+                ok = False
+            if ok:
+                # 救援只负责产出 dst，源残片由这里删 —— 留着的话，
+                # 目录里会同时有 `01-10-00.mp4` 和 `01-10-00.mp4.part`，
+                # 而下一个 tick 发现 .part 没 moov 又会抢救一遍，白烧 IO。
+                try:
+                    os.remove(src)
+                except OSError:
+                    pass
+                continue
+            try:
+                os.replace(src, src + ".bad")
+            except OSError:
+                pass
 
 
 def ensure_day(root, cam_id, day=None):
@@ -208,7 +342,8 @@ def finished(root, cam_id, seg_sec=300, now=None):
 
 # ---------------------------------------------------------------- 命令
 
-def record_cmd(ffmpeg, url, pattern, seg_sec=300, transport="tcp", opts=()):
+def record_cmd(ffmpeg, url, pattern, seg_sec=300, transport="tcp", opts=(),
+               frag=True):
     """拉流 → 分片落盘。
 
     -rtsp_transport tcp：UDP 在跨交换机时丢包会让花屏，监控盘上留不下证据。
@@ -225,6 +360,18 @@ def record_cmd(ffmpeg, url, pattern, seg_sec=300, transport="tcp", opts=()):
     插 drawbox 并强制 libx264 重编码，代价是每路常驻一个编码器、CPU 直接翻倍，
     而用户真正需要的是"别把这块算成事件"——那属于检测忽略区，在判定阶段生效，
     与录像本身无关。
+
+    frag=True（0.9.71 起默认）走**分片 MP4**：
+        +empty_moov       moov 写在文件最前面，结构上不再依赖"收尾时补索引"
+        +frag_keyframe    每个关键帧切一个 moof，落到盘上就是一段可独立解码的单元
+        +default_base_moof  fragment 内偏移相对自身，不依赖前面的数据
+    效果：进程被 SIGKILL、断电、拔盘 —— 已经写下去的每一段都能播，损失上限是
+    最后一个 fragment（约一个 GOP，1~2 秒），而不是整个分片（最多 5 分钟）。
+    这是"硬杀必坏"变成"硬杀也能播"的机制性解法，与 0.9.70 的收尾加固互补。
+
+    代价（都是可接受量级）：每个 fragment 多一个 moof（几百字节，17 MB 的分片
+    约占 0.3%）；没有 sidx，浏览器 seek 时要扫一遍文件头（17 MB 很快）。
+    真的遇到播放器不兼容，把 record_frag 关掉即可退回原来的整片 moov 写法。
     """
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-v", "error"]
     for o in (opts or ()):
@@ -246,8 +393,17 @@ def record_cmd(ffmpeg, url, pattern, seg_sec=300, transport="tcp", opts=()):
             "-an", "-sn", "-dn",
             "-f", "segment",
             "-segment_time", str(int(seg_sec)),
-            "-segment_format", "mp4",
-            "-segment_atclocktime", "1",
+            "-segment_format", "mp4"]
+    if frag:
+        # **必须走 `-segment_format_options`，不能写 `-movflags`。**
+        # `-movflags` 是 mp4 muxer 的私有选项，而这里最外层的 muxer 是 segment；
+        # ffmpeg 把找不到归属的输出选项保留下来、**不报错**（av_opt_set_dict2 的
+        # 行为），segment muxer 又只把 `-segment_format_options` 转发给子 muxer。
+        # 所以 `-movflags +frag_keyframe…` 在这种命令里是**静默无效**的：录出来
+        # 仍是整片 mp4，代码里却写着分片，测试也照样绿 —— 属于最难查的一类坑。
+        cmd += ["-segment_format_options",
+                "movflags=+frag_keyframe+empty_moov+default_base_moof"]
+    cmd += ["-segment_atclocktime", "1",
             "-reset_timestamps", "1",
             "-strftime", "1",
             "-y", pattern]
@@ -337,7 +493,7 @@ def _mask_url(s):
     """rtsp://user:pass@host/path → rtsp://user:***@host/path。
 
     密码必须遮掉（诊断文件可能被导出、贴进工单），但 host 和通道路径要留着 ——
-    "连不上 192.168.2.137 的主码流"和"密码错"是完全不同的两件事。
+    "连不上 192.0.2.37 的主码流"和"密码错"是完全不同的两件事。
     """
     s = str(s)
     if "@" not in s or "://" not in s:
@@ -362,7 +518,8 @@ class Recorder:
     """
 
     def __init__(self, ffmpeg, root, cameras, segment_sec=300,
-                 reconnect_sec=5, log=None, enabled=True, var_dir=None):
+                 reconnect_sec=5, log=None, enabled=True, var_dir=None,
+                 frag=True):
         self.ffmpeg = ffmpeg
         self.root = root
         self.cams = [c for c in (cameras or [])
@@ -371,6 +528,9 @@ class Recorder:
         self.reconnect = max(2, int(reconnect_sec or 5))
         self.log = log or (lambda m: None)
         self.enabled = enabled
+        # 分片 MP4（0.9.71 默认开）：硬杀/断电后已写片段仍可播。关掉即退回
+        # 整片 moov 的老写法，用于播放器不兼容时的现场回退。
+        self.frag = bool(frag)
         self.procs = {}          # cam_id -> {"p": Popen, "day": str, "tries": int, "next": float, "sig": str}
         self.stopped = False
         self.last_error = {}
@@ -412,6 +572,15 @@ class Recorder:
         key = name.lstrip("-")
         if key in self.bad_opts:
             return None
+        # 分片封装没有"降级参数"可换，只能整体退回整片 MP4。这一项不被认时
+        # ffmpeg 是**直接退出**而不是警告 —— 留着硬顶等于五路全挂，所以必须
+        # 在第一次报错时就退，且退回后照常录像（只是可播性变差）。
+        if key == "segment_format_options" and self.frag:
+            self.frag = False
+            self.bad_opts.add(key)
+            self.log("这台机器的 ffmpeg 不认 -segment_format_options，录像已退回"
+                     "整片 MP4（能正常录，但被强行终止的分片需要残片抢救）")
+            return key
         if not any(o[0].lstrip("-") == key for o in INPUT_OPTS):
             # 不在我们可控的列表里（用户改坏了地址、或者别的参数），照旧上报
             return None
@@ -465,18 +634,20 @@ class Recorder:
 
     # -- 生命周期 --------------------------------------------------
 
-    @staticmethod
-    def _sig(cam):
-        """这一路的「启动参数指纹」：url / 存储目录 / 分片长度变了就必须重启。
+    def _sig(self, cam):
+        """这一路的「启动参数指纹」：url / 存储目录 / 分片长度 / 封装模式。
 
         以前只比对分片长度和根目录，用户改了 RTSP 地址，
         跑着的 ffmpeg 仍按老地址录 —— 表现就是「设置页改了没反应」。
         分片长度现在也是**每路**可配（cam.segment_sec），所以必须进指纹：
         否则只在设置页改了某一路的秒数，reconcile 认为"没变"就永远不重启。
+        frag 同理（0.9.71）：它决定 `-movflags`，改了不重启等于没改 ——
+        用户以为关掉了分片 MP4，实际还在写，排查时会完全摸不着头脑。
         """
-        return "%s|%s|%s" % (cam.get("url") or "",
-                             cam.get("dir_name") or cam.get("id") or "",
-                             cam.get("segment_sec") or 0)
+        return "%s|%s|%s|%s" % (cam.get("url") or "",
+                                cam.get("dir_name") or cam.get("id") or "",
+                                cam.get("segment_sec") or 0,
+                                "frag" if self.frag else "plain")
 
     def seg_of(self, cam):
         """这一路实际使用的分片长度：单路覆盖值优先，否则跟随全局设置。"""
@@ -532,9 +703,10 @@ class Recorder:
         ensure_day(self.root, dname,
                    datetime.date.today() + datetime.timedelta(days=1))
         cmd = record_cmd(self.ffmpeg, cam["url"], out_pattern(self.root, dname),
-                         self.seg_of(cam), opts=self.eff_opts())
+                         self.seg_of(cam), opts=self.eff_opts(), frag=self.frag)
         prev = self.procs.get(cid) or {}
         tries = (prev.get("tries", 0) if keep_tries else 0)
+        stall = (prev.get("stall", 0) if keep_tries else 0)
         # 参数变了就是"用户刚改完设置"，应当立刻用新参数起进程，不能被上一次
         # 失败留下的退避窗口挡住（否则改完 url 要干等几十秒才生效）。
         # 参数没变才沿用旧的等待时间：摄像头一直连不上时，重启服务不会把退避清零。
@@ -548,17 +720,60 @@ class Recorder:
             self.last_error[cid] = "无法启动 ffmpeg：%s" % e
             self.log("录制 %s 启动失败：%s" % (cid, e))
             self.procs[cid] = {"p": None, "day": datetime.date.today().isoformat(),
-                               "tries": tries + 1, "next": time.time() + MAX_BACKOFF,
+                               "tries": tries + 1, "stall": stall,
+                               "next": time.time() + MAX_BACKOFF,
                                "started_at": 0, "sig": sig}
             return
         self.procs[cid] = {"p": p, "day": datetime.date.today().isoformat(),
-                           "tries": tries, "next": wait_until,
+                           "tries": tries, "stall": stall, "next": wait_until,
                            "started_at": time.time(), "dead": None,
                            "sig": sig}
         self.last_error.pop(cid, None)
         self.last_kind.pop(cid, None)
         self._dup.pop(cid, None)          # 这一路活了，去重计数清零
         self.log("录制 %s 已启动 pid=%d" % (cam.get("name") or cid, p.pid))
+
+    def _grace_close(self, p, why=""):
+        """三段式收尾：SIGINT → 等 → 再 SIGINT → 等 → 最后才 SIGKILL。
+
+        **这是"残片"问题的唯一正解。** SIGINT 可被 ffmpeg 捕获，segment
+        muxer 会立刻写完 moov 并正常退出；SIGKILL 不可捕获，进程连收尾的
+        机会都没有，于是 `.mp4.part` 永久缺 moov —— 文件在、能看见、但
+        任何播放器都打不开，而且 finalize_parts 永远不会认它封口。
+
+        真机 2026-10-26 车库：12 个残片全部出自这条硬杀路径。原来只有
+        subprocess 的 wait(timeout=5) 一路，卡死的进程 5 秒就吃 SIGKILL。
+        现在给 15+10 秒，绝大多数情况在第一次 SIGINT 就干净退出。
+
+        返回 True 表示是优雅退出的（moov 大概率已落地）。
+        """
+        if p is None or p.poll() is not None:
+            return True
+        soft = KILL_SOFT_SEC
+        # SIGINT 必须是"发出去可能失败"的：进程刚死时 send_signal 会抛。
+        # SIGKILL 只在两次 SIGINT 都不奏效（真僵死）时才发。
+        for attempt, wait in enumerate((soft, KILL_HARD_SEC), 1):
+            try:
+                p.send_signal(signal.SIGINT)
+            except (OSError, ValueError):
+                return True
+            try:
+                p.wait(timeout=wait)
+                return True               # 自己退了 = 已收尾
+            except subprocess.TimeoutExpired:
+                if attempt == 1:
+                    continue              # 再来一次 SIGINT
+                break
+            except (OSError, ValueError):
+                return True
+        try:
+            p.kill()
+            p.wait(timeout=3)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+        if why:
+            self.log(why)
+        return False
 
     def _kill(self, cid, why=""):
         """优雅收尾一路的 ffmpeg（SIGINT 让 segment muxer 写完 moov），并从进程表移除。"""
@@ -569,14 +784,7 @@ class Recorder:
         if p is None:
             return True
         if p.poll() is None:
-            try:
-                p.send_signal(signal.SIGINT)
-                p.wait(timeout=5)
-            except (OSError, ValueError, subprocess.TimeoutExpired):
-                try:
-                    p.kill()
-                except OSError:
-                    pass
+            self._grace_close(p)
         if why:
             self.log(why)
         return True
@@ -599,12 +807,16 @@ class Recorder:
         want_on = bool(cfg.get("record_enable", True))
         seg = runtime.segment_sec(cfg.get("record_segment_sec"))
         new_root = (str(cfg.get("record_dir") or "").strip() or self.root)
+        # frag 未配置时保持当前值：老配置文件里没有这个键，不能因此被关掉
+        want_frag = bool(cfg.get("record_frag", self.frag))
         seg_changed = seg != self.seg_sec
         on_changed = want_on != self.enabled
         root_changed = new_root != self.root
+        frag_changed = want_frag != self.frag
         self.seg_sec = seg
         self.enabled = want_on
-        if not (seg_changed or on_changed or root_changed):
+        self.frag = want_frag
+        if not (seg_changed or on_changed or root_changed or frag_changed):
             # 单路参数（含单路分片长度）会由下一拍 reconcile 的指纹比对处理
             return
         if root_changed:
@@ -624,6 +836,9 @@ class Recorder:
                 self.log("录像目录改为 %s，录制按新目录重启" % self.root)
             if seg_changed:
                 self.log("分片长度改为 %d 秒，录制按新参数重启" % seg)
+            if frag_changed:
+                self.log("录像封装改为%s，录制按新参数重启"
+                         % ("分片 MP4（断电也能播）" if self.frag else "整片 MP4"))
 
     def reconcile(self, cams):
         """每拍调用：把「设置里的这一路」与「正在跑的这一路」对齐。
@@ -678,6 +893,70 @@ class Recorder:
 
     # -- 监督 ------------------------------------------------------
 
+    def _rescue_part(self, src, dst):
+        """抢救一个没封口的分片：`-c copy` 重建索引，成功才落到正式文件名。
+
+        返回 False 时 finalize_parts 会把它改名 `.bad` —— 失败必须留下痕迹，
+        但不能留在原名上，否则每 2 秒的巡检都会重新试一次。
+
+        输出先写 `dst + ".rescuing"` 再原子改名：抢救中途失败（超时、
+        磁盘满、ffmpeg 被杀）时，`dst` 上不会出现半个能播的文件骗过消费者。
+        临时名**故意不以 .mp4 结尾**（配 `-f mp4` 显式指定容器）：录像扫描
+        `list_segments` / `_scan_day_dirs` 都按 `endswith(".mp4")` 认文件，
+        临时名要是也叫 .mp4，会被当成正常分片塞进回放页和 `/api/recordings`。
+        """
+        if not self.ffmpeg:
+            return False
+        tmp = dst + ".rescuing"
+        try:
+            # 超时给 60 秒而不是"够大就行"：抢救跑在 2 秒一轮的巡检线程里，
+            # 单次阻塞太久会把其他四路的看门狗一起拖住（它们靠这个线程重启）。
+            # 一个 5 分钟分片约 150 MB，-c copy 在 NAS 上也就几秒，60 秒是
+            # 给慢盘留的余量；真超过说明盘出问题，改名 .bad 让用户去看。
+            r = subprocess.run(
+                ffmpeg_cmd.rescue_cmd(self.ffmpeg, src, tmp),
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            self._drop(tmp)
+            return False
+        ok = False
+        if r.returncode == 0:
+            try:
+                # 只要索引能重建，输出必然有内容；4 KB 以下是"只有一个
+                # 空 moov"的典型体积，视为没救回东西，别拿它冒充录像。
+                ok = os.path.getsize(tmp) > 4096
+            except OSError:
+                ok = False
+        if not ok:
+            self._drop(tmp)
+            err = ""
+            try:
+                err = " ".join((r.stderr or b"").decode("utf-8", "replace").split())[:160]
+            except Exception:
+                pass
+            self.log("残片抢救失败 %s%s" % (os.path.basename(src),
+                                          ("：" + err) if err else ""))
+            return False
+        try:
+            os.replace(tmp, dst)
+        except OSError:
+            self._drop(tmp)
+            return False
+        try:
+            mb = os.path.getsize(dst) / 1048576.0
+        except OSError:
+            mb = 0.0
+        self.log("残片抢救成功 %s（%.1f MB）" % (os.path.basename(dst), mb))
+        return True
+
+    @staticmethod
+    def _drop(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
     def _newest_age(self, cam):
         """最新分片「多久没被写过」（秒）；一个分片都没有就返回 None。
 
@@ -714,10 +993,14 @@ class Recorder:
             return
         now = now if now is not None else time.time()
         today = datetime.date.today().isoformat()
+        # 残片抢救预算：整轮（所有摄像头）共享一个额度，避免一次巡检里
+        # 五路同时开啃、把磁盘 IO 从正在录的进程手里抢走。
+        budget = [PART_RESCUE_PER_RUN]
         for cam in self.cams:
             cid = cam["id"]
             dname = cam.get("dir_name") or cid
-            finalize_parts(self.root, dname)   # 先封口，消费者才看得到完整 .mp4
+            finalize_parts(self.root, dname, rescue=self._rescue_part,
+                           budget=budget)   # 先封口/抢救，消费者才看得到完整 .mp4
             st = self.procs.get(cid)
 
             if st is None:
@@ -735,21 +1018,17 @@ class Recorder:
             if code is None:
                 # 跨天：主动重启一次，输出的日期目录才会跟着走
                 if st["day"] != today:
-                    try:
-                        p.send_signal(signal.SIGINT)
-                        p.wait(timeout=5)
-                    except (OSError, ValueError, subprocess.TimeoutExpired):
-                        try:
-                            p.kill()
-                        except OSError:
-                            pass
+                    self._grace_close(p)
                     self.procs.pop(cid, None)
                     self.log("录制 %s 跨天重启" % cid)
                     self._spawn(cam)
                     continue
                 # 稳定运行满 5 分钟，把重试计数清零，避免白天抖动累积成 30 秒退避
-                if st.get("tries") and now - st.get("started_at", now) > 300:
-                    st["tries"] = 0
+                if now - st.get("started_at", now) > 300:
+                    if st.get("tries"):
+                        st["tries"] = 0
+                    if st.get("stall"):
+                        st["stall"] = 0
                 # ---- 卡死看门狗 ----
                 # ffmpeg 的 -rw_timeout 只能覆盖"读不到数据"的一部分情形；无线
                 # 摄像头半死连接上它仍可能长期阻塞。这里再兜一层：进程在、但磁盘
@@ -760,22 +1039,27 @@ class Recorder:
                     # （建连握手成功但拿不到码流）。以前这里直接放行，而删掉
                     # -timeout 之后就再没人管这种"假活"进程了 —— 必须在这里兜住。
                     if age is None or age > STALL_SEC:
+                        # 卡住与「连不上」分开计数：卡住说明流本来是通的，
+                        # 不该把连不上的长退避（300 秒）背到这一路身上 ——
+                        # 那样每次抖动都要等 5 分钟，白丢录像（0.9.73）。
+                        stall = st.get("stall", 0) + 1
+                        wait = stall_wait(stall, self.reconnect)
                         self.log("录制 %s 卡住（%s 秒没有新数据），重启进程"
+                                 "（第 %d 次，%d 秒后重连）"
                                  % (cam.get("name") or cid,
-                                    "从未写入" if age is None else int(age)))
-                        try:
-                            p.kill()
-                        except OSError:
-                            pass
-                        try:
-                            p.wait(timeout=3)
-                        except (OSError, subprocess.TimeoutExpired):
-                            pass
-                        tries = st.get("tries", 0) + 1
-                        wait = min(MAX_BACKOFF,
-                                   self.reconnect * (2 ** min(tries - 1, 4)))
+                                    "从未写入" if age is None else int(age),
+                                    stall, wait))
+                        # 这里以前是 p.kill() —— 直接 SIGKILL。而"卡住"绝大多数
+                        # 只是 socket read 阻塞，进程本身是活的，SIGINT 能打断
+                        # read 并让 segment muxer 写完 moov。硬杀的结果就是
+                        # 这个分片永久停在 .part（真机 12 个残片全出自这里）。
+                        closed = self._grace_close(p)
+                        if not closed:
+                            self.log("录制 %s 收尾超时（SIGINT 两次无响应），已强制结束"
+                                     % (cam.get("name") or cid))
                         self.procs[cid] = {
-                            "p": None, "day": st["day"], "tries": tries,
+                            "p": None, "day": st["day"],
+                            "tries": st.get("tries", 0), "stall": stall,
                             "next": now + wait, "started_at": now, "dead": None,
                             "sig": st.get("sig"),
                         }
@@ -814,7 +1098,12 @@ class Recorder:
                 self._diag(cam, record_cmd(self.ffmpeg, cam["url"],
                                            out_pattern(self.root, dname),
                                            self.seg_of(cam), opts=self.eff_opts()), err)
-            wait = min(MAX_BACKOFF, self.reconnect * (2 ** min(st["tries"] - 1, 4)))
+            # 指数封顶用的是 `min(tries-1, 9)` 而不是 4：4 意味着 5×2⁴=80 秒就
+            # 到顶了（2 的指数不再增长），MAX_BACKOFF=300 形同虚设 —— 真机
+            # 2026-10-26 车库日志里"卡住→重启"精确地每 80 秒一次，越杀越连不上，
+            # 每次重启都新开一个分片，残片就是这么滚出来的。现在 5→10→20→40→
+            # 80→160→300 封顶。公式收进 backoff_wait()，别再散落成两份。
+            wait = backoff_wait(st["tries"], self.reconnect)
             st["next"] = now + wait
             self._log_dedup(cid, "录制 %s 中断（code=%s，%s），%d 秒后第 %d 次重连%s"
                             % (cam.get("name") or cid, code, kind or "未分类",
@@ -849,6 +1138,7 @@ class Recorder:
                 "state": "recording" if running else ("idle" if self.enabled else "off"),
                 "pid": p.pid if p else None,
                 "retry": st["tries"] if st else 0,
+                "stall": st.get("stall", 0) if st else 0,
                 "segments": len(segs),
                 "segment_sec": self.seg_of(cam),
                 "last_seg": os.path.basename(last) if last else None,

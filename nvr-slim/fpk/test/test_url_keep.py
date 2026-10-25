@@ -27,9 +27,9 @@ sys.path.insert(0, os.path.join(ROOT, "app", "server"))
 import nvr_slim  # noqa: E402
 
 OLD = nvr_slim.norm_cameras([
-    {"id": "cam-01", "name": "车库", "url": "rtsp://admin:pw@192.168.2.108:554/ch1",
-     "sub_url": "rtsp://admin:pw@192.168.2.108:554/ch3", "enabled": True},
-    {"id": "cam-02", "name": "后院", "url": "rtsp://admin:pw@192.168.2.116:554/101",
+    {"id": "cam-01", "name": "车库", "url": "rtsp://admin:pw@192.0.2.10:554/ch1",
+     "sub_url": "rtsp://admin:pw@192.0.2.10:554/ch3", "enabled": True},
+    {"id": "cam-02", "name": "后院", "url": "rtsp://admin:pw@192.0.2.16:554/101",
      "sub_url": "", "enabled": True},
 ])
 
@@ -52,12 +52,12 @@ class TestUrlKeep(unittest.TestCase):
     def test_u1_masked_url_falls_back(self):
         """万一脱敏串被原样推回（旧版本前端路径），同样不许覆盖"""
         out = push([{"id": "cam-01", "name": "车库",
-                     "url": "rtsp://***@192.168.2.108:554/ch1"}])
+                     "url": "rtsp://***@192.0.2.10:554/ch1"}])
         self.assertEqual(out[0]["url"], OLD[0]["url"])
 
     def test_u2_new_plaintext_wins(self):
         """用户在任意设备填了新地址 → 直接采用"""
-        new = "rtsp://root:toor@10.0.0.9:554/live"
+        new = "rtsp://root:toor@198.51.100.9:554/live"
         out = push([{"id": "cam-01", "name": "车库", "url": new}])
         self.assertEqual(out[0]["url"], new)
 
@@ -70,7 +70,7 @@ class TestUrlKeep(unittest.TestCase):
 
     def test_u2_new_plaintext_beats_clear_flag(self):
         """新明文优先于残留的 clear 标记（防止旧标记误清新地址）"""
-        new = "rtsp://root:toor@10.0.0.9:554/live"
+        new = "rtsp://root:toor@198.51.100.9:554/live"
         out = push([{"id": "cam-01", "name": "车库",
                      "url": new, "url_clear": True}])
         self.assertEqual(out[0]["url"], new)

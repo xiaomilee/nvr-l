@@ -25,7 +25,7 @@ sys.path.insert(0, SERVER)
 import recorder   # noqa: E402
 import sysinfo    # noqa: E402
 
-URL = "rtsp://admin:s3cr3t@192.168.2.137:554/MPEG-4/ch1/main/av_stream"
+URL = "rtsp://admin:s3cr3t@192.0.2.37:554/MPEG-4/ch1/main/av_stream"
 PAT = "/data/%Y-%m-%d/%H-%M-%S.mp4.part"
 
 
@@ -144,9 +144,9 @@ class TestMask(unittest.TestCase):
     def test_password_masked(self):
         out = recorder._mask_url(URL)
         self.assertNotIn("s3cr3t", out)
-        self.assertIn("192.168.2.137", out)        # 地址要留着，诊断要看是哪台
+        self.assertIn("192.0.2.37", out)        # 地址要留着，诊断要看是哪台
         self.assertIn("/MPEG-4/ch1/main/av_stream", out)
-        self.assertEqual(out, "rtsp://admin:***@192.168.2.137:554/MPEG-4/ch1/main/av_stream")
+        self.assertEqual(out, "rtsp://admin:***@192.0.2.37:554/MPEG-4/ch1/main/av_stream")
 
     def test_plain_path_untouched(self):
         self.assertEqual(recorder._mask_url("/bin/ffmpeg"), "/bin/ffmpeg")

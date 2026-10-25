@@ -10,3 +10,18 @@ var/
 # 依赖与本地复现素材（不入库，避免体积膨胀）
 node_modules/
 _repro/
+
+# 调试快照与真机抓取（/api/status、/api/ledger 原始响应，含内网拓扑，不入库）
+st*.json
+lg*.json
+log.json
+
+# 构建产物 fpk：单个约 100MB，dist 累计 1.1GB，不入库（按需 build.sh 生成）
+dist/
+*.fpk
+
+# 依赖 wheel（numpy/onnxruntime，约 88MB，由 build 脚本按需放置，不入库）
+nvr-slim/fpk/app/vendor/
+
+# 时间轴视觉校验的生成物（由 tools/preview_vtl.js 产出）
+nvr-slim/vtl_preview.html

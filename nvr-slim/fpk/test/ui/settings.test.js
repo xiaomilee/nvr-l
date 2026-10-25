@@ -45,6 +45,21 @@ ck("三区标记齐全", h.includes("zone gen") && h.includes("zone cam") && h.i
 ck("有摄像头列表", h.includes("data-camrow"));
 ck("有添加入口", h.includes("data-addcam"));
 ck("只读态没有删除入口（收进编辑页底部两段确认）", !h.includes("data-delcam"));
+/* ---- 0.9.64：添加摄像头两段确认，防全宽按钮误触 ---- */
+ck("添加·默认文案「＋ 添加摄像头」", h.includes("＋ 添加摄像头"));
+ck("添加·SET.addArmed 初始为 false", get('SET.addArmed') === false);
+run('SET.addArmed=true; renderCamTabs();');
+ck("添加·待确认态按钮变文案「再点一次确认添加」并带 armed 类",
+   body().includes("再点一次确认添加") && body().includes('class="btnline armed" data-addcam="1"'));
+run('SET.addArmed=false; renderCamTabs();');
+ck("添加·armed 样式用 warn 语言（与删除同一套视觉）",
+   src.includes(".btnline.armed{background:var(--warn-soft);color:var(--warn-fg)}"));
+ck("添加·处理器两段确认 + 3.2 秒自动取消",
+   src.includes("if(SET.addArmed){ SET.addArmed = false; addCamera(); return; }")
+   && src.includes("再点一次「确认添加」· 3 秒内有效")
+   && src.includes("}, 3200);"));
+ck("添加·点到摄像头行/删除键会取消待确认态",
+   src.includes("SET.addArmed = false;   // 点到别处就取消「待确认添加」"));
 ck("已去掉品牌下拉", !h.includes("brand"));
 ck("已去掉录像策略", !h.includes("录像策略"));
 ck("已去掉分组", !h.includes("分组（可空）"));
@@ -70,7 +85,7 @@ ck("只读·专属卡片标记", h.includes("仅此摄像头的参数"));
 ck("只读·专属卡片染底", h.includes("ccard"));
 ck("只读·有修改键", h.includes('data-editcam="1"'));
 ck("只读·画布锁定", h.includes("maskstage locked"));
-ck("只读·展示主码流", h.includes("rtsp://192.168.2.108:8554/ch1"));
+ck("只读·展示主码流", h.includes("rtsp://192.0.2.10:8554/ch1"));
 ck("只读·无滑杆", !h.includes('type="range"'));
 
 /* ---- 4. 编辑态独占一屏 ----
@@ -110,17 +125,23 @@ ck("缩时·跟随全局（虚拟）时物化专属行隐藏",
    !h.includes('data-clipmode="join"') && !h.includes('data-ret="clipDays"')
    && (h.match(/data-speed="\d"/g) || []).length === 0);
 ck("缩时·虚拟模式有提示", h.includes("虚拟缩时"));
-ck("缩时·常用段只露灵敏度", (h.match(/data-sens="(low|mid|high)"/g) || []).length === 3
+/* 0.9.61：判读参数从「缩时压制」搬进「检测」段（与 AI 识别并列） */
+ck("缩时·判读参数已搬去检测段", !h.includes("data-sens=") && !h.includes('data-adv="1"'));
+run('SET.acc="mask"; renderCamTabs();');
+h = body();
+ck("检测·常用段只露灵敏度", (h.match(/data-sens="(low|mid|high)"/g) || []).length === 3
    && !h.includes("data-engine="));
-ck("缩时·进阶默认收起", h.includes('data-adv="1"') && !h.includes('data-k="judge.pixelDelta"'));
+ck("检测·进阶默认收起", h.includes('data-adv="1"') && !h.includes('data-k="judge.pixelDelta"'));
 run('SET.adv = true; renderCamTabs();');
 h = body();
-ck("缩时·进阶展开后有像素差门槛滑杆", h.includes('data-k="judge.pixelDelta"'));
-ck("缩时·进阶展开后有最短事件/模糊/抽样/采样/合并滑杆",
+ck("检测·进阶展开后有像素差门槛滑杆", h.includes('data-k="judge.pixelDelta"'));
+ck("检测·进阶展开后有最短事件/模糊/抽样/采样/合并滑杆",
    h.includes('data-k="judge.minEvent"') && h.includes('data-k="judge.blur"')
    && h.includes('data-k="judge.fps"') && h.includes('data-k="judge.probeSec"')
    && h.includes('data-k="judge.mergeGap"'));
-ck("缩时·进阶底部标默认值", h.includes("默认值：门槛 24"));
+ck("检测·进阶底部标默认值", h.includes("默认值：门槛 24"));
+run('SET.acc="condense"; renderCamTabs();');
+h = body();
 ck("缩时·画质默认收起", h.includes('data-outopen="1"') && !h.includes('data-k="day.crf"'));
 run('SET.outOpen = true; renderCamTabs();');
 h = body();
@@ -162,7 +183,7 @@ ck("保存·回到只读", body().includes('data-editcam="1"'));
 /* ---- 7. 恢复默认：只改草稿，不自动落盘 ---- */
 run('openEditor("cam-01"); resetDraft();');
 ck("默认·像素差门槛归位", get('draftGet("judge.pixelDelta")') === 24);
-ck("默认·码流保留", get('draftGet("main")') === "rtsp://192.168.2.108:8554/ch1");
+ck("默认·码流保留", get('draftGet("main")') === "rtsp://192.0.2.10:8554/ch1");
 ck("默认·不自动落盘", get('camParams["cam-01"].judge.pixelDelta') === 60);
 
 /* ---- 8. 画面区域：16×9 方块预选 ---- */
@@ -350,6 +371,19 @@ ck("配置·分片长度随 pushCfg 上送", src.includes("record_segment_sec: L
 ck("配置·改分片立即保存并推送", /data-linkseg[\s\S]{0,320}saveCfgSoon\(\)/.test(src));
 ck("配置·启动时以服务端为准", typeof get('syncFromServer') === "function"
    && /syncFromServer\(\)/.test(src) && src.includes('apiGet("/api/config")'));
+/* ---- 0.9.71 录像封装（分片 MP4）----
+   两个都不能少：开关要推上去（否则 ffmpeg 的 -movflags 永远不生效），
+   回读要以服务端为准（否则刷新页面就变回默认，用户以为设置丢了）。 */
+ck("录影·封装开关随 pushCfg 上送", src.includes("record_frag: !!LK.frag"));
+ck("录影·封装状态以服务端为准回读", src.includes('if(typeof c.record_frag === "boolean") LK.frag = c.record_frag;'));
+ck("录影·切换封装立即保存并提示重启",
+   /data-linkfrag[\s\S]{0,420}saveCfgSoon\(\)/.test(src)
+   && src.includes('data-linkfrag="1"') && src.includes('data-linkfrag="0"'));
+ck("诊断·残片清单卡就绪（0.9.71）", typeof get('cardParts') === "function"
+   && typeof get('loadDiagParts') === "function"
+   && src.includes('fetch("/api/record/parts?_t=" + Date.now()'));
+ck("诊断·残片列表区分 待重建/可封口/已放弃",
+   src.includes("待重建") && src.includes("可封口") && src.includes("已放弃"));
 
 /* ---- 18. 录制自愈与诊断（0.9.15）
    真机上五路全报 "Output file does not contain any stream"，页面只显示这句英文
@@ -381,9 +415,9 @@ ck("缩时·时间轴用源时刻", src.includes("function segA(") && src.includ
    && src.includes("src: st, srcEnd: en"));
 ck("缩时·播放器显示源时刻", src.includes("覆盖 ") && src.includes("hms(srcNow)"));
 
-/* ---- 20. 0.9.22 判读引擎 / 0.9.24 收进「缩时压制 → 进阶判读参数」 ----
+/* ---- 20. 0.9.22 判读引擎 / 0.9.61 起收进「检测 → 进阶判读参数」 ----
    前面的用例可能已经把摄像头删光了：新建一路再验证菜单（addCamera 直接进编辑态） */
-run('addCamera(); SET.acc="condense"; SET.adv=true; renderCamTabs();');
+run('addCamera(); SET.acc="mask"; SET.adv=true; renderCamTabs();');
 h = body();
 ck("判读·菜单标题改为判读条件", h.includes("进阶判读参数") && !h.includes("事件判定"));
 ck("判读·常用段只露灵敏度、进阶才露引擎",
@@ -551,7 +585,7 @@ ck("单路·退出时主动断 MJPEG", src.includes('img.removeAttribute("src")'
    && src.includes('document.getElementById("lrBody").innerHTML = ""'));
 
 /* ---- 24. 0.9.24：防误操作（底部常驻改动数 / 已调 N 项 / 删除两段确认） ---- */
-run('closeEditor(); openEditor(CAMERAS[0].id); SET.acc="condense"; renderCamTabs();');
+run('closeEditor(); openEditor(CAMERAS[0].id); SET.acc="mask"; renderCamTabs();');
 ck("防误·未改动时写「无改动」", body().includes("无改动"));
 run('draftSet("judge.pixelDelta", 50); renderCamTabs();');
 ck("防误·底部常驻「已改 N 项未保存」", get('dirtyCount()') === 1
@@ -571,7 +605,7 @@ run('closeEditor();');
    但提示「未配置 RTSP 地址」。守三点：显示不误报、推送不覆盖、显式清空才真清。 */
 ck("跨设备·服务端回传带 hasUrl/hasSub 标记",
    src.includes("hasUrl: !!c.url, hasSub: !!c.sub_url"));
-run('applyServerCams([{id:"srv-01",name:"车库",url:"rtsp://***@192.168.2.108:554/ch1",sub_url:""}]);');
+run('applyServerCams([{id:"srv-01",name:"车库",url:"rtsp://***@192.0.2.10:554/ch1",sub_url:""}]);');
 ck("跨设备·脱敏回传也能识别出「NAS 已存地址」",
    get('CAMERAS.some(c=>c.id==="srv-01" && c.hasUrl===true && c.hasSub===false)'));
 ck("跨设备·本机无明文不冒充未配置（就绪判定认 NAS 地址）",
@@ -929,16 +963,18 @@ ck("播放当前时刻·红色",
    src.includes(".p-times .pt-c{flex:1;text-align:center;font-size:12.5px;font-weight:600;color:#ff6b6b}"));
 
 /* ===== 32. 0.9.44：夜间归档裁剪 + 三层保留 ===== */
-ck("归档·通用卡有开关与保留天数 chips（仅虚拟缩时显示）",
-   src.includes("data-archen=\"1\"") && src.includes("data-archdays=\"")
-   && src.includes("[30,90,180,365].map")
+ck("归档·通用卡有开关与保留天数步进（仅虚拟缩时显示）",
+   src.includes("data-archen=\"1\"") && src.includes("data-archdec=\"1\"")
+   && src.includes("data-archinc=\"1\"") && src.includes("id=\"archDaysInput\"")
    && src.includes('<span class="n">夜间归档裁剪</span>')
    && src.includes('LK.condenseMode==="virtual" ?'));
-ck("归档·LK 默认开 + 90 天 + 批量 120",
-   get("LK.archEnable") === true && get("LK.archDays") === 90
+ck("归档·LK 默认开 + 7 天 + 批量 120",
+   get("LK.archEnable") === true && get("LK.archDays") === 7
    && get("LK.archBatch") === 120);
-ck("归档·处理器写回并重拉候选摘要",
-   src.includes("LK.archDays = +el.dataset.archdays || 90;")
+ck("归档·步进/直填写回并钳到 1–3650，重拉候选摘要",
+   src.includes('body.querySelectorAll("[data-archdec],[data-archinc]")')
+   && src.includes("Math.max(1, Math.min(3650, (parseInt(LK.archDays,10)||7) + dir))")
+   && src.includes('body.querySelector("#archDaysInput")')
    && src.includes("ARCH.at = 0;"));
 ck("归档·开关切换有后果提示",
    src.includes("临期全时将直接被清理删除"));
@@ -951,16 +987,312 @@ ck("归档·执行后强制重拉存储占用",
 ck("归档·候选摘要从 /api/archive 节流拉取",
    src.includes('apiGet("/api/archive")') && src.includes("Date.now() - ARCH.at > 10*60*1000"));
 ck("三层·保留策略文本含台账永久",
-   src.includes('return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 归档 " + (LK.archDays || 90)')
+   src.includes('return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 归档 " + (LK.archDays || 7)')
    && src.includes("+ \" 天 / 台账永久\""));
 ck("三层·预算含归档项且按方案分摊",
    src.includes("else if(eff === \"virtual\")")
-   && src.includes("arch += dayGB * 0.07 * (LK.archDays || 90)")
+   && src.includes("arch += dayGB * 0.07 * (LK.archDays || 7)")
    && src.includes("const need = full + clip + arch;"));
 ck("存储·占用载荷三类 + 台账单列",
    src.includes("活动台账 <b>") && src.includes("永久保留 · 几乎不占空间"));
 ck("夜间任务·时刻文案说明先归档后清理",
    src.includes("夜间任务时刻（先归档裁剪，后清理过期）"));
+
+/* ===== 33. 0.9.58：活动模式「播完最后一个活动」的判定边界（行为级） =====
+   0.9.57 的回归：把「没有下一个活动」一律当成播完，导致手动跳播到任意静止时刻
+   都立刻弹「已播完今天最后一个活动」。正确语义：
+   - 从活动里自然播出来 + 后面没有活动 → 收播（走 pvAdvance 尽头重试）
+   - 手动跳播/进回放落在静止区（inAct=false）→ 照常播，不收播
+   - 中间静止区仍按预设跳/快进到下一个活动 */
+run(`
+  (function(){
+    globalThis.__calls = [];
+    globalThis.__origAdvance = pvAdvance;    /* 后面的分片边界用例要跑真实推进逻辑 */
+    pvAdvance = function(){ globalThis.__calls.push("advance"); };
+    pvPlayAt = function(t){ globalThis.__calls.push("play:" + Math.round(t)); return true; };
+    vtlData = { events:[{ s:100, e:200 }, { s:300, e:400 }] };
+    PPLAY.filter = "act"; PPLAY.silent = "skip"; PPLAY.on = true;
+    PPLAY.endHit = false; PPLAY.inAct = false; PPLAY.ff = null;
+  })();
+`);
+const case_ = (label, setup, expect) => {
+  run(`(function(){ globalThis.__calls = []; ${setup}; globalThis.__ret = pvSkipStatic(); })();`);
+  const ret = run("globalThis.__ret");
+  const calls = run("JSON.stringify(globalThis.__calls)");
+  ck("活动模式·" + label, ret === expect.ret && calls === expect.calls);
+};
+case_("在活动内继续播", "PPLAY.t = 150; PPLAY.inAct = false",
+     { ret:false, calls:"[]" });
+case_("中间静止区按预设跳到下一活动", "PPLAY.t = 250",
+     { ret:true, calls:'["play:297"]' });
+case_("最后一个活动自然播完 → 收播", "PPLAY.t = 500; PPLAY.inAct = true",
+     { ret:false, calls:'["advance"]' });
+case_("手动跳到最后一个活动之后 → 不收播", "PPLAY.t = 500; PPLAY.inAct = false",
+     { ret:false, calls:"[]" });
+ck("活动模式·落点守卫：seek 未落定不认位置",
+   src.includes("if(v.seeking) return;")
+   && src.includes("PPLAY.seekTo = PPLAY.t;")
+   && src.includes("Math.abs(nt - PPLAY.seekTo) > 5"));
+ck("活动模式·跳播落点决定 inAct 初值",
+   src.includes('PPLAY.inAct = PPLAY.filter === "act" && pvInEvent(PPLAY.t);'));
+
+/* 0.9.59：活动紧贴分片边界时的死循环（真机 23:29:59↔23:30:00 反复跳）
+   分片 23:25-23:30 / 23:30-23:35，活动 23:30:02；旧落点 = 23:29:59 落在上一分片最后一秒，
+   播 1 秒分片结束 → pvAdvance 又算出同一个落点 → 原地打转。
+   新约束：落点不得早于活动起点所在分片，且每次跳播必须前进。 */
+run(`(function(){
+  globalThis.__calls = [];
+  pvAdvance = globalThis.__origAdvance;    /* 恢复真实 pvAdvance，只桩 pvPlayAt 观察落点 */
+  pvPlayAt = function(t){ globalThis.__calls.push(Math.round(t*10)/10); return true; };
+  vtlData = { events:[{ s:84602, e:84608.5 }] };
+  PPLAY.segs = [{ s:84300, e:84599.99 }, { s:84600, e:84900 }];
+  PPLAY.segIdx = 0; PPLAY.t = 84599.99; PPLAY.filter = "act";
+  PPLAY.silent = "skip"; PPLAY.endHit = false; PPLAY.inAct = false;
+  pvAdvance();
+})();`);
+ck("活动模式·分片边界跳播不落回上一片（23:29:59 死循环）",
+   run("JSON.stringify(globalThis.__calls)") === "[84600.2]");
+ck("活动模式·跳播落点只前进不后退",
+   src.includes("if(floorT != null && t < floorT) t = floorT;")
+   && src.includes("if(hit && t < hit.seg.s) t = hit.seg.s;")
+   && src.includes("pvPlayAt(pvActTarget(nxt.s, PPLAY.t + 0.2), { quiet:true })"));
+ck("活动模式·16× 在分片尾必须真换片（不能只设 ff）",
+   src.includes("if(!seg || PPLAY.t >= seg.e - 0.05 || PPLAY.t >= evT){")
+   && src.includes("pvPlayAt(Math.max(evT, PPLAY.t + 0.2), { quiet:true });"));
+
+/* ===== 34. 0.9.60 AI 识别 / 0.9.61 与移动侦测合并为「检测」菜单 =====
+   三条硬约束：
+   ① 每路 detect/detectCls 必须真的进 pushCfg body（「假设置」防线）；
+   ② 每路类别缺键=False，不许补全局值；
+   ③ 回放页类别筛选只影响活动导航，旧台账（无 cls）永远不淡出。 */
+ck("AI·每路默认跟随全局", (()=>{
+  const d = get('defaultCamParams(CAMERAS[0], 0)');
+  return d.detect === "follow"
+    && d.detectCls && d.detectCls.person === true && d.detectCls.two_wheeler === true
+    && d.detectCls.vehicle === true;
+})());ck("AI·pushCfg 带每路 detect/detect_classes",
+   src.includes('detect: p.detect || "follow",')
+   && src.includes("detect_classes: p.detectCls || null,"));
+ck("AI·pushCfg 带 detect/notify 嵌套块",
+   src.includes("detect: { enable: !!LK.detEnable, mode: LK.detMode,")
+   && src.includes("notify: { webhook: LK.ntWebhook, motion: !!LK.ntMotion,"));
+ck("AI·applyServerCams 回读每路 detect",
+   src.includes('if(src.detect != null) p.detect = ["follow","on","off"].indexOf(src.detect) >= 0 ? src.detect : "follow";')
+   && src.includes("if(src.detect_classes && typeof src.detect_classes === \"object\"){"));
+run('applyServerCams([{ id:"cam-01", name:"院子", url:"rtsp://x", detect:"off",'
+   + ' detect_classes:{ person:true, vehicle:true } }]);');
+ck("AI·服务端 off 覆盖本路", get('camParams["cam-01"].detect') === "off");
+ck("AI·服务端类别缺键=False（两轮车不补全局）", (()=>{
+  const c = get('camParams["cam-01"].detectCls');
+  return c.person === true && c.two_wheeler === false && c.vehicle === true;
+})());
+ck("AI·全局关时每路一律 off（总闸语义，前端按它显示）",
+   (()=>{
+     run('LK.detEnable = false;');
+     run('closeEditor(); openEditor("cam-01"); SET.acc="mask"; renderCamTabs();');
+     /* 全局关：每路段落标题直接说「AI 未开启」，不摆一堆假开关 */
+     return body().includes("AI 未开启");
+   })());
+
+/* 设置页「检测」卡：三组（移动侦测 / AI 识别 / 触发与通知） */
+run('SET.editing = false; SET.draft = null; SET.genOpen = true; renderCamTabs();');
+h = body();
+ck("检测·通用设置卡合并为「检测」", h.includes("移动侦测 + AI 识别"));
+ck("检测·移动侦测组常显（不需要 AI）", h.includes("移动侦测（像素差）"));
+ck("AI·总闸默认关", h.includes("data-deten=\"1\"") && h.includes("默认关闭"));
+ck("AI·总闸关时其余选项收起", !h.includes('data-detcls="person"'));
+/* 0.9.61：触发与通知移出总闸——关了 AI 也要能配移动侦测通知 */
+ck("检测·AI 关闭时缩时触发仍可配", (()=>{
+  run('LK.detEnable = false; renderCamTabs();');
+  return (body().match(/data-dettrig="(motion|person|vehicle)"/g) || []).length === 3;
+})());
+ck("检测·AI 关闭时通知仍可配", (()=>{
+  run('LK.detEnable = false; renderCamTabs();');
+  return (body().match(/data-ntsw="(motion|person|vehicle)"/g) || []).length === 3
+    && body().includes('id="ntWebhook"');
+})());
+run('LK.detEnable = true; renderCamTabs();');
+h = body();
+ck("AI·开启后出现类别三开关",
+   (h.match(/data-detcls="(person|two_wheeler|vehicle)"/g) || []).length === 3);
+ck("AI·缩时触发三勾选", (h.match(/data-dettrig="(motion|person|vehicle)"/g) || []).length === 3);
+ck("AI·通知三开关 + webhook + 冷却",
+   (h.match(/data-ntsw="(motion|person|vehicle)"/g) || []).length === 3
+   && h.includes('id="ntWebhook"') && h.includes('data-ntcd="-30"'));
+ck("AI·诊断区有 AI 检测卡", h.includes("cardDetectDiag") || h.includes("AI 检测"));
+
+/* 每路检测段（手风琴第四段）——先把总闸打开、本路回到 follow，
+   否则类别行按「本路关/全局关」隐藏，断言不到东西 */
+run('LK.detEnable = true;');
+run('camParams["cam-01"].detect = "follow"; camParams["cam-01"].detectCls = { person:true, two_wheeler:true, vehicle:true };');
+run('closeEditor(); openEditor("cam-01"); SET.acc="mask"; SET.adv=true; renderCamTabs();');
+h = body();
+ck("每路·第四段标题为检测", h.includes('data-acc="mask"') && h.includes("检测"));
+ck("每路·检测段含 AI 识别（开关+类别）",
+   (h.match(/data-camdet="(follow|on|off)"/g) || []).length === 3
+   && (h.match(/data-camdetcls="(person|two_wheeler|vehicle)"/g) || []).length === 3);
+ck("每路·检测段含移动侦测（灵敏度+判读引擎）",
+   h.includes("移动侦测（像素差）")
+   && (h.match(/data-sens="(low|mid|high)"/g) || []).length === 3
+   && (h.match(/data-engine="(auto|pixel|bytes)"/g) || []).length === 3);
+ck("每路·忽略区画布复用", h.includes("maskCv-ig"));
+run('draftSet("detect", "off"); renderCamTabs();');
+h = body();
+ck("每路·强制关闭后类别行隐藏", !h.includes('data-camdetcls="person"'));
+ck("每路·强制关闭有说明", h.includes("强制关闭"));
+run('draftSet("detect", "on"); draftSet("detectCls", { person:true, two_wheeler:false, vehicle:true }); renderCamTabs();');
+h = body();
+ck("每路·摘要显示 AI 开 + 勾选类别", h.includes("AI 开 · 人+车"));
+run('saveDraft();');
+ck("每路·保存落盘", get('camParams["cam-01"].detect') === "on"
+   && get('camParams["cam-01"].detectCls.two_wheeler') === false);
+ck("每路·未保存计数含检测项",
+   src.includes("walk(saved, SET.draft);"));
+run('closeEditor();');
+
+/* 回放页类别筛选（0.9.67：移动侦测/人员/车辆 三类并列，互不重叠） */
+ck("回放·类别 chips 三枚（移动侦测 + 人员 + 车辆）",
+   (src.match(/data-pvcls="(motion|person|vehicle)"/g) || []).length === 3
+   && src.includes('<button data-pvcls="motion">移动侦测</button>'));
+ck("回放·PPLAY.cls 默认三类全勾", (()=>{
+  const c = get('PPLAY.cls');
+  return c.motion && c.person && c.vehicle;
+})());
+ck("回放·pvClsMatch 全勾时不过滤",
+   (()=>{
+     run('PPLAY.cls = { motion:true, person:true, vehicle:true };');
+     return get('pvClsMatch({ s:0, e:1, cls:{ person:2 } })') === true
+         && get('pvClsMatch({ s:0, e:1, cls:{} })') === true;
+   })());
+ck("回放·两轮车并入车辆口径",
+   (()=>{
+     run('PPLAY.cls = { motion:false, person:false, vehicle:true };');
+     const a = get('pvClsMatch({ s:0, e:1, cls:{ two_wheeler:1 } })');
+     const b = get('pvClsMatch({ s:0, e:1, cls:{ person:1 } })');
+     return a === true && b === false;
+   })());
+ck("回放·只勾移动侦测：纯帧差命中，AI 认出人/车的不重复收（三类互不重叠）",
+   (()=>{
+     run('PPLAY.cls = { motion:true, person:false, vehicle:false };');
+     return get('pvClsMatch({ s:0, e:1 })') === true
+         && get('pvClsMatch({ s:0, e:1, cls:{} })') === true
+         && get('pvClsMatch({ s:0, e:1, cls:{ person:1 } })') === false
+         && get('pvClsMatch({ s:0, e:1, cls:{ vehicle:1 } })') === false;
+   })());
+ck("回放·旧台账（无 cls）按移动侦测算，不再无条件放行",
+   (()=>{
+     run('PPLAY.cls = { motion:false, person:true, vehicle:false };');
+     return get('pvClsMatch({ s:0, e:1 })') === false;
+   })());
+ck("回放·pvEvents 按类别过滤",
+   (()=>{
+     run('PPLAY.cls = { motion:false, person:true, vehicle:false };');
+     run('vtlData = { events:[{ s:10, e:20, cls:{ person:1 } }, { s:30, e:40, cls:{ vehicle:1 } }, { s:50, e:60, cls:{} }] };');
+     return get('JSON.stringify(pvEvents())') === '[{"s":10,"e":20,"cls":{"person":1}}]';
+   })());
+ck("回放·类别 chips 至少留一类（三键都查）",
+   src.includes("至少保留一个类别 · 全关等于没有活动可看")
+   && src.includes("if(!next.motion && !next.person && !next.vehicle){"));
+ck("回放·类别变更持久化", src.includes('localStorage.setItem("nvr_pvcls", JSON.stringify(PPLAY.cls))'));
+ck("回放·类别偏好缺键按勾选算（motion 新键 + two_wheeler 取并集进 vehicle）",
+   src.includes('PPLAY.cls.motion  = o.motion !== false;')
+   && src.includes('PPLAY.cls.person  = o.person !== false;')
+   && src.includes('PPLAY.cls.vehicle = (o.vehicle !== false) || (o.two_wheeler !== false);'));
+ck("回放·时间轴不命中时段变淡（保留类别色，只降透明度）",
+   src.includes('el.className = "vevspan" + (evHit[k] ? "" : " dim");')
+   && src.includes('.vmark.dim .lanes{opacity:.22}')
+   && src.includes('let grpHit = false;'));
+ck("回放·气泡显示类别摘要（类别色 + 小色片，两轮并入车）",
+   src.includes("function clsText(ev)") && src.includes("人 ×")
+   && src.includes("车 ×")
+   && src.includes('const v = (c.vehicle|0) + (c.two_wheeler|0);')
+   && src.includes('<i class="cd c-person"></i>'));
+
+/* ---- 0.9.62 事件按类别分色，0.9.67 三色定版 + 三车道 ---- */
+ck("回放·三类别色片齐全（橙=移动侦测 蓝=人 绿=车）",
+   [".c-motion{background:var(--warn)}", ".c-person{background:var(--primary)}",
+    ".c-veh{background:var(--ev-veh)}"].every(c => src.includes(c))
+   && src.includes("--ev-veh:#0f9d58") && src.includes("--ev-veh:#34d399")
+   && !src.includes(".c-two{") && !src.includes(".t-two{"));
+ck("回放·车辆色不再是紫（紫与蓝在 3px 细线上分不出来）",
+   !src.includes("var(--violet)") && !src.includes("--violet:"));
+ck("回放·时段块收进三格，高度 = 持续时长（0.9.69 取代主导类别整条上色）",
+   src.includes('el.className = "vevspan"')
+   && src.includes("el.innerHTML = vtlLanes(evKind(ev), h, true);")
+   && src.includes("const h = Math.max(4, vtlY(ev.e) - vtlY(ev.s));")
+   && !src.includes("function evDom")
+   && src.includes(".vtl .vevspan i.mot{left:0}")
+   && src.includes(".vtl .vevspan i.per{left:20px}")
+   && src.includes(".vtl .vevspan i.veh{left:40px}"));
+ck("回放·横线中心对齐事件时刻（top:7.5px 修正 2.5px / 75 秒偏移）",
+   src.includes(".vtl .vmark .lanes i{position:absolute;top:7.5px;"));
+ck("回放·移动侦测作为辅助判断条件：mv 参与类别判定 + 气泡说明",
+   src.includes("motion:(ev.mv === 1),")
+   && src.includes("function mvText(ev)")
+   && src.includes("mvText(ev0)")
+   && src.includes("起止由移动侦测确认"));
+ck("回放·横线改三车道：左 1/3 移动侦测 · 中 1/3 人员 · 右 1/3 车辆",
+   src.includes("function vtlLanes(kind, h, styleOnly)")
+   && src.includes(`if(kind.motion)  out += '<i class="c-motion mot"' + st + "></i>";`)
+   && src.includes(`if(kind.person)  out += '<i class="c-person per"' + st + "></i>";`)
+   && src.includes(`if(kind.vehicle) out += '<i class="c-veh veh"' + st + "></i>";`)
+   && src.includes('el.innerHTML = \'<div class="lanes">\' + vtlLanes(uk) + "</div>";'));
+ck("回放·三格宽度 0/20/40 各 19px（60px 三等分，互不重叠）",
+   src.includes(".vtl .vmark .lanes i.mot{left:0;width:19px}")
+   && src.includes(".vtl .vmark .lanes i.per{left:20px;width:19px}")
+   && src.includes(".vtl .vmark .lanes i.veh{left:40px;width:19px}"));
+ck("回放·轨道加宽 24→60px（三等分）",
+   src.includes('.vtl .vtrack{position:absolute;left:46px;width:60px')
+   && src.includes('.vtl .vevspan{position:absolute;left:46px;width:60px')
+   && src.includes('.vtl .vmark{position:absolute;left:46px;width:60px;height:18px'));
+ck("回放·挤成一组的横线取组内类别并集",
+   src.includes("const uk = { motion:false, person:false, vehicle:false };")
+   && src.includes("for(const key in uk) if(kd[key]) uk[key] = true;"));
+ck("回放·定位胶囊已移除（不再有 .vmark.on 软底高亮，也没有 vtlMarkActive）",
+   !src.includes(".vmark.on::before")
+   && !src.includes("function vtlMarkActive")
+   && !src.includes("vtlMarkActive();"));
+ck("回放·类别图例常驻 3 项，每项带迷你三格图示（色片位置即时间轴位置）",
+   src.includes('id="evLegend"')
+   && src.includes(".evlegend.noai .lg.ai{opacity:.3}")
+   && src.includes(".evlegend .lg .d.mot i{left:0;width:6px}")
+   && src.includes(".evlegend .lg .d.per i{left:6px;width:6px}")
+   && src.includes(".evlegend .lg .d.veh i{left:12px;width:6px}")
+   && src.includes('class="evlegend noai" id="evLegend"'));
+ck("回放·图例点亮逻辑挂在 evLegend 上（0.9.62 曾写错 id 导致永不点亮）",
+   src.includes('document.getElementById("evLegend")')
+   && !src.includes('document.getElementById("vLegend")'));
+ck("回放·摘要带全天各类别计数（车含两轮），无 AI 数据时不摆零",
+   src.includes("function clsDayText(evs)")
+   && src.includes('if(!p && !v) return "";')
+   && src.includes('v += (c.vehicle|0) + (c.two_wheeler|0);')
+   && src.includes('lg.classList.toggle("noai", !clsDayText(d.events))'));
+
+/* ---- 0.9.68 时间轴上下留白：滚到两端能把 00:00 / 24:00 送到固定时刻线 ---- */
+ck("回放·上下留白随视口高度算（上 = 线位 - VTL_TOP，下 = 视口高 - 线位 - 24）",
+   src.includes("function vtlSyncPad()")
+   && src.includes("const line = Math.round(h / 3);")
+   && src.includes("vtlPadTop = Math.max(0, line - VTL_TOP);")
+   && src.includes("vtlPadBot = Math.max(0, h - line - 24);"));
+ck("回放·坐标统一走 vtlTop()（VTL_TOP 只剩定义 + vtlTop + vtlSyncPad 三处）",
+   (src.match(/VTL_TOP/g) || []).length === 3
+   && src.includes("function vtlTop(){ return VTL_TOP + vtlPadTop; }")
+   && src.includes("function vtlY(sec){ return vtlTop() + sec / 3600 * vtlPxh; }"));
+ck("回放·内容高度含上下留白",
+   src.includes("box.style.height = (vtlTop() + 24 * vtlPxh + vtlPadBot + 24)"));
+ck("回放·点击/滚动/捏合换算同口径用 vtlTop()，不再直接用 VTL_TOP",
+   src.includes("(e.clientY - r.top - vtlTop()) / vtlPxh * 3600")
+   && src.includes("(sc.scrollTop + sc.clientHeight / 3 - vtlTop()) / vtlPxh * 3600")
+   && src.includes("(sc.scrollTop + my - vtlTop()) / vtlPxh * 3600"));
+ck("回放·视口高度变化（全屏/转屏/切页）自动重算并锚住线下时刻",
+   src.includes("Math.abs(sc.clientHeight - vtlScH) > 2")
+   && src.includes("renderVtl(vtlData, vtlDay, t, lineY);")
+   && src.includes("setTimeout(syncVnowline, 30);"));
+
+/* 服务端字段与前端消费对齐（防止改一边忘一边） */
+ck("对齐·台账事件带 cls（后端 ledger.events_of 输出）",
+   src.includes("trigger") && src.includes("detect"));
+run('closeEditor();');
 
 console.log("设置页 " + (pass + fail) + " 项：通过 " + pass + "，失败 " + fail);
 process.exit(fail ? 1 : 0);

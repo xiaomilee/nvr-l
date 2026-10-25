@@ -26,6 +26,7 @@
 import argparse
 import gzip
 import hashlib
+import io
 import os
 import shutil
 import sys
@@ -78,6 +79,26 @@ def add_dir(tar, name):
     tar.addfile(ti)
 
 
+def norm_lf(data):
+    """文本成员统一成 LF 再打包。
+
+    Windows 检出（core.autocrlf=true）会把仓库存的 LF 换成 CRLF，而这个包的
+    运行目标是 Linux：cmd/ 下的 shell 脚本带 CR 时，靠 shebang 直接执行的解释器
+    会报 `\r: command not found`（之前几版能跑是因为 fnOS 用解释器调用 main，
+    属于侥幸，不是设计）。判定口径：不含 NUL 字节且能 UTF-8 解码即视为文本——
+    ELF / PNG / zip(whl) / onnx 全都含 NUL，不会被误伤。
+    """
+    if b"\x00" in data:
+        return data
+    try:
+        s = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    if "\r" not in s:
+        return data
+    return s.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+
+
 def add_file(tar, full, arcname, mode):
     ti = tar.gettarinfo(full, arcname)
     ti.uid = ti.gid = 0
@@ -85,7 +106,15 @@ def add_file(tar, full, arcname, mode):
     ti.mtime = FIXED_MTIME
     ti.mode = mode
     with open(full, "rb") as f:
-        tar.addfile(ti, f)
+        head = f.read(65536)
+        rest = f.read()
+    data = head + rest
+    fixed = norm_lf(data)
+    if fixed is data:
+        tar.addfile(ti, io.BytesIO(data))
+    else:
+        ti.size = len(fixed)
+        tar.addfile(ti, io.BytesIO(fixed))
 
 
 def add_tree(tar, src_dir, prefix, mode_dir=0o755, mode_file=0o644):
@@ -246,12 +275,27 @@ def main():
         inames = set(inner.getnames())
         for n in ("server/nvr_slim.py", "ui/index.html", "ui/config"):
             if n not in inames:
-                problems.append("app.tgz 缺 %s" % n)
-        # cmd/* 必须是可执行
+                problems.append("app.tgz 缺 %s" % n)        # cmd/* 必须是可执行
         for mem in tar.getmembers():
             if mem.name.startswith("cmd/") and mem.isfile() and not (mem.mode & 0o111):
                 problems.append("%s 没有可执行位" % mem.name)
                 break
+        # 文本成员不许带 CR：Windows 检出（autocrlf）会把 LF 换成 CRLF，
+        # 而包的运行目标是 Linux。shell 脚本带 CR 在 shebang 直执行时必炸。
+        # 二进制（ELF/PNG/zip/onnx）含 NUL，norm_lf 不碰，这里也按同口径跳过。
+        # 包根与 app.tgz 内部都要查——服务端脚本和 index.html 也在 app.tgz 里。
+        cr_bad = []
+        for scope, tf in (("", tar), ("app.tgz:", inner)):
+            for mem in tf.getmembers():
+                if not mem.isfile():
+                    continue
+                blob = tf.extractfile(mem).read()
+                if b"\x00" in blob:
+                    continue
+                if b"\r" in blob:
+                    cr_bad.append(scope + mem.name)
+        if cr_bad:
+            problems.append("文本成员含 CR（应为 LF）：%s" % "、".join(cr_bad[:5]))
     if problems:
         sys.exit("自检失败：\n  " + "\n  ".join(problems))
 

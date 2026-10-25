@@ -10,10 +10,10 @@ PY="${NVR_PYTHON:-}"
 NODE="${NVR_NODE:-}"
 [ -n "$NODE" ] || NODE="$(command -v node || true)"
 
-echo "== 1/7 结构校验 =="
+echo "== 1/5 结构校验 =="
 "$PY" "$ROOT/tools/validate.py" || exit 1
 
-echo "== 2/7 后端单测（遍历 test/test_*.py）=="
+echo "== 2/5 后端单测（遍历 test/test_*.py）=="
 # 逐个列文件名的写法漏过 test_condense.py / test_dirname.py / test_playback.py，
 # 它们其实一直在跑却从没进过构建闸门。改成遍历，新加的测试自动纳入。
 # test_http_smoke.py 需要真起服务、且依赖 18081 空闲，单独手动跑（见 BUILD.md）。
@@ -36,11 +36,17 @@ if [ -n "$FAILED" ]; then
   exit 1
 fi
 
-echo "== 6/7 设置页交互断言 =="
+echo "== 3/5 设置页交互断言 =="
 if [ -n "$NODE" ]; then
   "$NODE" "$ROOT/test/ui/settings.test.js" || exit 1
+  # 时间轴分色渲染：DOM 桩跑 renderVtl，验证类别色/分段/变淡（浏览器 e2e 见 test/e2e_ui.js）
+  echo "== 4/5 时间轴分色渲染 =="
+  "$NODE" "$ROOT/test/ui/render_check.js" || exit 1
+  # 回放默认落点：今天=最后一段段首 / 历史=当天第一段 / 进页自动定位（0.9.72）
+  echo "== 回放默认落点 =="
+  "$NODE" "$ROOT/test/ui/play_enter.test.js" || exit 1
 else
-  echo "SKIP 未找到 node，跳过设置页测试（只影响测试，不影响出包）"
+  echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi
 
 # fnOS 上脚本需要可执行位；NTFS 下 chmod 可能无效，失败不阻断
@@ -51,7 +57,7 @@ if [ "${1:-}" = "--check" ]; then
   exit 0
 fi
 
-echo "== 7/7 打包 =="
+echo "== 5/5 打包 =="
 APPNAME="$(grep -m1 '^appname=' "$ROOT/manifest" | cut -d= -f2)"
 VERSION="$(grep -m1 '^version=' "$ROOT/manifest" | cut -d= -f2)"
 
