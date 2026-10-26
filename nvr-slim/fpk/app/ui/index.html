@@ -829,6 +829,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
   background:var(--bg);color:var(--text);font-size:12px;outline:none}
 .fld2 input.mono{font-family:"Cascadia Mono",Consolas,monospace;font-size:11px}
 .fld2 input:focus{border-color:var(--primary);background:var(--surface)}
+/* 0.9.84 取流传输选择器：和输入框同一套观感，避免出现第四种控件样式 */
+.fld2 select{width:100%;height:36px;border:1px solid var(--line);border-radius:9px;padding:0 8px;
+  background:var(--bg);color:var(--text);font-size:12px;outline:none;appearance:none}
+.fld2 select:focus{border-color:var(--primary);background:var(--surface)}
 
 /* 画布：编辑态可画，只读态禁手 */
 .maskstage{position:relative;border-radius:10px;overflow:hidden;background:#0e1013;
@@ -982,18 +986,29 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .t-veh{color:var(--ev-veh)}
 /* 活动时段块：全时/活动筛选下都常亮（v0.9.48：用户反馈全时模式看不到活动标记
    —— 之前只在活动筛选时点亮，被蓝轨压住了）。
-   活动时段块（0.9.69 起与横线同一套三格）：以前是一整块 60px 宽的色块、
-   一律按主导类别上色——于是时间轴上出现两种「横线」：60px 的时段块和 19px
-   的类别线，用户看不出它们是同一件事的两种表达。
-   现在时段块也收进三格（左 1/3 移动侦测 · 中 1/3 人员 · 右 1/3 车辆），
-   每格的高度 = 这段持续多久（最小 4px 地板：默认 120px/h 下 2 秒只有
-   0.07px，不给地板等于没画）。头顶那根 3px 亮线是事件起点（.vmark），
-   尾巴是真实在场时长——「车来了」是线，「待了多久」是尾巴高度。 */
+   时段块**占满整条轨道**（0.9.76 改回，与蓝块同列同宽）：0.9.69 曾把它收进
+   三格里的最左一格（19px），结果时间轴上出现两条并排的竖列 —— 有活动的地方，
+   蓝块被黄块盖住左边 19px、只剩右侧 41px 露出来；没活动的地方蓝块又从最左边
+   开始。用户 2026-10-26 真机截图指出「蓝色和黄色应该对齐」：同一个时刻在两条
+   不同宽度的列上，读起来像两条独立轨道，而不是「这段时间有画面 + 同时有活动」。
+   现在黄块与蓝块严格同一条 60px 轨道、同样的起止时刻 ——「列」对齐这件事由
+   容器的 left/width 保证，不靠颜色铺满。
+
+   0.9.77：0.9.76 把颜色也铺满整条 60px，结果是整段只有一个类别时（车库全天
+   车辆、活动一连十几分钟）整条竖带糊成一片绿，把下面的蓝块整个盖掉，看不出
+   「有画面 + 有活动」两件事。现在颜色回到三格窄道（左移动 / 中人员 / 右车辆，
+   各 19px），容器仍是 46/60 —— 对齐不变，蓝块在没类别的那两格照常透出来。
+   这也恢复了「位置即类别」：一眼能看出这段时间里出现过哪几类，而不是只剩一个
+   被压平的主色。 */
 .vtl .vevspan{position:absolute;left:46px;width:60px;z-index:2;pointer-events:none}
-.vtl .vevspan i{position:absolute;top:0;width:19px;border-radius:2px;display:block;opacity:.85}
+.vtl .vevspan i{position:absolute;top:0;width:19px;border-radius:2px;display:block;opacity:.9}
 .vtl .vevspan i.mot{left:0}
 .vtl .vevspan i.per{left:20px}
 .vtl .vevspan i.veh{left:40px}
+/* 活动落在断录里（0.9.75）：这一段台账有活动（人/车确实在），但没有任何录像。
+   不画类别色条 —— 三格色条暗示「点开就有画面」，那正是「有活动 = 有画面」这个
+   错误暗示的来源。只留一个虚线框：这里发生过，但没录下来。 */
+.vtl .vevspan.gap{border:1px dashed var(--faint);border-radius:3px;box-sizing:border-box;opacity:.5}
 .vtlcard.actmode .vtrack,.vtlcard.actmode .vavail{opacity:.16}
 .vtlcard.actmode .vavail.arch{opacity:.1}
 /* Aqara 式横线标注：一枚 = 一个（组）事件，点线弹标注气囊，点空白处跳播。
@@ -1805,6 +1820,8 @@ function refreshRes(){
       /* AI 检测 / 通知状态快照：设置页状态行与诊断卡吃这份 */
       if(d.detect){ DET.st = d.detect; }
       if(d.notify){ NT.st = d.notify; }
+      ING.st = d.ingest || null;
+      ING.fr = d.frames || null;
       const r = d.res || {};
       RES.ok = true;
       RES.at = Date.now();
@@ -4907,6 +4924,10 @@ function cardLink(){
    所有选项都进 pushCfg body（LK.det 系列 / LK.nt 系列），
    服务端 norm_detect/norm_notify 强校。 */
 const DET = { st:null };   /* /api/status 的 detect 快照：loaded/error/avg_ms/per_cam */
+/* 0.9.80 统一取流：每路一条 RTSP 连接 → 本机端口 → 录制/取帧/AI。
+   ING.st = {enabled, cams:{id:{port,clients,idle_sec,tries,stall,error,state}}}
+   ING.fr = {id:{frames,ok,interval,age,error}}（老流程时为 null） */
+const ING = { st:null, fr:null };
 const NT  = { st:null };   /* /api/status 的 notify 快照：recent/pending */
 
 function detStatusLine(){
@@ -6145,7 +6166,7 @@ function renderDiagZone(){
     + '<div><b>诊断与日志</b><div class="zs">存储占用 · 每路录制 · 环境 · AI 检测 · 日志</div></div>'
     + '<span class="chev">' + (SET.diagOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>';
   if(SET.diagOpen){
-    h += cardStorage() + cardRecCams() + cardEnv() + cardParts()
+    h += cardStorage() + cardRecCams() + cardIngest() + cardEnv() + cardParts()
        + cardDetectDiag() + cardLog() + cardMaint();
   }else{
     h += '<div class="gcard genfold"><div class="genline" id="diagSum">' + diagSummary() + '</div>'
@@ -6311,6 +6332,69 @@ function cardRecCams(){
     + inner
     + '<div class="dline" style="margin-top:9px;font-size:10px;color:var(--faint)">'
     + '点「诊断」就地展开：ffprobe 读流 + 试录 8 秒，直接给出是摄像头还是 ffmpeg 的问题。</div>'
+    + '</div>';
+}
+
+/* 统一取流（0.9.80）：每路一条 RTSP 连接 + 本机端口 + 消费者数。
+   这张卡的用途很具体：以前出问题要分辨「是摄像头、还是某一路拉流」，
+   现在连接只有一条，看 idle_sec 就知道是不是取流本身没数据。 */
+function cardIngest(){
+  const st = ING.st;
+  if(!st || st.enabled !== true){
+    return '<div class="dcard"><div class="dh">统一取流<span class="tg">每路一条连接</span>'
+      + '<span class="rt">未启用</span></div>'
+      + '<div class="dline">当前走旧流程：录制 / 预览 / AI 各自直连摄像头。'
+      + '每 5 秒一轮、5 路约每分钟 120 次新建 RTSP 会话 —— 廉价摄像头会因此踢人。'
+      + '把配置里的 ingest_enable 打开（默认开）即可切到单连接。</div></div>';
+  }
+  const cams = st.cams || {};
+  const ids = Object.keys(cams);
+  let inner;
+  if(!ids.length){
+    inner = '<div class="dline">取流未上报（可能还没有带 RTSP 地址的通道）。</div>';
+  }else{
+    inner = ids.map(id=>{
+      const c = cams[id] || {};
+      const fr = ING.fr && ING.fr[id] ? ING.fr[id] : null;
+      const live = c.state === "live";
+      const idle = c.idle_sec;
+      /* c.paused = 相机没发数据但我们**故意不重启**（0.9.81）。这个状态必须
+         说出来，否则用户看到「0 秒前有数据」变成「40 秒前」只会以为坏了 —— 
+         实际是进程活着、会话还在，相机回来就立刻续上，比杀进程重连快 15 秒。 */
+      const paused = !!c.paused;
+      const dot = !live ? "var(--warn)"
+        : (paused ? "var(--warn)" : (idle != null && idle > 30 ? "var(--warn)" : "var(--live)"));
+      let tail = live ? ("端口 " + (c.port || "—") + " · 消费者 " + (c.clients|0)) : "重连中";
+      if(live && idle != null){
+        tail += paused ? (" · 停顿 " + idle + " 秒，等相机自己回来（不重启）")
+                       : (" · " + idle + " 秒前有数据");
+      }
+      if(c.tries) tail += " · 握手重试 " + c.tries + " 次";
+      /* 0.9.82：停顿长度以前一直显示 0 —— 只有"相机自己回来"那条路会记时长，
+         "停到打穿耐心才重连"那条路漏记。现在两条都记，这个数才有诊断价值：
+         0~10 秒=抖动噪声；接近 25 秒（耐心上限）=相机被掐且不自愈，
+         重连是唯一有效手段，该考虑换传输或子码流了。 */
+      if(c.pause_count) tail += " · 停顿 " + c.pause_count + " 次"
+        + (c.pause_max_sec ? "（最长 " + c.pause_max_sec + " 秒）" : "")
+        + (c.last_pause_sec && c.last_pause_sec !== c.pause_max_sec
+            ? "，最近 " + c.last_pause_sec + " 秒" : "");
+      if(fr) tail += " · 取帧 " + (fr.frames|0) + " 张/" + (fr.interval||"–") + "s";
+      return '<div class="recrow"><i style="background:' + dot + '"></i>'
+        + '<b>' + esc(c.name || id) + '</b><span>' + esc(tail) + '</span></div>'
+        + ((c.error || (fr && fr.error))
+            ? '<details class="recmore"><summary>错误原文</summary><code>'
+              + esc(c.error || fr.error) + '</code></details>'
+            : "");
+    }).join("");
+  }
+  const liveN = ids.filter(id=> (cams[id]||{}).state === "live").length;
+  return '<div class="dcard">'
+    + '<div class="dh">统一取流<span class="tg">一条连接 → 录制 / 取帧 / AI</span>'
+    + '<span class="rt">' + liveN + " / " + ids.length + ' 在流</span></div>'
+    + inner
+    + '<div class="dline" style="margin-top:9px;font-size:10px;color:var(--faint)">'
+    + '「消费者」是接在这条流上的本机进程数（录制 + 取帧 = 2）。'
+    + '它掉到 0 说明消费者都退出了；idle 一直涨说明取流没拿到数据。</div>'
     + '</div>';
 }
 
@@ -7665,17 +7749,43 @@ function renderVtl(d, day, anchorSec, anchorY){
     el.style.height = Math.max(4, vtlY(iv[1]) - vtlY(iv[0])) + "px";
     box.appendChild(el);
   });
-  /* 活动时段块（0.9.69）：与横线同一套三格，高度 = 这段持续多久。
+  /* 活动时段块（0.9.69）：高度 = 这段持续多久。
      最小 4px 地板——默认 120px/h 下 2 秒只有 0.07px，不给地板等于没画。
      尾巴从事件起点向下长，头顶正好压着同一时刻的那根 3px 亮线：
-     线回答「什么时候开始的」，尾巴回答「待了多久」。 */
+     线回答「什么时候开始的」，尾巴回答「待了多久」。
+
+     0.9.75：时段块也按「哪里有画面」切开。以前一律画满整段，于是断录期
+     （人还在院子里、但录制卡住/重连）也照样一条橙块垂下来 —— 与蓝块不一致，
+     用户点进去发现没画面，「有活动 = 有画面」的暗示是错的。现在与蓝块共用
+     同一份 av.full：中间断开、整段都在断录里就只留虚线框。
+
+     0.9.76：宽度改回整条轨道（左 46 / 宽 60），与蓝块严格同列同宽。
+     0.9.69 把块收进最左 19px 后，有活动的地方蓝块被盖掉左边一截、只剩右边
+     41px，没活动的地方蓝块又从最左边起 —— 同一根竖线在时间轴上有两种左边缘，
+     读起来像两条并排的轨道。用户真机截图指出「蓝色和黄色应该对齐」。
+     颜色换成一格主色（evDom），类别细分交给起点三格线。 */
   evs.forEach((ev, k)=>{
-    const el = document.createElement("div");
-    el.className = "vevspan" + (evHit[k] ? "" : " dim");
-    el.style.top = vtlY(ev.s) + "px";
-    const h = Math.max(4, vtlY(ev.e) - vtlY(ev.s));
-    el.innerHTML = vtlLanes(evKind(ev), h, true);
-    box.appendChild(el);
+    const parts = vtlClipByAvail(ev.s, ev.e, av.full);
+    if(!parts.length){
+      /* 整个活动都落在断录里：不画类别色条，只留一个虚线框。
+         不直接不画 —— 台账里是真有过活动，凭空消失比画错更让人怀疑数据丢了。 */
+      const el = document.createElement("div");
+      el.className = "vevspan gap" + (evHit[k] ? "" : " dim");
+      el.style.top = vtlY(ev.s) + "px";
+      el.style.height = Math.max(4, vtlY(ev.e) - vtlY(ev.s)) + "px";
+      box.appendChild(el);
+      return;
+    }
+    parts.forEach(pt=>{
+      const el = document.createElement("div");
+      el.className = "vevspan" + (evHit[k] ? "" : " dim");
+      el.style.top = vtlY(pt[0]) + "px";
+      const h = Math.max(4, vtlY(pt[1]) - vtlY(pt[0]));
+      /* 同一条 60px 轨道（容器对齐蓝块），颜色按类别落在三格窄道上（0.9.77）。
+         不再用单一主色铺满整宽：整段只有一类时会把蓝块完全盖掉。 */
+      el.innerHTML = vtlLanes(evKind(ev), h);
+      box.appendChild(el);
+    });
   });
   // 事件层：类别色短横线标注（0.9.62 分色，0.9.67 起三车道）。
   // 挤在一起（间距 < 20px）的合并为一根线（组），点线弹标注气囊，点空白处直接跳播。
@@ -7982,9 +8092,9 @@ function pvPreloadNext(){
 /* ---------- 事件类别与配色（0.9.62，0.9.63 起车辆含两轮车）----------
    时间轴「一眼分型」的公共口径：
      橙 = 移动侦测（帧差，台账无 cls） · 蓝 = 人员 · 青绿 = 车辆（含两轮车）
-   - 时段块（.vevspan）取主色：计数最高的类别，并列按 人 > 车 的优先级，
-     保证同一段永远是同一个颜色，不会因为计数相等在两帧渲染间跳色；
-   - 横线（.vmark）三车道：左 1/3 移动侦测、中 1/3 人员、右 1/3 车辆，互不重叠；
+   - 时段块（.vevspan）与横线同一套三格：左 1/3 移动侦测、中 1/3 人员、
+     右 1/3 车辆，容器宽度与蓝块一致（0.9.77：0.9.76 的单主色铺满整宽会把
+     蓝块整条盖掉，车库整条全绿就是这个原因）；
    - 组（多个事件挤在一起合并成一根线）取组内各类别的并集。 */
 const CLS_COLOR = { motion:"motion", person:"person", vehicle:"veh" };
 /* 某事件出现了哪些类别。
@@ -7997,16 +8107,21 @@ const CLS_COLOR = { motion:"motion", person:"person", vehicle:"veh" };
 function evKind(ev){
   const c = ev && ev.cls;
   if(!c) return { motion:true, person:false, vehicle:false };
-  const k = { motion:(ev.mv === 1),
+  const k = { motion:false,
               person:(c.person|0) > 0,
               vehicle:((c.vehicle|0) + (c.two_wheeler|0)) > 0 };
+  /* 移动侦测 = **没有任何 AI 类别**的纯帧差段，与 pvClsMatch 的 hasM 同一口径。
+     0.9.77 之前这里写的是 `motion:(ev.mv === 1)` —— mv 是「这段吸收了移动
+     簇」的标记，几乎每个 AI 段都带它，于是橙格几乎常亮、三类互不重叠的语义
+     就废了；叠在时段块上还会让块白占掉 2/3 宽（车库车辆段实测亮橙+绿两格）。 */
   if(!k.person && !k.vehicle) k.motion = true;
   return k;
 }
-/* 时段块的三格 HTML（0.9.69）：与横线同一套位置（左 0 / 中 20 / 右 40，各 19px），
-   h 是这段的像素高度（真实在场时长，4px 地板）。 */
-function vtlLanes(kind, h, styleOnly){
-  const st = (styleOnly && h != null)
+/* 三格车道 HTML：位置即类别（左移动 / 中人员 / 右车辆）。
+   h 有值时给每格上高度（活动时段块用，4px 地板在调用方算）；
+   不给 h 就是起点那根 3px 线（高度由 .vmark .lanes i 的 CSS 定）。 */
+function vtlLanes(kind, h){
+  const st = (h != null)
     ? ' style="height:' + (Math.round(h * 10) / 10) + 'px"' : "";
   let out = "";
   if(kind.motion)  out += '<i class="c-motion mot"' + st + "></i>";
@@ -8014,6 +8129,24 @@ function vtlLanes(kind, h, styleOnly){
   if(kind.vehicle) out += '<i class="c-veh veh"' + st + "></i>";
   return out;
 }
+/* 把 [s,e] 按「有画面的区间」切成若干段（0.9.75，与服务端 ledger.split_by_spans 同口径）。
+   活动块用它、将来别的叠加层也能用 —— 时间轴上「哪里有画面」只有一个事实来源：
+   服务端 avail.full（现在由分片 mtime 算真实结束时刻，断录真的留洞）。
+   传空/缺数据时原样返回：老服务端不带 avail 时不能把所有活动都裁没。 */
+function vtlClipByAvail(s, e, spans){
+  if(!spans || !spans.length) return [[s, e]];
+  const out = [];
+  for(let k = 0; k < spans.length; k++){
+    const lo = Math.max(s, spans[k][0]), hi = Math.min(e, spans[k][1]);
+    if(hi - lo <= 0.01) continue;
+    const last = out[out.length - 1];
+    if(last && lo <= last[1] + 0.01) last[1] = Math.max(last[1], hi);
+    else out.push([lo, hi]);
+  }
+  return out;
+}
+/* 起点三格线段的 HTML：位置固定 左 0 / 中 20 / 右 40，各 19px，位置本身就是类别语义。
+   横线（.vmark）与活动时段块（.vevspan）共用同一个（见上），区别只在有没有高度。 */
 
 /* 活动类别筛选（0.9.60，0.9.63 车辆含两轮车，0.9.67 加移动侦测）：
    某事件是否落在当前勾选的类别里。cls 是台账聚合的各类别计数（events_of 输出）。
@@ -8039,13 +8172,76 @@ function pvEvents(){
   return evs.filter(pvClsMatch);
 }
 
-/* 下一个播放目标：活动筛选 = 下一个活动起点（垫 PV_ROLL）；全时 = 下一分片起点 */
+/* ---------- 活动模式「我在哪 / 下一个是谁」的唯一口径（0.9.74）----------
+   0.9.73 及以前，这两件事由三处各写一个 for 循环，判定条件还不一样，真机踩出两类误判：
+
+   ① **只按「起点」找下一目标**：pvNextTarget 找「起点晚于当前时刻的活动」，
+      而人正处在某个活动的**中间**时，这个活动起点已过、后面又没有更晚的活动，
+      于是返回 null 被当成「到头」。分片一到边界（车库 120 秒、客厅 300 秒）就收播。
+      真机证据：车库 03:43:24 播放在 `03:42:33→04:00:26` 这条车辆活动内部，
+      客厅 03:40:01 在 `03:38:30→03:44:54` 内部，两条都在块中间弹「播完最后一个活动」。
+
+   ② **把活动当互不重叠的区间序列**：0.9.69 读端分档后，AI 段会吸收 60 秒内的移动簇
+      （mv 标记），AI 段与移动簇可以**同起点、不同终点**甚至相交。所以
+      「拿第一条覆盖到 t 的就完事」会拿到较短的那条，提前判成离开活动。
+
+   统一成两个纯函数，推进、跳播、收播文案全走它们，不再各算各的：
+     pvActSpan(t) → 覆盖 t 的活动里**最晚的结束时刻** e（没有则 null）
+     pvActNext(t) → 起点晚于 t 的活动里**最早的那个**（没有则 null）
+   之所以返回 e 而不是事件对象：调用方只关心「这段活动还剩多少可播」。 */
+function pvActSpan(t){
+  const evs = pvEvents();
+  let e = null;
+  for(let k = 0; k < evs.length; k++){
+    const ev = evs[k];
+    if(t >= ev.s - PV_ROLL - 0.01 && t < ev.e && (e === null || ev.e > e)) e = ev.e;
+  }
+  return e;
+}
+function pvActNext(t){
+  const evs = pvEvents();
+  let nx = null;
+  for(let k = 0; k < evs.length; k++){
+    const ev = evs[k];
+    if(ev.s > t + 0.25 && (nx === null || ev.s < nx.s)) nx = ev;
+  }
+  return nx;
+}
+/* 服务端时基下的「现在」（当天钟点秒）。红线、蓝块、收播文案共用一个时基：
+   手机与 NAS 差几分钟时，用浏览器 Date 判「还在录」会判错（0.9.72 的教训） */
+function pvNowSec(){
+  const d = vtlData;
+  return (d && typeof d.now === "number") ? d.now : null;
+}
+/* 最后一片之后是否还在录：录制仍在写新分片 → 不是「没录像了」，是「还没录到」 */
+function pvStillRec(){
+  const segs = PPLAY.segs, last = segs && segs[segs.length - 1];
+  if(!last) return false;
+  const now = pvNowSec();
+  if(now === null) return false;                       // 不是今天，没有「还在录」这回事
+  const rec = state.rec || {};
+  const segLen = Math.max(10, Math.min(3600, +(rec.segment_sec || LK.segSec || 300)));
+  return now < last.e + segLen;
+}
+
+/* 下一个播放目标：
+   活动模式 = ① 还在这段活动里 → 接下一分片继续播（cont）；
+              ② 活动已播完 → 下一个活动起点（垫 PV_ROLL）；
+              ③ 都没有 → null（真到头，交给 pvAdvance 重试/收播）
+   全时模式 = 下一分片起点 */
 function pvNextTarget(){
   if(PPLAY.filter === "act"){
-    const evs = pvEvents();
-    for(let k = 0; k < evs.length; k++){
-      if(evs[k].s > PPLAY.t + 0.25) return { t: Math.max(0, evs[k].s - PV_ROLL) };
+    /* ① 人在活动里：先把这段播完，别急着找「下一个活动」。
+       分片边界落在活动中间是常态（2~5 分钟一片），这里必须接上下一片，
+       否则每跨一次片就被判一次「播完」（0.9.73 真机每次到分片尾就停的根因） */
+    const e = pvActSpan(PPLAY.t);
+    if(e !== null){
+      const nx = PPLAY.segs[PPLAY.segIdx + 1];
+      if(nx && nx.s < e) return { t: nx.s, cont:true };
     }
+    /* ② 活动已播完（或活动内已无片可接）：去下一个活动起点 */
+    const nxEv = pvActNext(PPLAY.t);
+    if(nxEv) return { t: Math.max(0, nxEv.s - PV_ROLL) };
     return null;
   }
   const nx = PPLAY.segs[PPLAY.segIdx + 1];
@@ -8081,6 +8277,10 @@ function pvAdvance(){
     return;
   }
   PPLAY.endHit = false;   // 正常推进，恢复「尽头重试」资格
+  /* 活动内跨分片 = 正常连播：不快进、不跳、不改倍速，直接接下一片。
+     必须排在下面两个 act 分支之前——它们都会给目标加 PV_ROLL 或设 ff，
+     而 cont 的目标是分片起点本身，加了余量就会跳过 3 秒画面 */
+  if(tgt.cont){ pvPlayAt(tgt.t, { quiet:true }); return; }
   /* 静止段快进：不 seek，继续播但加速静音，到下一活动起点恢复原速。
      注意先 pvPlayAt 再设 ff（pvPlayAt 内部会清 ff，顺序反了会被吃掉） */
   if(PPLAY.filter === "act" && PPLAY.silent !== "skip"){
@@ -8109,16 +8309,22 @@ function pvAdvance(){
   pvPlayAt(tgt.t, { quiet:true });
 }
 
-/* 播完收尾：全时模式下，若最后一段的覆盖窗刚过（下一段此刻应正在录），
-   把话说准——不是「最后一段录像」，是「下一段录制中」 */
+/* 播完收尾的文案要说准，别把三种完全不同的处境混成一句话：
+   活动模式以前一律说「已播完今天最后一个活动」，可 0.9.73 真机两次都发生在
+   **人还在活动里**的时候（车库 03:43:24、客厅 03:40:01），用户看到的就是
+   红线明明压在活动块上却被告知播完了 —— 文案和行为自相矛盾。
+   现在按「还在不在活动里 × 还在不在录」分四句：
+     在活动里 + 在录   → 已播到最新，这个活动还在录制（等分片封口）
+     在活动里 + 没在录 → 这个活动后面没有录像（真有未录的空洞）
+     已出活动 + 在录   → 已播完今天最后一个活动，正在录新的
+     已出活动 + 没在录 → 已播完今天最后一个活动 */
 function pvEndMsg(){
-  if(PPLAY.filter === "act") return "已播完今天最后一个活动";
-  const segs = PPLAY.segs, last = segs && segs[segs.length - 1];
-  if(last){
-    const rec = state.rec || {};
-    const segLen = Math.max(10, Math.min(3600, +(rec.segment_sec || LK.segSec || 300)));
-    if(Date.now() / 1000 < last.e + segLen) return "已播到最新一段，下一段录制中";
+  if(PPLAY.filter === "act"){
+    if(pvActSpan(PPLAY.t) !== null)
+      return pvStillRec() ? "已播到最新，这个活动还在录制" : "这个活动后面没有录像";
+    return pvStillRec() ? "已播完今天最后一个活动，正在录新的" : "已播完今天最后一个活动";
   }
+  if(pvStillRec()) return "已播到最新一段，下一段录制中";
   return "已播到今天最后一段录像";
 }
 function pvFinish(){
@@ -8150,14 +8356,10 @@ function pvRate(){
    判定窗口用 s-PV_ROLL：跳播落点本身就垫在活动前 3 秒，不能把它当成静止段，否则死循环 */
 function pvSkipStatic(){
   if(PPLAY.filter !== "act") return false;
-  const evs = pvEvents();
-  if(!evs.length) return false;
-  let cur = false, nxt = null;
-  for(let k = 0; k < evs.length; k++){
-    if(PPLAY.t >= evs[k].s - PV_ROLL - 0.01 && PPLAY.t < evs[k].e){ cur = true; break; }
-    if(evs[k].s > PPLAY.t){ nxt = evs[k]; break; }
-  }
-  if(cur){ PPLAY.inAct = true; return false; }   /* 在活动内，继续播 */
+  if(!pvEvents().length) return false;
+  /* 还在某个活动里（活动会重叠，取最晚的 e）→ 继续播，什么都不做 */
+  if(pvActSpan(PPLAY.t) !== null){ PPLAY.inAct = true; return false; }
+  const nxt = pvActNext(PPLAY.t);
   if(!nxt){
     /* 已经过了最后一个活动。只有「从活动里自然播出来」才收播——
        手动跳播/进回放落在静止区（inAct=false）不该立刻弹「已播完最后一个活动」，
@@ -8177,11 +8379,7 @@ function pvSkipStatic(){
 
 /* 某时刻是否落在活动窗口内（含落点余量 PV_ROLL）——跳播后用它判定「是不是从活动里开始」 */
 function pvInEvent(t){
-  const evs = pvEvents();
-  for(let k = 0; k < evs.length; k++){
-    if(t >= evs[k].s - PV_ROLL - 0.01 && t < evs[k].e) return true;
-  }
-  return false;
+  return pvActSpan(t) !== null;
 }
 
 /* 活动跳播落点：常规垫 PV_ROLL 吸收关键帧误差；两个硬约束——

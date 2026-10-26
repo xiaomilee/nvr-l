@@ -139,5 +139,88 @@ ck("清单没到只提示读取中，不报「该时刻无录像」",
 ck("回放页播放走 pvSafePlay（被拦时退回未开播），不再用通用的 safePlay",
    /function pvSafePlay\(\)\{/.test(src) && !src.includes("  safePlay(pvCur);"));
 
+/* ---- 10. 活动模式推进（0.9.74）：人在活动里，不许判「播完最后一个活动」----
+   真机两次事故（2026-10-26，都在 0.9.73）：
+     车库 03:43:24 —— 播放在车辆活动「03:42:33 → 04:00:26」内部停住；
+     客厅 03:40:01 —— 播放在移动活动「03:38:30 → 03:44:54」内部停住。
+   共同点：当前活动的**起点早于播放时刻**，而旧 pvNextTarget 只找「起点更晚的活动」，
+   于是返回 null → pvAdvance 刷一轮清单/台账仍是 null → pvFinish 收播。
+   分片跨边界（车库 120 秒、客厅 300 秒）就停一次，用户看到红线压在活动块上却说播完了。
+   下面用这两次的真实时刻做回归。 */
+const GK_T = 3 * 3600 + 43 * 60 + 24;          // 车库事故的播放时刻 03:43:24
+run('PPLAY.filter = "act"; PPLAY.on = true;'
+  + ' PPLAY.cls = {motion:true, person:true, vehicle:true}; state.rec = {segment_sec:120};');
+/* 分片：03:39:00 起每片 60 秒（取整方便算），播放头在第二片末尾 */
+run('PPLAY.segs = [{s:13140, e:13200, file:"a.mp4"}, {s:13200, e:13260, file:"b.mp4"}]'
+  + '; PPLAY.segIdx = 0; PPLAY.t = ' + GK_T + ';');
+/* 台账：一条 03:42:33 → 04:00:26 的车辆活动，覆盖播放头，且没有更晚的活动（事故原样） */
+run('vtlData = { events: [{s:13353, e:14426, cls:{vehicle:1}}], now: 14430 };');
+
+let nxt = null, nxtErr = null;
+try{ run("__n = pvNextTarget();"); nxt = get("__n && {t:__n.t, cont:!!__n.cont}"); }
+catch(e){ nxtErr = e; }
+ck("活动内·pvNextTarget 不抛异常", nxtErr === null);
+ck("活动内·目标不是 null（旧逻辑在这里返回 null 直接收播）", nxt !== null);
+ck("活动内·目标 = 下一分片起点（继续播这段活动）", nxt && nxt.t === 13200);
+ck("活动内·标记 cont：跨片连播，不快进也不跳", nxt && nxt.cont === true);
+
+ck("活动内·pvActSpan 返回这条活动的结束时刻（不是 null，也不是起点）",
+   get("pvActSpan(" + GK_T + ")") === 14426);
+ck("活动内·pvInEvent 与 pvActSpan 同一口径", get("pvInEvent(" + GK_T + ")") === true);
+
+/* 活动重叠（0.9.69 读端分档：AI 段吸收移动簇，可同起点不同终点）→ 必须取最晚的 e，
+   否则拿到短的那条会提前判「已离开活动」 */
+run('vtlData.events = [{s:13353, e:13400, cls:{}}, {s:13353, e:14426, cls:{vehicle:1}}];');
+ck("活动重叠·取最晚结束的那条（14426，不是 13400）",
+   get("pvActSpan(" + GK_T + ")") === 14426);
+
+/* 活动内但后面已经没有分片了 → 才算真到头（返回 null 交给 endHit 重试） */
+run('PPLAY.segIdx = 1;');
+ck("活动内·最后一个分片之后没有片可接 → null",
+   get("(function(){var r=pvNextTarget(); return r===null;})()") === true);
+
+/* 分片起点越过了活动末尾 → 这段活动已播完，不该再「继续播」 */
+run('PPLAY.segs = [{s:13140, e:13200, file:"a.mp4"}, {s:14900, e:14960, file:"b.mp4"}]'
+  + '; PPLAY.segIdx = 0;'
+  + ' vtlData.events = [{s:13353, e:14426, cls:{vehicle:1}}, {s:15000, e:15200, cls:{}}];');
+nxt = get("(function(){var r=pvNextTarget(); return r && {t:r.t, cont:!!r.cont};})()");
+ck("活动已过·目标 = 下一个活动起点前 PV_ROLL(3s)", nxt && nxt.t === 14997);
+ck("活动已过·不标记 cont（这一步要跳/快进静止段）", nxt && nxt.cont !== true);
+
+/* ---- 11. 收播文案：四种处境不能混成一句 ----
+   旧版活动模式一律「已播完今天最后一个活动」，才会出现「红线在活动块上却被告知播完」 */
+run('PPLAY.segs = [{s:13140, e:13200, file:"a.mp4"},{s:13200, e:13500, file:"b.mp4"}]'
+  + '; PPLAY.segIdx = 1; PPLAY.t = ' + GK_T + '; state.rec = {segment_sec:300};');
+run('vtlData = { events: [{s:13353, e:14426, cls:{vehicle:1}}], now: 13520 };');   // 还在录
+ck("文案·在活动内 + 还在录 → 已播到最新，这个活动还在录制",
+   get("pvEndMsg()") === "已播到最新，这个活动还在录制");
+run('vtlData.now = 14430;');                                                      // 录制已停
+ck("文案·在活动内 + 已停录 → 这个活动后面没有录像",
+   get("pvEndMsg()") === "这个活动后面没有录像");
+run('PPLAY.t = 15000;');                     // 播放头已出活动
+ck("文案·已出活动 + 已停录 → 已播完今天最后一个活动",
+   get("pvEndMsg()") === "已播完今天最后一个活动");
+run('PPLAY.segs = [{s:13140, e:13200, file:"a.mp4"}, {s:14900, e:15300, file:"b.mp4"}]'
+  + '; PPLAY.segIdx = 1; vtlData.now = 15360;');   // 最后一片刚封口，还在往后录
+ck("文案·已出活动 + 还在录 → 已播完今天最后一个活动，正在录新的",
+   get("pvEndMsg()") === "已播完今天最后一个活动，正在录新的");
+ck("文案·活动模式不再无条件宣称播完",
+   !/filter === "act"\)\s*return "已播完今天最后一个活动";/.test(src));
+
+/* ---- 12. 全时模式不受影响 ---- */
+run('PPLAY.filter = "full"; PPLAY.segs = [{s:100, e:400, file:"a.mp4"},{s:400, e:700, file:"b.mp4"}]'
+  + '; PPLAY.segIdx = 0; PPLAY.t = 399;');
+nxt = get("(function(){var r=pvNextTarget(); return r && {t:r.t, cont:!!r.cont};})()");
+ck("全时·目标仍是下一分片起点", nxt && nxt.t === 400);
+ck("全时·不带 cont 标记", nxt && nxt.cont !== true);
+
+/* ---- 13. 接线：cont 必须在两个 act 分支之前被消费 ----
+   pvAdvance 的两个 act 分支都会给目标加 PV_ROLL 或设 ff，
+   cont 的目标是分片起点本身，排到后面就会被多垫 3 秒、跳过画面 */
+ck("pvAdvance·cont 分支存在", /if\(tgt\.cont\)\{\s*pvPlayAt\(tgt\.t, \{ quiet:true \}\); return; \}/.test(src));
+ck("pvAdvance·cont 分支排在活动快进分支之前",
+   src.indexOf("if(tgt.cont)") > 0
+   && src.indexOf("if(tgt.cont)") < src.indexOf('PPLAY.filter === "act" && PPLAY.silent !== "skip"'));
+
 console.log("\nplay_enter: " + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);

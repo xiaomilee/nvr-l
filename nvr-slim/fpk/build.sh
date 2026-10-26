@@ -45,6 +45,12 @@ if [ -n "$NODE" ]; then
   # 回放默认落点：今天=最后一段段首 / 历史=当天第一段 / 进页自动定位（0.9.72）
   echo "== 回放默认落点 =="
   "$NODE" "$ROOT/test/ui/play_enter.test.js" || exit 1
+  # 活动模式推进：分片边界不得判成「播完最后一个活动」（0.9.74，真机车库/客厅）
+  echo "== 活动模式推进 =="
+  "$NODE" "$ROOT/test/ui/act_advance.test.js" || exit 1
+  # 断录留洞：活动块按 avail 切段、整段落在断录里留虚线框（0.9.75）
+  echo "== 断录切段 =="
+  "$NODE" "$ROOT/test/ui/avail_gap.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

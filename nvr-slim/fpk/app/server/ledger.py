@@ -25,6 +25,17 @@ GAP_SEC = 5.0
 DAY_SEC = 86400.0
 AI_SRC_PREFIX = "ai:"
 
+# 画面可用区间的「缝」小于它就并成连续（0.9.75）。来源有两类，都不该画成断录：
+#   - mtime 只有秒级精度、ffmpeg 封口比下一片起点早 1~2 秒；
+#   - 摄像头 GOP 与分片长度不整除，实际片尾比名义值早一两秒。
+# 真断录（真机实测 95~130 秒）远大于它，不受影响。
+AVAIL_MERGE_SEC = 10.0
+
+# 分片的真实结束时刻（mtime）必须落在 (起点, 起点+3个实际片长] 内才采信。
+# 超出说明这个 mtime 不是「ffmpeg 写完封口」的时刻（被 rsync/解压/归档改过），
+# 退回「下一片起点」的旧口径 —— 宁可粗一点，也不许画出不存在的画面。
+AVAIL_MTIME_FAR = 3.0
+
 # ---------------------------------------------------------------- 读端三档时间尺度（0.9.69）
 # 台账里同时躺着两条管线的窗口：帧差（源名 = 分片名）与 AI（源名 = "ai:分片名"）。
 # 它们的「断续」长得完全不一样，用同一个 gap 合并必然一边错：
@@ -282,6 +293,20 @@ def day_sec_now(now=None):
     return t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec
 
 
+def clock_sec_of(ts, date):
+    """时间戳 → 指定那一天的「钟点秒」；不属于这一天返回 None（0.9.75）。
+
+    分片的 mtime 是「ffmpeg 写完这一片」的时刻，也就是这一片录到的最后一帧 ——
+    这是唯一不需要读文件内容就能拿到的真实时长来源（见 avail_spans）。
+    跨天分片（文件名 23-59-xx 但写完已是次日 00:00）一律不采信：它属于下一天的
+    钟点坐标，硬塞进当天的区间会画出一段位于 0 点的假画面。
+    """
+    t = time.localtime(ts)
+    if time.strftime("%Y-%m-%d", t) != date:
+        return None
+    return t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec
+
+
 def seg_typ_of(starts, seg, min_count=4):
     """这一路**实际**的分片长度（秒）：用相邻起点的间隔中位数推断。
 
@@ -310,40 +335,96 @@ def seg_typ_of(starts, seg, min_count=4):
     return float(med)
 
 
-def avail_spans(starts, seg, now_sec=None):
-    """分片起点 → 画面可用区间 [[s, e], ...]（0.9.72 从 ledger_payload 抽出，便于单测）。
+def avail_spans(starts, seg, now_sec=None, ends=None):
+    """分片起点 → 画面可用区间 [[s, e], ...]（0.9.72 抽出，0.9.75 支持真实结束时刻）。
 
-    规则：
+    坐标一律「当天钟点秒」。返回多个区间 = 中间是断录，前端把蓝块画成几截。
+
+    结束时刻的优先级：
+      1. **ends[起点]（分片 mtime）**——0.9.75 起的主口径。mtime 是 ffmpeg 写完
+         这一片的时刻，即这一片最后一帧；真实片长与名义值差很远（真机实测：
+         配 120 秒的车库，`03-42-00.mp4` 实际只有 84 秒），只有它能看出断录。
+         不采信的情况：缺失、不等于该日期（跨天片）、不在 (st, st+3×实际片长] 内
+         （被 rsync/解压改过 mtime）。
+      2. **下一片紧跟着来（间隔 ≤ 3 个实际片长）→ 结束 = 下一片起点**。旧口径，
+         现在只作 mtime 不可信时的兜底。它会把断录吞成连续 —— 真机 2026-10-26：
+         车库 50 分钟里断了 19.2 分钟，间隔 220~250 秒 < 3×120，全被画成有画面，
+         这正是「蓝块是满的、点进去播到一半就跳」的来源。
+      3. 末片没有下一片可参照 → 按实际片长兜底。
+
+    其余规则不变：
       - **实际片长从起点间隔推断**（见 seg_typ_of），不信任配置的名义值；
-      - 下一片紧跟着来（间隔 ≤ 3 个实际片长）→ 这一片录到的时刻就是下一片起点；
-        3 个周期是给「改过分片长度」留的容差（600→300 时老片实际 600 秒，
-        倍数正好 2），真断录（关机/故障，几十分钟起）才判成空洞；
-      - 间隔更远 = 中间断录，只画到 st+实际片长，不许把空洞涂成有画面；
-      - 末片没有下一片可参照，按实际片长兜底；
-      - **传了 now_sec（当天）就一律夹紧到现在**：分片长度是名义值，录制中途停、
-        或正在写的时候，按 st+seg 推算会把「还没录到」的时段画成有画面 ——
-        真机反馈就是「真实时间还没到，回放页已经显示录制了视频」，用户点进去
-        自然播不动（要么提示无录像、要么播 1 秒就收播）；
+      - 区间之间的缝 < AVAIL_MERGE_SEC 的合并成连续（mtime 秒级精度 / GOP 抖动）；
+      - **传了 now_sec（当天）就一律夹紧到现在**：录制中途停、或正在写的时候，
+        按 st+seg 推算会把「还没录到」的时段画成有画面 —— 真机反馈就是
+        「真实时间还没到，回放页已经显示录制了视频」，点进去播不动；
       - 起点本身已晚于现在（时间戳超前 = 时钟错乱）直接丢弃，不画一段假覆盖。
     """
     out = []
     ss = sorted(set(float(s) for s in starts))
     seg_t = seg_typ_of(ss, seg)
-    far = seg_t * 3.0
+    far = seg_t * AVAIL_MTIME_FAR
     for i, st in enumerate(ss):
-        if i + 1 < len(ss) and ss[i + 1] <= st + far:
-            en = ss[i + 1]                  # 下一片紧跟着来 → 这一片确实录到了这里
-        else:
-            en = min(DAY_SEC, st + seg_t)   # 末片 / 断录之后：按实际片长兜底
+        en = None
+        if ends:
+            real = ends.get(st)
+            if real is not None:
+                real = float(real)
+                if st < real <= st + far:       # 落在可信窗口才认，否则退回旧口径
+                    en = real
+        if en is None:
+            if i + 1 < len(ss) and ss[i + 1] <= st + far:
+                en = ss[i + 1]                  # 下一片紧跟着来 → 这一片确实录到了这里
+            else:
+                en = min(DAY_SEC, st + seg_t)   # 末片 / 断录之后：按实际片长兜底
         if now_sec is not None:
-            en = min(en, float(now_sec))    # 名义长度 ≠ 已录长度，一律夹紧到现在
+            en = min(en, float(now_sec))        # 名义长度 ≠ 已录长度，一律夹紧到现在
         if en <= st:
             continue
         if out and st <= out[-1][1]:
             out[-1][1] = max(out[-1][1], en)
         else:
             out.append([st, en])
+    return _merge_small_gaps(out)
+
+
+def _merge_small_gaps(spans, gap=None):
+    """把相邻区间之间的小缝并掉（< AVAIL_MERGE_SEC）。
+
+    为什么要并：mtime 是秒级/写缓冲级别的时间戳，正常连续录制时上片的「结束」
+    常常比下片的「起点」早 1~3 秒。不并的话，一整天的蓝块会变成几百截带毛刺的
+    虚线，真断录反而淹没在噪声里。
+    """
+    lim = AVAIL_MERGE_SEC if gap is None else gap
+    out = []
+    for s, e in spans:
+        if out and s - out[-1][1] < lim:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
     return out
+
+
+def split_by_spans(s, e, spans):
+    """把 [s, e] 按可用区间切成若干段，返回 [[s, e], ...]（0.9.75）。
+
+    活动块要跟蓝块共用同一份「哪里有画面」的事实：断录期间有活动（人还在院子里）
+    但没有录像，活动块也该断开。否则「有活动 = 有画面」这个暗示继续骗人。
+    完全落在断录里的活动返回空列表 —— 调用方据此决定画不画。
+    """
+    out = []
+    for a, b in spans:
+        lo = max(s, a)
+        hi = min(e, b)
+        if hi - lo > 0.01:
+            if out and lo <= out[-1][1] + 0.01:
+                out[-1][1] = max(out[-1][1], hi)
+            else:
+                out.append([lo, hi])
+    return out
+
+
+
 
 
 def remove_cam(root, dname):

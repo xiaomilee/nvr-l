@@ -11,6 +11,7 @@ import os
 import re
 import select
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -27,6 +28,8 @@ import recorder  # noqa: E402
 import condense  # noqa: E402
 import link as link_mod  # noqa: E402
 import snapshots  # noqa: E402
+import ingest  # noqa: E402
+import frames  # noqa: E402
 import sysinfo  # noqa: E402
 import ffmpeg_cmd  # noqa: E402
 import pixdiff  # noqa: E402
@@ -459,6 +462,11 @@ def norm_cameras(raw):
             "url": str(c.get("url") or c.get("main") or "").strip(),
             "sub_url": str(c.get("sub_url") or c.get("sub") or "").strip(),
             "enabled": bool(c.get("enabled", True)),
+            # RTSP 传输方式（0.9.84）：tcp 默认，udp 用于排查「媒体通道整条冻住」。
+            # 未给或给错一律回落 tcp —— 录制路径上不容许出现第三个值。
+            "transport": (str(c.get("transport") or "tcp").strip().lower()
+                          if str(c.get("transport") or "tcp").strip().lower()
+                          in ("tcp", "udp") else "tcp"),
         })
         if c.get("url_clear"):
             # 显式清空标记：本地有明文的浏览器把输入框清空保存，才是真想清掉；
@@ -600,6 +608,53 @@ def cam_storage_dirs(c):
 
 def snapshot_path(cam_id):
     return os.path.join(STATE["var_dir"], "snapshots", cam_id + ".jpg")
+
+
+# AI 最快多久消费一张取帧图（秒）。取帧间隔由「快照刷新」决定（1~10 秒可调），
+# 这里给它一个下限，保证调节快照不会把推理频率一起顶上去。
+AI_MIN_GAP = 5.0
+
+
+def _frame_path_for_detect(cam_id):
+    """AI 该读哪张图。返回值有三种语义，调用方必须分开处理：
+
+    - 路径    ：这张图是新的，去推理；
+    - ``""``  ：取帧层健康，只是这张图**上一轮已经推理过**了 → 本轮静默跳过；
+    - ``None``：取帧层没起 / 已经判死 → 记一条真实错误（诊断页要看得见）。
+
+    为什么必须有中间那一档：检测是 5 秒一轮的固定节拍，而取帧间隔来自
+    snapshot_interval（默认 10 秒）。只判「图片年龄」的话，同一帧会被推理
+    两次，台账里同一条事件记两遍、通知也会多推一次。以前快照和检测各自
+    拉流、各自 5 秒出图，恰好没暴露这个问题；统一取流之后两张图变成
+    一张图，这个重复就浮出来了。
+    """
+    mgr = STATE.get("frames")
+    if mgr is None:
+        return None
+    tap = mgr.items.get(cam_id)
+    if tap is None:
+        return None
+    age = tap.path_age()
+    # 取帧层自己已经判死（进程反复起不来 / 长时间不出图）→ 交给检测侧报错。
+    # 这里用 60 秒而不是 20 秒：判活由 seq 负责，时间闸只用来判死，
+    # 留宽一点，免得摄像头 GOP 长、出图本来就慢时被误报成故障。
+    if tap.ok is False or age is None or age > max(60, tap.interval * 6):
+        return None
+    seq = getattr(tap, "seq", 0)
+    seen = STATE.setdefault("frame_seen", {})
+    now = time.time()
+    last = seen.get(cam_id)
+    if seq and last is not None:
+        last_seq, last_at = last if isinstance(last, tuple) else (last, 0.0)
+        if last_seq == seq:
+            return ""        # 健康，只是没有新图
+        if now - last_at < AI_MIN_GAP:
+            # 图是新的，但 AI 自己的节拍还没到。必须挡住：取帧间隔来自
+            # 设置页的「快照刷新」，可以调到 1 秒 —— 五路就是每秒五次推理，
+            # NAS 会直接被 5 路 AI 打满。快照调快是给人看的，不该连带改算力。
+            return ""
+    seen[cam_id] = (seq or 0, now)
+    return tap.out_path
 
 
 def live_payload():
@@ -856,7 +911,12 @@ def camera_cfg():
 
 
 def _scan_day_dirs(base):
-    """扫一个「摄像头/日期/」目录树：{day: [{n,b}]}，只认 YYYY-MM-DD 目录下的 mp4。"""
+    """扫一个「摄像头/日期/」目录树：{day: [{n,b,m,p}]}，只认 YYYY-MM-DD 目录下的 mp4。
+
+    m = mtime（epoch 秒）。0.9.75 起它是分片真实结束时刻的来源：ffmpeg 的 segment
+    muxer 只在切到下一片时才关闭上一片，所以 mtime 就是这一片最后一帧写下去的时刻。
+    真机实测同一个文件「配置 120 秒 / 实际 84 秒」，靠文件名间隔推算永远看不出来。
+    """
     days = {}
     if not os.path.isdir(base):
         return days
@@ -875,8 +935,9 @@ def _scan_day_dirs(base):
                 if not n.lower().endswith(".mp4"):
                     continue
                 p = os.path.join(full, n)
-                if os.path.isfile(p):
-                    files.append({"n": n, "b": os.path.getsize(p), "p": p})
+                st = os.stat(p)                 # 一次 stat 取 size + mtime，别各取一次
+                if stat.S_ISREG(st.st_mode):
+                    files.append({"n": n, "b": st.st_size, "m": st.st_mtime, "p": p})
         except OSError:
             continue
         if files:
@@ -1010,24 +1071,34 @@ def ledger_payload(cam_id, date):
     # AI 窗口按 cls 命中 trigger.person/vehicle；未勾选类别时段按静止画面剔除。
     # AI 关闭时 trigger 默认全 true、且没有 AI 窗口 → 行为与旧版完全一致。
     ev = [e for e in ev if detect.trigger_ok(e.get("cls") or None, trig)]
-    # 画面可用性（全时）：分片按文件名起点排，覆盖到下一片起点，末片按分片长度兜底
-    # 分片长度是**每路**可覆盖的（院子 R 60 秒、车库 120 秒、其余跟随全局），
-    # 先用这一路真正在用的值当初始参考，再让 avail_spans 按起点间隔自己校准
-    # （摄像头 GOP 不整除时实际片长会略超配置，实测车库配 120、真实 132）。
+    # 画面可用性（全时）：分片的真实结束时刻优先取 mtime（0.9.75），
+    # 拿不到才退回「覆盖到下一片起点」。为什么必须读 mtime：
+    #   分片长度是**每路**可覆盖的（院子 R 60 秒、车库 120 秒、其余跟随全局），
+    #   而且摄像头 GOP 不整除、卡住重连都会让实际片长远短于名义值 ——
+    #   真机实测车库配 120 秒、`03-42-00.mp4` 实际只有 84 秒，之后断到 03-45-01。
+    #   只按文件名间隔推，这 97 秒空洞会被涂成有画面（当天 5 路断录合计 43 分钟，
+    #   时间轴上一条满的蓝块），用户点进去播到片尾就跳、还以为录像坏了。
     seg_cfg = runtime.segment_sec(cfg.get("record_segment_sec"))
     rec = STATE.get("recorder")
     seg = rec.seg_of(cam) if rec is not None else seg_cfg
     starts = []
+    ends = {}                               # 起点 -> 该片真实结束的钟点秒
     for dn in dirs:
         for f in _scan_day_dirs(os.path.join(root, dn)).get(date, []):
             st = ledger.src_start(f["n"])
-            if st is not None:
-                starts.append(st)
+            if st is None:
+                continue
+            starts.append(st)
+            m = f.get("m")
+            if m:
+                cs = ledger.clock_sec_of(m, date)
+                if cs is not None:
+                    ends[st] = cs
     # 今天要夹紧到「现在」（0.9.72）：分片长度是名义值，录制中途停了还按 st+seg
     # 往后画，就会出现「真实时间还没到、时间轴已经显示录了这一段」——用户点进去
     # 播不动，只能以为录像坏了。历史日期没有"现在"的概念，不夹紧。
     now_sec = ledger.day_sec_now() if date == time.strftime("%Y-%m-%d") else None
-    full = ledger.avail_spans(starts, seg, now_sec)
+    full = ledger.avail_spans(starts, seg, now_sec, ends)
     seg = ledger.seg_typ_of(starts, seg)   # 回给前端的是校准后的实际片长
     cfg = runtime.load_config(STATE["var_dir"])
     cm = _cam_condense_mode(cam)
@@ -1503,7 +1574,11 @@ def _make_detect_worker(cfg):
         engine, ff, STATE["var_dir"], record_dir, cameras,
         cfg_fn=_detect_cfg_snapshot,
         interval=5, timeout=10, log=_log_line,
-        notifier=(nt.offer if nt else None))
+        notifier=(nt.offer if nt else None),
+        # 统一取流后 AI 读的是取帧层那一张 jpg（0.9.80），不再自己拉 RTSP。
+        # 取帧没起（老流程 / 降级）时返回 None，worker 会退回直连抽帧。
+        frame_path_fn=(_frame_path_for_detect
+                       if STATE.get("frames") is not None else None))
 
 
 def _sync_detect_worker(cfg=None):
@@ -1540,6 +1615,55 @@ def detect_status():
     st["running"] = True
     st["runtime"] = rt
     return st
+
+
+def ingest_status():
+    """给 /api/status：每路取流进程的端口、消费者数、空闲时长、重连次数。
+
+    注意不能写成海象表达式 —— fnOS 上的 python3 版本不保证 ≥3.8，
+    一行新语法就让整个 /api/status 500（0.9.65 有过同类事故）。
+    """
+    ing = STATE.get("ingest")
+    if ing is None:
+        return {"enabled": False, "cams": {}}
+    try:
+        return {"enabled": bool(ing.enabled), "cams": ing.status()}
+    except Exception as e:
+        return {"enabled": bool(ing.enabled), "cams": {}, "error": repr(e)}
+
+
+def _upstream_idle_for(cam_id):
+    """上游（取流层）多少秒没字节；None = 不知道（没起取流 / 走直连）。
+
+    给取帧层用。断流时取帧层当然也不出图，但那是上游的事，不是「摄像头 GOP
+    太长」—— 分不清就会在断流期间摘掉 skip_frame 全帧解码，白烧 20 倍 CPU。
+    """
+    ing = STATE.get("ingest")
+    if ing is None:
+        return None
+    try:
+        it = (ing.items or {}).get(cam_id)
+    except Exception:
+        return None
+    if it is None:
+        return None
+    try:
+        if not it.last_byte:
+            return time.time() - (it.started_at or time.time())
+        return time.time() - it.last_byte
+    except Exception:
+        return None
+
+
+def frames_status():
+    """给 /api/status：每路取帧的出帧数、间隔、图片年龄。老流程返回 None。"""
+    fr = STATE.get("frames")
+    if fr is None:
+        return None
+    try:
+        return fr.detail()
+    except Exception as e:
+        return {"error": repr(e)}
 
 
 def status_payload():
@@ -1588,6 +1712,10 @@ def status_payload():
         "slots": pool.status(),
         "queue": queue,
         "link": ls if lo is not None else None,
+        # 统一取流（0.9.80）：每路一条 RTSP 连接 + 本机端口 + 消费者数。
+        # keep_alive / 卡住时间都在这里，诊断页不用再去翻日志。
+        "ingest": ingest_status(),
+        "frames": frames_status(),
         "detect": detect_status(),
         "notify": (STATE["notifier"].status() if STATE.get("notifier")
                    else {"recent": [], "pending": 0}),
@@ -2577,10 +2705,39 @@ def main():
     ntf.start()
     STATE["notifier"] = ntf
     lk.notifier = ntf.offer
-    snap = snapshots.SnapshotWorker(
-        ff, a.var, cameras,
-        interval_fn=lambda: (runtime.load_config(a.var).get("snapshot_interval") or 10),
-        interval=cfg.get("snapshot_interval", 10), timeout=8, log=_log_line)
+    # ---- 0.9.80 统一取流：摄像头每路只看到一条连接 ----
+    # 顺序是硬要求：先起取流拿到本机端口，录制与取帧才有 URL 可接。
+    # 取流起不来（没 ffmpeg / 端口开不出）时 url_fn 返回 None，录制自动退回
+    # 直连摄像头 —— 新模块出问题绝不能让「一条录像都没有」。
+    ing = ingest.IngestManager(ff, cameras, opts_fn=rec.eff_opts, log=_log_line,
+                               enabled=bool(cfg.get("ingest_enable", True)))
+    STATE["ingest"] = ing
+    ing.start()
+    rec.url_fn = ing.url_for
+    # 录制看门狗要能给上游让路：取流现在给不出数据时，磁盘上本来就没有新字节，
+    # 此时重启录制只会把空窗重走一遍（0.9.82）。
+    rec.pause_fn = ing.starved_of
+
+    if ing.enabled and ing.items:
+        # 取帧层：每路一个常驻 ffmpeg 读本机端口，按间隔解出一张 jpg，
+        # 预览 / 移动侦测 / AI 三处共用（各自不再对摄像头建连）。
+        snap = frames.FrameTapManager(
+            ff, a.var, cameras, snapshot_path,
+            interval_fn=lambda: (runtime.load_config(a.var).get("snapshot_interval") or 5),
+            log=_log_line,
+            upstream_idle_fn=_upstream_idle_for)
+        snap.url_for = ing.url_for
+        STATE["frames"] = snap
+        _log_line("统一取流已启用：%d 路各一条 RTSP 连接，预览/移动侦测/AI 共用"
+                  % len(ing.items))
+    else:
+        # 老流程兜底（配置关掉 / 取流没起来）：每 N 秒新起 ffmpeg 直连抓帧。
+        # 连接数是它的代价，功能上不能少 —— 升级后预览必须照常出图。
+        snap = snapshots.SnapshotWorker(
+            ff, a.var, cameras,
+            interval_fn=lambda: (runtime.load_config(a.var).get("snapshot_interval") or 10),
+            interval=cfg.get("snapshot_interval", 10), timeout=8, log=_log_line)
+        STATE["frames"] = None
     STATE["snapshots"] = snap
     snap.start()
 
@@ -2603,7 +2760,14 @@ def main():
             try:
                 cams = cameras()            # 设置页改了列表/地址，不用重启就生效
                 rec.set_cameras(cams)
+                ing.reconcile(cams)         # 取流跟着列表走：新增起、删掉停、改址重建
+                fr = STATE.get("frames")
+                if fr is not None:
+                    fr.reconcile(cams)
                 rec.reconcile(cams)         # 删掉的通道收尸、地址/遮蔽区变了的重启
+                ing.tick()
+                if fr is not None:
+                    fr.tick()
                 lk.set_cameras(cams)
                 rec.tick()
                 lk.tick()
@@ -2617,6 +2781,15 @@ def main():
         httpd.serve_forever(poll_interval=0.3)
     finally:
         stop_event.set()
+        # 取流在最上游：先停它，录制/取帧会因为读到 EOF 自己退出；
+        # 不显式停就会留下孤儿 ffmpeg —— 子进程是 start_new_session 起的，
+        # 不会跟着本进程一起死，下次开机它们还会占着摄像头的连接名额。
+        try:
+            _ing = STATE.get("ingest")
+            if _ing is not None:
+                _ing.stop()
+        except Exception:
+            pass
         try:
             STATE.get("snapshots").stop()
         except Exception:

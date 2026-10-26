@@ -79,13 +79,19 @@ ck("横线 3 根（前两个挤成一组，其余单根）",
    marks.map(m => m.className));
 
 const spanCls = k => spans.filter(s => (s._html || "").includes("c-" + k)).length;
-ck("时段块三格：人×2 → 蓝格（10:02 人2、11:01 人1车1 各一格）",
+/* 0.9.77：时段块回到三格窄道（位置即类别），容器仍与蓝块同列同宽。
+   0.9.76 曾用单一主色铺满整宽，整段只有一类时会把蓝块整个盖掉。 */
+ck("时段块三格：人×2 → 蓝（10:02 人2、11:01 人1车1 各一格）",
    spanCls("person") === 2, spanCls("person"));
 ck("时段块三格：车3+两轮1 → 绿格（两轮已并入车辆）", spanCls("veh") === 2, spanCls("veh"));
 ck("时段块三格：纯帧差事件 → 橙格", spanCls("motion") === 1, spanCls("motion"));
 ck("时段块没有青色（两轮车并入车辆，c-two 已删除）",
    spanCls("two") === 0, spanCls("two"));
-/* 0.9.69：时段块收进 1/3 格，高度 = 持续时长（4px 地板）
+ck("每个时段块最多三格（按类别落在 左0/中20/右40，不再单色铺满整宽）",
+   spans.every(s => ((s._html || "").match(/<i class=/g) || []).length <= 3)
+   && spans.every(s => !/<i class="c-\w+" style="height/.test(s._html || "")),
+   spans.map(s => s._html));
+/* 0.9.69：时段块高度 = 持续时长（4px 地板）
    10:02:15→10:02:27 = 12 秒 @120px/h = 0.4px → 地板 4px
    10:07:19→10:11:56 = 277 秒 @120px/h = 9.2px */
 const hOf = el => {
@@ -96,10 +102,14 @@ ck("短事件尾巴吃 4px 地板（12 秒在默认缩放下只有 0.4px）",
    hOf(spans[0]) === 4, hOf(spans[0]));
 ck("长事件尾巴高度 = 真实时长（277 秒 → 9.2px）",
    hOf(spans[1]) === 9.2, hOf(spans[1]));
-ck("混类事件的三格尾巴各自独立（人1车1 各画一根，位置左中右不重叠）",
+ck("混类事件（人1车1）中/右各一格，互不重叠",
    (spans[3]._html.match(/style="height:/g) || []).length === 2
    && spans[3]._html.includes('class="c-person per"')
    && spans[3]._html.includes('class="c-veh veh"'), spans[3]._html);
+ck("容器与蓝块严格同列同宽（对齐靠 left/width，不靠颜色铺满）",
+   src.includes(".vtl .vevspan{position:absolute;left:46px;width:60px")
+   && src.includes(".vtl .vavail{position:absolute;left:46px;width:60px")
+   && src.includes(".vtl .vevspan i{position:absolute;top:0;width:19px"));
 
 const laneInfo = marks.map(m => {
   const b = barsOf(m);
@@ -128,15 +138,16 @@ ck("三格横向排布 0/20/40 各 19px（三等分且互不重叠）",
    && slots.mot[0] === 0 && slots.per[0] === 20 && slots.veh[0] === 40
    && [slots.mot, slots.per, slots.veh].every(s => s[1] === 19)
    && [slots.mot, slots.per, slots.veh].every(s => s[0] + s[1] <= 60), slots);
-/* 0.9.69：时段块也用同一套三格位置（以前是整块 60px 一条色） */
-ck("时段块三格 left 0/20/40 各 19px，与横线同位置",
-   src.includes(".vtl .vevspan i.mot{left:0}")
-   && src.includes(".vtl .vevspan i.per{left:20px}")
-   && src.includes(".vtl .vevspan i.veh{left:40px}")
-   && src.includes(".vtl .vevspan i{position:absolute;top:0;width:19px"));
+/* 0.9.77：对齐与配色分开管 —— 容器（left/width）保证与蓝块同列同宽，
+   格内颜色只占 19px 车道。0.9.76 把颜色也拉满整宽，整段单一类别时盖掉蓝块。 */
 ck("横线中心对齐事件时刻（top:7.5px；0.9.67 的 5px 差 2.5px = 默认缩放下 1 分 15 秒）",
    src.includes(".vtl .vmark .lanes i{position:absolute;top:7.5px;"));
-ck("时段块不再按主导类别上色（evDom 已退役）", !src.includes("function evDom"));
+ck("时段块用三格窄道，不再是单色铺满（evDom 已退役）",
+   !src.includes("function evDom")
+   && src.includes("el.innerHTML = vtlLanes(evKind(ev), h);")
+   && src.includes(".vtl .vevspan i.mot{left:0}")
+   && src.includes(".vtl .vevspan i.per{left:20px}")
+   && src.includes(".vtl .vevspan i.veh{left:40px}"));
 ck("可用性蓝轨退成 30% 背景（满饱和蓝 = 人员蓝，蓝尾巴压在蓝底上等于没画）",
    src.includes("background:var(--primary);opacity:.3}") && src.includes(".vtl .vavail.arch{opacity:.14}"));
 
@@ -201,10 +212,14 @@ ck("evKind 两轮车计数算进 vehicle",
 ck("evKind 全 0 的 cls 回落移动侦测（不渲染没颜色的线）",
    JSON.parse(run("JSON.stringify(evKind({ cls:{ person:0, vehicle:0 } }))")).motion === true);
 /* 0.9.69：移动侦测参与人/车检测，作为边界佐证 */
-ck("evKind：mv=1 的 AI 事件橙格也亮（帧差确认了这次进出）",
-   JSON.parse(run("JSON.stringify(evKind({ cls:{person:1}, mv:1 }))")).motion === true
-   && JSON.parse(run("JSON.stringify(evKind({ cls:{person:1}, mv:0 }))")).motion === false
-   && JSON.parse(run("JSON.stringify(evKind({ cls:{person:1}, mv:-1 }))")).motion === false);
+ck("evKind：mv 不参与类别判定（有 AI 类别时橙格不亮，与 pvClsMatch 同一口径）",
+   JSON.parse(run("JSON.stringify(evKind({ cls:{person:1}, mv:1 }))")).motion === false
+   && JSON.parse(run("JSON.stringify(evKind({ cls:{vehicle:1}, mv:1 }))")).motion === false
+   && JSON.parse(run("JSON.stringify(evKind({ cls:{}, mv:1 }))")).motion === true
+   && JSON.parse(run("JSON.stringify(evKind({ cls:{}, mv:0 }))")).motion === true);
+ck("evKind 与 pvClsMatch 对「移动侦测」完全同口径（同一个事件两边判定必须一致）",
+   JSON.parse(run("JSON.stringify([{cls:{person:1,vehicle:1},mv:1},{cls:{vehicle:2},mv:1},{cls:{},mv:1}].map(e=>[evKind(e).motion, !!(e.cls.person||e.cls.vehicle)]))"))
+     .every(([m, hasAi]) => m === !hasAi));
 ck("mvText：佐证 / 无变化 / 无从判断三种措辞，最后一种不显示",
    run("mvText({ mv:1 })").includes("移动侦测确认")
    && run("mvText({ mv:0 })").includes("画面没有变化")

@@ -46,9 +46,15 @@ class TestRecordCmd(unittest.TestCase):
                             "%s 必须出现在 -i 之前才会生效" % name)
 
     def test_probe_patience_values(self):
-        """10 秒 / 10MB：家用摄像头吐第一个关键帧通常 1~3 秒，留足余量。"""
+        """5 秒 / 10MB：家用摄像头吐第一个关键帧通常 1~3 秒，留足余量。
+
+        0.9.84 把 analyzeduration 从 10 秒收到 5 秒：探测期一个字节都不产出，
+        静默频繁的机位每轮重连都白扔这 10 秒（95 秒周期里占 8%）。5 秒仍是
+        吐帧实测 1~3 秒的近两倍余量；probesize 不动 —— 它只在码率异常时才
+        触发提前结束。
+        """
         d = dict(recorder.INPUT_OPTS)
-        self.assertEqual(int(d["-analyzeduration"]), 10 * 1000 * 1000)
+        self.assertEqual(int(d["-analyzeduration"]), 5 * 1000 * 1000)
         self.assertEqual(int(d["-probesize"]), 10 * 1000 * 1000)
 
     def test_copy_never_reencodes(self):

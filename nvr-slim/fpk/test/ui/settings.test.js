@@ -1051,7 +1051,14 @@ run(`(function(){
   pvAdvance();
 })();`);
 ck("活动模式·分片边界跳播不落回上一片（23:29:59 死循环）",
-   run("JSON.stringify(globalThis.__calls)") === "[84600.2]");
+   /* 0.9.74 起，落点在活动内/活动前 3 秒时走「跨片连播」（cont），
+      目标就是下一分片的段首 84600 —— 比旧的 pvActTarget 落点 84600.2 更准
+      （段首对齐关键帧），同样满足「不许后退、不许落回上一片」 */
+   run("JSON.stringify(globalThis.__calls)") === "[84600]");
+ck("活动模式·跨片连播仍不后退（落点 > 当前播放时刻）", (()=>{
+  const calls = JSON.parse(run("JSON.stringify(globalThis.__calls)"));
+  return calls.length === 1 && calls[0] > 84599.99;
+})());
 ck("活动模式·跳播落点只前进不后退",
    src.includes("if(floorT != null && t < floorT) t = floorT;")
    && src.includes("if(hit && t < hit.seg.s) t = hit.seg.s;")
@@ -1216,23 +1223,23 @@ ck("回放·三类别色片齐全（橙=移动侦测 蓝=人 绿=车）",
    && !src.includes(".c-two{") && !src.includes(".t-two{"));
 ck("回放·车辆色不再是紫（紫与蓝在 3px 细线上分不出来）",
    !src.includes("var(--violet)") && !src.includes("--violet:"));
-ck("回放·时段块收进三格，高度 = 持续时长（0.9.69 取代主导类别整条上色）",
+ck("回放·时段块三格窄道 + 容器与蓝块同列同宽（0.9.77 撤掉单色铺满；0.9.75 起按可用区间切段）",
    src.includes('el.className = "vevspan"')
-   && src.includes("el.innerHTML = vtlLanes(evKind(ev), h, true);")
-   && src.includes("const h = Math.max(4, vtlY(ev.e) - vtlY(ev.s));")
+   && src.includes("el.innerHTML = vtlLanes(evKind(ev), h);")
+   && src.includes("const h = Math.max(4, vtlY(pt[1]) - vtlY(pt[0]));")
    && !src.includes("function evDom")
-   && src.includes(".vtl .vevspan i.mot{left:0}")
-   && src.includes(".vtl .vevspan i.per{left:20px}")
-   && src.includes(".vtl .vevspan i.veh{left:40px}"));
+   && src.includes(".vtl .vevspan{position:absolute;left:46px;width:60px")
+   && src.includes(".vtl .vevspan i.mot{left:0}"));
 ck("回放·横线中心对齐事件时刻（top:7.5px 修正 2.5px / 75 秒偏移）",
    src.includes(".vtl .vmark .lanes i{position:absolute;top:7.5px;"));
-ck("回放·移动侦测作为辅助判断条件：mv 参与类别判定 + 气泡说明",
-   src.includes("motion:(ev.mv === 1),")
+ck("回放·移动侦测不参与类别判定（0.9.77 起 mv 只用于气泡措辞，三格互不重叠）",
+   !src.includes("motion:(ev.mv === 1),")
+   && src.includes("if(!k.person && !k.vehicle) k.motion = true;")
    && src.includes("function mvText(ev)")
    && src.includes("mvText(ev0)")
    && src.includes("起止由移动侦测确认"));
-ck("回放·横线改三车道：左 1/3 移动侦测 · 中 1/3 人员 · 右 1/3 车辆",
-   src.includes("function vtlLanes(kind, h, styleOnly)")
+ck("回放·三格车道：左 1/3 移动侦测 · 中 1/3 人员 · 右 1/3 车辆（横线与时段块共用）",
+   src.includes("function vtlLanes(kind, h)")
    && src.includes(`if(kind.motion)  out += '<i class="c-motion mot"' + st + "></i>";`)
    && src.includes(`if(kind.person)  out += '<i class="c-person per"' + st + "></i>";`)
    && src.includes(`if(kind.vehicle) out += '<i class="c-veh veh"' + st + "></i>";`)

@@ -21,12 +21,17 @@
 断流处理：RTSP 会在摄像头重启、网络抖动、交换机重启时断。
 进程退出就按 5→10→20→30 秒退避重启，不无限快速重试把日志写爆。
 跨天时主动重启一次，让输出目录跟着日期走。
+0.9.85 起另有静默期直连兜底：上游取流停顿且磁盘断流超 8 秒时，录制
+临时直连相机开新会话（哨兵实验 18/18 证明新会话不受老会话停流影响），
+上游恢复后切回 —— 见 FB_ENTER_SEC 注释与 _fb_tick。
 """
 import datetime
 import os
 import signal
 import subprocess
+import threading
 import time
+from collections import deque
 
 import ffmpeg_cmd  # noqa: E402,F401  （保留：脚本内自检与外部调用方依赖该导出）
 import runtime  # noqa: E402
@@ -44,6 +49,44 @@ STALL_SEC = 75          # 最新分片超过这么久没更新，就判定这一
 # 真机 2026-10-26：四路每 75–90 秒卡一次，退避被封到 300 秒后，车库一天
 # 出现 254 秒、422 秒的空洞。卡住就该尽快重连：5→10→20→30 封顶。
 STALL_BACKOFF = 30
+
+# ---- 0.9.85：静默期直连兜底 ---------------------------------------------
+# 真机 2026-10-26 哨兵实验（18/18）：上游取流停顿的窗口里，从另一台机器
+# 对同一台相机新开 RTSP 会话 90 秒全程零静默 —— 停流是「会话级」的：
+# 那条老会话冻住了，相机给新会话照样流畅。而录制平时读本机分发端口，
+# 上游一停录制就没数据。所以：上游停顿且磁盘断流超过几秒时，录制进程
+# 临时直连相机（新会话），上游恢复后切回。空口成本只在故障时段付出。
+#
+# 两种已知故障只有一种救得了：
+#   · 会话级（多数）：新会话干净 → 兜底收益全额；
+#   · 相机级（少数，如院子 R 15:17-15:21 连续 5 次握手失败）：新会话也
+#     拿不到流 → 兜底白切，但不会更糟（切换成本 ~5 秒，有冷却防打摆）。
+# 0.9.87：切入门槛 8 秒 → 25 秒。真机 0.9.86 首查（17:27–18:35）实测：录制端
+# 8 秒就抢跑，比上游自己的 15 秒耐心 + 重连还快，于是每一次「分发层自己能
+# 自愈的瞬断」都被放大成一次来回切换 —— 实测每周期留 23~32 秒内容空洞
+# （18:06:45→18:07:08 的 18-05-00.mp4 被掐断是最直观的一例）。等上游先自愈，
+# 只有真死（相机不发数据、上游重连过也拿不到）才值得付出切换成本。
+FB_ENTER_SEC = 25        # 上游给不出数据且磁盘断流这么久，才切直连
+FB_EXIT_DWELL = 20       # 上游恢复后，直连至少跑这么久再切回（防 starved 抖动）
+FB_COOLDOWN = 90         # 切回后这么久内不再切入（防相机级故障时来回打摆）
+# 0.9.87：多路同时停顿 = NAS 侧事件，不是单台相机的问题。
+# 真机 18:06:50 四路「取流停顿（4 秒没有数据）」在同一秒发生，18:06:54 四路
+# 录制一起判停顿、一起切直连 —— 等于在 CPU/IO 最紧张的时刻再开四个 ffmpeg，
+# 把 4 秒抖动放大成 23~26 秒的洞（18:24:29 三路同形，车库还连环了 3 个洞）。
+# 规则：这么多秒内 ≥2 路从正常转 starved，就判定为全局事件，此后一段时间
+# 任何一路都不切入；单路真死（相机掉线）不受影响，照常兜底。
+FB_GLOBAL_WINDOW = 8     # 归入「同一次事件」的时间窗
+FB_GLOBAL_QUIET = 40     # 全局事件后这么久内不切直连（够上游重启+重连）
+# 兜底切换的收尾升级节奏。真机 0.9.85 首跑（16:51–17:16）实测：切换走
+# reconcile 的同步 _kill，星量进程卡在无 read 超时的 RTSP read 上，SIGINT
+# 处理不到 → 每次吃满 15+10 秒，两路同时切换就串行 ~47 秒（17:03:08 切入
+# → 17:03:55 才"已启动"），把兜底的收益吃了大半。热修两点：①切换改走
+# 非阻塞收尾状态机；②兜底切换用 3/4 秒快速升级 —— 进程要么星量（没数据
+# 可丢），要么在写 fMP4（frags 自包含，SIGKILL 只丢最后几个 frag，
+# finalize_parts 的 mtime 静置闸会封口）。纯 MP4 模式（frag=False）不吃
+# 快速升级：它的分片没 moov 就整段丢，仍按 15/10 秒优雅收尾。
+FB_CLOSE_SOFT = 3
+FB_CLOSE_HARD = 4
 
 
 def backoff_wait(tries, reconnect=5):
@@ -69,6 +112,15 @@ def stall_wait(tries, reconnect=5):
 KILL_SOFT_SEC = 15
 KILL_HARD_SEC = 10
 
+# 收尾必须**非阻塞**推进（0.9.78）。真机 2026-10-26 05:08 现场：
+# 4 路几乎同时被判"卡住"，而 _grace_close 是在 tick 的主循环里同步等的 ——
+# 每路最多 15+10 秒，四路串起来 47 秒后才全部起来（05:08:25 判卡 → 05:09:12
+# 才"已启动"，日志里写的是"5 秒后重连"）。这 47 秒是纯丢的录像，而且越卡
+# 越久：一路的收尾会挡住其它路的重启。
+# 现在 tick 只发 SIGINT，等待拆到后续每 2 秒的巡检里推进（状态在 procs[cid]
+# 的 closing/close_at/close_round 上）。单路典型 1 秒内退出 → 2~4 秒就重连。
+CLOSE_POLL_SEC = 2
+
 # 残片抢救：静置这么久才动手（正在写的那一个绝不能碰），每轮最多处理几个。
 # 抢救本身是 -c copy 重封装，不重编码，几十倍实时，但仍是顺序读盘，所以设上限。
 PART_GRACE_SEC = 600
@@ -92,7 +144,13 @@ INPUT_OPTS = (
     #   "Output file does not contain any stream / Error opening output files"
     # 退出（真机 0.9.14 五路全中，全都是启动后 2 秒死）。10 秒足够绝大多数
     # 家用摄像头吐第一个关键帧。
-    ("-analyzeduration", "10000000"),
+    #
+    # 0.9.84 从 10 秒收到 5 秒。代价与收益：这一段是**纯粹的等待**，探测期
+    # 一个字节都不落盘；而 0.9.83 的实测里这台机器约 95 秒一轮重连，
+    # 也就是每轮固定白扔 10 秒（10%）。5 秒 = 文档里 1~3 秒的 2.5 倍余量，
+    # 仍在安全带内。万一某台相机真的要更久，症状是「启动后 2 秒死」
+    # （日志里有 "does not contain any stream"），那就退回 10 秒即可。
+    ("-analyzeduration", "5000000"),
     ("-probesize", "10000000"),
 )
 
@@ -342,6 +400,17 @@ def finished(root, cam_id, seg_sec=300, now=None):
 
 # ---------------------------------------------------------------- 命令
 
+def cam_transport(cam):
+    """这一路的 RTSP 传输方式。只有取流层直连摄像头时才有意义（0.9.84）。
+
+    默认 tcp：UDP 丢包会花屏，监控盘上留不下证据。但 0.9.83 的实测证明
+    这四路的问题不是丢包而是「媒体通道整条冻住」，UDP 没有流控、不会因为
+    发送缓冲堵住就让整条流死掉，所以留给用户按路切换来 A/B。
+    """
+    tp = str((cam or {}).get("transport") or "tcp").strip().lower()
+    return tp if tp in ("tcp", "udp") else "tcp"
+
+
 def record_cmd(ffmpeg, url, pattern, seg_sec=300, transport="tcp", opts=(),
                frag=True):
     """拉流 → 分片落盘。
@@ -376,8 +445,12 @@ def record_cmd(ffmpeg, url, pattern, seg_sec=300, transport="tcp", opts=(),
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-v", "error"]
     for o in (opts or ()):
         cmd.extend(o)
-    cmd += ["-rtsp_transport", transport,
-            "-i", url,
+    # -rtsp_transport 只对 RTSP 输入有意义。0.9.80 起可以喂本机取流端口
+    # （tcp://127.0.0.1:PORT），对 TCP 输入硬塞这个参数，精简版 ffmpeg 会
+    # 报 "Option rtsp_transport not found" 直接退出 —— 那就是「一条录像都没有」。
+    if str(url).lower().startswith("rtsp"):
+        cmd += ["-rtsp_transport", transport]
+    cmd += ["-i", url,
             # **必须显式 -map**（0.9.17 定案的真根因）：segment muxer 不声明
             # 任何编码，ffmpeg 的自动映射会退回「按输出文件名扩展名猜封装」
             # （av_guess_codec 对 segment 有特判）。`.mp4.part` 的 .part 后缀
@@ -542,6 +615,45 @@ class Recorder:
         # 相对路径会指到安装目录深处，用户导出诊断时根本找不到。
         self._diag_dir = (os.path.join(var_dir, "record-diag") if var_dir else None)
         self._status_cache = {}  # (日期目录 -> (mtime_ns, [文件名]))，只给 status() 用
+        # 0.9.80 统一取流：录制不再直连摄像头，而是读本机取流端口。
+        # 由 nvr_slim 注入 `url_fn(cam_id) -> "tcp://127.0.0.1:PORT?listen=0"`；
+        # 返回 None（取流没起来）时退回 cam["url"] 直连 —— 宁可多一条连接，
+        # 也不能因为新模块出问题导致一条录像都没有。
+        self.url_fn = None
+        # 0.9.82：`pause_fn(cam_id) -> bool`，由 nvr_slim 注入。
+        # 上游取流停下来等相机时，录制层不该抢着判「自己卡住」—— 见 tick()
+        # 里卡死看门狗的注释。
+        self.pause_fn = None
+        self._pause_logged = {}   # cam_id -> 上次提示"暂不重启"的时间戳
+        # 0.9.84：stderr 排空。**录制进程的 stderr=PIPE 必须有人常驻读**：
+        # 管道缓冲 64KB，攒满后 ffmpeg 卡死在 write 上假活（进程在、盘不动），
+        # 看门狗再杀掉重启 = 录像空洞。ingest 早给自己修了（_drain_stderr），
+        # 录制层漏了 —— 真机 2026-10-26 无线相机偶发丢包时 ffmpeg 会往 stderr
+        # 吐 "non-existing PPS" 这类行，几小时就能攒满 64KB。
+        self._errbuf = {}         # cam_id -> deque[(ts, line)]，只留尾部
+        self._errlock = threading.Lock()   # 死分支读 tail 与排空线程写并发
+        # 0.9.85：静默期直连兜底。**实例级**而不是放 procs[cid]：进程表会被
+        # 收尸/重建反复推倒，兜底状态必须跨进程重启存活，否则切换后第一次
+        # 重启就把模式翻回去，sig 跟着变 → 无限重启循环。
+        self._fb = {}             # cam_id -> {"on": bool, "at": t, "back_at": t}
+        # 0.9.87：全局停顿联动。starve_since 记「这一路从哪一刻转成上游停顿」，
+        # 恢复即清；多路在同一窗口内转 starved 就是 NAS 侧事件（见 _fb_scan_global）。
+        self._fb_starve_since = {}
+        self._fb_quiet_until = 0.0
+
+    def _url_of(self, cam):
+        cid = (cam or {}).get("id")
+        if cid and (self._fb.get(cid) or {}).get("on"):
+            # 兜底中：绕过本机分发端口，直连相机（新 RTSP 会话）。
+            return cam.get("url") or ""
+        if self.url_fn is not None:
+            try:
+                u = self.url_fn(cam.get("id"))
+            except Exception:
+                u = None
+            if u:
+                return u
+        return cam.get("url") or ""
 
     # -- 命令行选项自愈 -------------------------------------------
 
@@ -644,10 +756,16 @@ class Recorder:
         frag 同理（0.9.71）：它决定 `-movflags`，改了不重启等于没改 ——
         用户以为关掉了分片 MP4，实际还在写，排查时会完全摸不着头脑。
         """
-        return "%s|%s|%s|%s" % (cam.get("url") or "",
-                                cam.get("dir_name") or cam.get("id") or "",
-                                cam.get("segment_sec") or 0,
-                                "frag" if self.frag else "plain")
+        # 0.9.80：除了摄像头原始地址，还要把**实际喂给 ffmpeg 的地址**算进来。
+        # 取流层晚一拍才就绪时，录制先是直连、之后要切到本机端口 —— 不把这个
+        # 变化算进指纹，reconcile 会认为"没变"，于是永远停在直连（多一条连接）。
+        # 原始 url 仍然要在：用户改了摄像头地址时必须重启。
+        return "%s|%s|%s|%s|%s|%s" % (cam.get("url") or "",
+                                       self._url_of(cam),
+                                       cam.get("dir_name") or cam.get("id") or "",
+                                       cam.get("segment_sec") or 0,
+                                       "frag" if self.frag else "plain",
+                                       cam_transport(cam))
 
     def seg_of(self, cam):
         """这一路实际使用的分片长度：单路覆盖值优先，否则跟随全局设置。"""
@@ -702,8 +820,9 @@ class Recorder:
         # 表现是"每天零点整所有通道同时断一次"，很容易被当成摄像头问题。
         ensure_day(self.root, dname,
                    datetime.date.today() + datetime.timedelta(days=1))
-        cmd = record_cmd(self.ffmpeg, cam["url"], out_pattern(self.root, dname),
-                         self.seg_of(cam), opts=self.eff_opts(), frag=self.frag)
+        cmd = record_cmd(self.ffmpeg, self._url_of(cam), out_pattern(self.root, dname),
+                         self.seg_of(cam), transport=cam_transport(cam),
+                         opts=self.eff_opts(), frag=self.frag)
         prev = self.procs.get(cid) or {}
         tries = (prev.get("tries", 0) if keep_tries else 0)
         stall = (prev.get("stall", 0) if keep_tries else 0)
@@ -728,10 +847,73 @@ class Recorder:
                            "tries": tries, "stall": stall, "next": wait_until,
                            "started_at": time.time(), "dead": None,
                            "sig": sig}
+        # 旧 stderr 是上一轮进程的残留，清空 —— 否则新进程一死，classify_error
+        # 拿到的是"探测阶段旧噪声"，把新进程的真实死因顶掉（ingest 同款教训）。
+        self._reset_errbuf(cid)
+        t = threading.Thread(target=self._drain_stderr, args=(cid, p),
+                             daemon=True, name="rec-err-%s" % cid)
+        t.start()
+        self.procs[cid]["errth"] = t   # 死分支 join 它，保证尾巴读全再诊断
         self.last_error.pop(cid, None)
         self.last_kind.pop(cid, None)
         self._dup.pop(cid, None)          # 这一路活了，去重计数清零
         self.log("录制 %s 已启动 pid=%d" % (cam.get("name") or cid, p.pid))
+
+    def _reset_errbuf(self, cid):
+        """换进程时清空该路的 stderr 缓冲（只测这条路径，别内联进 _spawn）。"""
+        with self._errlock:
+            self._errbuf[cid] = deque(maxlen=64)
+
+    def _drain_stderr(self, cid, p):
+        """常驻排空录制进程的 stderr（0.9.84）。
+
+        与 ingest._drain_stderr 同理：stderr=PIPE 没人读，64KB 攒满 ffmpeg
+        就卡死在 write 上。录制进程是长跑的，所以必须一直读；只留尾部
+        （deque maxlen=64）给死后的 classify_error 用。进程退出时 readline
+        返回空，本线程自然结束，无需 join。
+        """
+        err = p.stderr
+        buf = self._errbuf.get(cid)
+        if buf is None:
+            # 正常路径 _spawn 必先 _reset_errbuf；这里兜底防线程崩（崩了
+            # 就回到"没人排空"的老病）。惰性初始化也不影响"清旧残留"语义：
+            # 没旧缓冲才补，有旧缓冲不动。
+            self._reset_errbuf(cid)
+            buf = self._errbuf[cid]
+        while err is not None and not self.stopped:
+            try:
+                line = err.readline()
+            except (OSError, ValueError):
+                break
+            if not line:
+                break                       # 进程已退（EOF）
+            with self._errlock:
+                buf.append((time.time(),
+                            line.decode("utf-8", "replace").rstrip()))
+        try:
+            err.close()
+        except (OSError, ValueError):
+            pass
+
+    def _stderr_text(self, cid, p=None):
+        """死分支取错误文本：从排空线程留下的尾部拼出（替代旧的 p.stderr.read）。
+
+        旧写法 `p.stderr.read(65536)` 只在进程死后才第一次读 —— 运行期
+        无人排空才是本修复的病根；现在尾部常有人读，这里只做拼接。
+        兜底：缓冲是空的且进程还带 stderr（测试替身 / 排空线程没跑起来的
+        异常路径），退回旧的一次性读 —— 宁可慢一点也不许丢诊断。
+        """
+        with self._errlock:
+            items = list(self._errbuf.get(cid) or ())
+        text = "\n".join(ln for _, ln in items).strip()
+        if text or p is None or getattr(p, "stderr", None) is None:
+            return text
+        try:
+            legacy = (p.stderr.read(65536) or b"").decode(
+                "utf-8", "replace").strip()
+        except (OSError, ValueError):
+            return text
+        return legacy or text
 
     def _grace_close(self, p, why=""):
         """三段式收尾：SIGINT → 等 → 再 SIGINT → 等 → 最后才 SIGKILL。
@@ -775,12 +957,67 @@ class Recorder:
             self.log(why)
         return False
 
+    def _begin_close(self, p):
+        """非阻塞收尾第一步：只发 SIGINT 就返回，不等。
+
+        进程已退出 / 已经死了 → 返回 False（调用方不必再挂 closing）。
+        """
+        if p is None:
+            return False
+        try:
+            if p.poll() is not None:
+                return False
+            p.send_signal(signal.SIGINT)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _close_step(self, st, now):
+        """推进一次非阻塞收尾。
+
+        返回 True = 还在收尾，本轮巡检不要再管这一路（**尤其不能 spawn**，
+        否则同一路会有两个 ffmpeg 抢同一个分片名）。
+        返回 False = 没有在收尾，或刚刚收完（调用方接着走正常分支）。
+        节奏与 _grace_close 一致：SIGINT → 等 KILL_SOFT_SEC → SIGINT →
+        等 KILL_HARD_SEC → SIGKILL。
+        """
+        p = st.get("closing")
+        if p is None:
+            return False
+        if p.poll() is not None:
+            st["closing"] = None
+            return False
+        if now < st.get("close_at", 0):
+            return True
+        rnd = st.get("close_round", 1)
+        if rnd <= 1:
+            try:
+                p.send_signal(signal.SIGINT)
+            except (OSError, ValueError):
+                pass
+            st["close_round"] = 2
+            # 硬超时可按路覆盖（0.9.86 兜底切换用 4 秒快速升级）
+            st["close_at"] = now + st.get("close_hard", KILL_HARD_SEC)
+            return True
+        try:
+            p.kill()
+        except (OSError, ValueError):
+            pass
+        st["close_round"] = 3
+        st["close_at"] = now + CLOSE_POLL_SEC
+        return True
+
     def _kill(self, cid, why=""):
         """优雅收尾一路的 ffmpeg（SIGINT 让 segment muxer 写完 moov），并从进程表移除。"""
         st = self.procs.pop(cid, None)
         if not st:
             return False
         p = st.get("p")
+        # 正在非阻塞收尾的那一个也得等：否则 _kill 之后它还活着，会变成
+        # 没人管的孤儿 ffmpeg（停服务 / 删通道时最典型）。这里同步等一趟。
+        closing = st.get("closing")
+        if closing is not None and closing.poll() is None:
+            self._grace_close(closing)
         if p is None:
             return True
         if p.poll() is None:
@@ -857,17 +1094,43 @@ class Recorder:
             if cid not in want:
                 self._kill(cid, "录制 %s 已移除或停用，已停止该路进程" % cid)
                 self.last_error.pop(cid, None)
+                self._fb.pop(cid, None)     # 兜底状态跟着通道走
                 continue
             st = self.procs.get(cid) or {}
             p = st.get("p")
             if p is None or p.poll() is not None:
                 continue                    # 没跑起来 / 已退出：交给 tick 的退避分支
             if st.get("sig") != self._sig(want[cid]):
-                self._kill(cid, "录制 %s 参数已变（地址/目录/分片长度），按新配置重启" % cid)
+                # 0.9.86：这里以前走同步 _kill —— 星量的 ffmpeg 卡在没有
+                # read 超时的 RTSP read 上，SIGINT 处理不到，每路吃满
+                # 15+10 秒**还阻塞整个调度循环**；0.9.85 首跑两路同时切兜底
+                # 就串了 47 秒。改走非阻塞收尾状态机（与卡死看门狗同款），
+                # 兜底切换另用 3/4 秒快速升级（见 FB_CLOSE_SOFT 注释）。
+                now = time.time()
+                fbflip = (now - ((self._fb.get(cid) or {}).get("flipped_at") or 0)
+                          < 180)
+                self.log("录制 %s 按新地址重启（%s）" % (
+                    cid, "直连兜底切换" if fbflip else "地址/目录/分片长度已变"))
+                fast = bool(fbflip and self.frag)
+                closing = p if self._begin_close(p) else None
+                self.procs[cid] = {
+                    "p": None, "day": st.get("day")
+                    or datetime.date.today().isoformat(),
+                    "tries": st.get("tries", 0), "stall": st.get("stall", 0),
+                    "next": 0.0, "started_at": 0, "dead": None,
+                    "sig": st.get("sig"),
+                    "closing": closing,
+                    "close_at": now + (FB_CLOSE_SOFT if fast else KILL_SOFT_SEC),
+                    "close_hard": FB_CLOSE_HARD if fast else KILL_HARD_SEC,
+                    "close_round": 1,
+                }
 
 
     def stop(self, timeout=6.0):
         self.stopped = True
+        self._fb.clear()              # 兜底状态只对运行中的服务有意义
+        self._fb_starve_since.clear()
+        self._fb_quiet_until = 0.0
         for cid, st in list(self.procs.items()):
             p = st.get("p")
             if p is None or p.poll() is not None:
@@ -957,6 +1220,95 @@ class Recorder:
         except OSError:
             pass
 
+    def _pause(self, cam_id):
+        """上游取流是不是正在等相机（暂停态）。注入失败一律当 False：
+
+        宁可多重启一次，也不能因为取流模块异常把录制看门狗整体废掉。
+        """
+        fn = self.pause_fn
+        if not fn:
+            return False
+        try:
+            return bool(fn(cam_id))
+        except Exception:
+            return False
+
+    def _fb_scan_global(self, now):
+        """0.9.87：多路同时停顿 → 判定 NAS 侧事件，设一段静默期。
+
+        真机 2026-10-26 18:06:50 四路在同一秒「4 秒没有数据」，18:06:54 四路
+        录制一起切直连、一起多开四个 ffmpeg —— 恰好在 CPU/IO 最紧的时刻加压，
+        把 4 秒抖动放大成 23~26 秒内容空洞，切回又各多 6 秒关键帧等待。
+
+        判据用「转 starved 的时刻」而不是「此刻是否 starved」：院子 R 那种
+        相机级故障会长期挂着 starved，如果按瞬时状态算，任何一路正常抖动都
+        会被它凑成「两路」，把真该兜底的一路也拦下来。
+        """
+        if not self.cams:
+            return
+        fresh = 0
+        for cam in self.cams:
+            cid = cam.get("id")
+            if not cid:
+                continue
+            if self._pause(cid):
+                if cid not in self._fb_starve_since:
+                    self._fb_starve_since[cid] = now
+                if now - self._fb_starve_since[cid] <= FB_GLOBAL_WINDOW:
+                    fresh += 1
+            else:
+                self._fb_starve_since.pop(cid, None)
+        if fresh >= 2:
+            if now >= self._fb_quiet_until:      # 同一次事件只报一次
+                self.log("取流 %d 路同时停顿（判为 NAS 侧事件，不是相机），"
+                         "%.0f 秒内不切直连兜底" % (fresh, FB_GLOBAL_QUIET))
+            self._fb_quiet_until = now + FB_GLOBAL_QUIET
+
+    def _fb_tick(self, cam, now):
+        """0.9.85 静默期直连兜底：每拍判断切入/切出。
+
+        切入条件（全部满足）：上游 starved_of=True（此刻本机端口一个字节
+        都不会有）**且** 磁盘断流 ≥ FB_ENTER_SEC **且** 冷却期已过。
+        切出条件：上游恢复稳定吐数据 且 直连已运行 ≥ FB_EXIT_DWELL。
+
+        状态放 self._fb（实例级），切入/切出只改这个标志 —— 实际的进程
+        重启由 sig 指纹变化驱动（reconcile 发现 `_url_of` 变了就按新地址
+        重启），这里绝不直接碰进程。
+        """
+        cid = cam["id"]
+        fb = self._fb.get(cid) or {}
+        starved = self._pause(cid)
+        if fb.get("on"):
+            # 只在上游恢复时切回。相机级故障（直连也没数据）时 starved
+            # 一直为 True，直连进程靠 0.9.82 的让路逻辑耐心挂着，相机
+            # 一回来它立刻续写 —— 比切回去重走一遍退避快。
+            if not starved and now - fb.get("at", now) >= FB_EXIT_DWELL:
+                fb["on"] = False
+                fb["back_at"] = now
+                fb["flipped_at"] = now       # reconcile 据此用快速收尾
+                self._fb[cid] = fb
+                self.log("录制 %s 上游已恢复，切回本机分发"
+                         "（直连兜底共运行 %.0f 秒）"
+                         % (cam.get("name") or cid, now - fb.get("at", now)))
+        else:
+            if not starved:
+                return
+            if now < self._fb_quiet_until:
+                # NAS 侧事件静默期：多路一起断，切直连救不了任何一路，
+                # 只会同时多开 N 个 ffmpeg 抢 CPU（0.9.87 真机教训）。
+                return
+            if now - fb.get("back_at", 0) < FB_COOLDOWN:
+                return
+            age = self._newest_age(cam)
+            if age is None or age >= FB_ENTER_SEC:
+                self._fb[cid] = {"on": True, "at": now,
+                                 "back_at": fb.get("back_at", 0),
+                                 "flipped_at": now}   # reconcile 据此用快速收尾
+                self.log("录制 %s 上游停顿（磁盘已 %s 秒无新数据），"
+                         "录制临时直连相机（新会话）"
+                         % (cam.get("name") or cid,
+                            "∞" if age is None else "%d" % int(age)))
+
     def _newest_age(self, cam):
         """最新分片「多久没被写过」（秒）；一个分片都没有就返回 None。
 
@@ -993,6 +1345,9 @@ class Recorder:
             return
         now = now if now is not None else time.time()
         today = datetime.date.today().isoformat()
+        # 0.9.87：先花一拍判断「这一轮停顿是某台相机的事，还是整个 NAS 的事」。
+        # 必须放在逐路 _fb_tick 之前 —— 静默期一立起来，同轮的切入判断就吃不到。
+        self._fb_scan_global(now)
         # 残片抢救预算：整轮（所有摄像头）共享一个额度，避免一次巡检里
         # 五路同时开啃、把磁盘 IO 从正在录的进程手里抢走。
         budget = [PART_RESCUE_PER_RUN]
@@ -1003,8 +1358,19 @@ class Recorder:
                            budget=budget)   # 先封口/抢救，消费者才看得到完整 .mp4
             st = self.procs.get(cid)
 
+            # 0.9.85：直连兜底的切入/切出判断放在最前面 —— 它不依赖进程
+            # 状态（状态在 self._fb），p 为 None（退避等待中）时也要判断：
+            # 否则上游恢复发生在退避窗口里时，重连起来还是直连地址，
+            # 白白多开一条相机连接。
+            self._fb_tick(cam, now)
+
             if st is None:
                 self._spawn(cam)          # 首次，或启动失败过、退避已到期
+                continue
+
+            # 收尾中的一路优先推进：**必须在 p is None 之前**，否则会在旧进程
+            # 还没退出时就 spawn 出第二个 ffmpeg，两个进程抢同一个分片名。
+            if self._close_step(st, now):
                 continue
 
             p = st.get("p")
@@ -1033,35 +1399,71 @@ class Recorder:
                 # ffmpeg 的 -rw_timeout 只能覆盖"读不到数据"的一部分情形；无线
                 # 摄像头半死连接上它仍可能长期阻塞。这里再兜一层：进程在、但磁盘
                 # 上最新分片已经 STALL_SEC 秒没长过，就判定为假活，杀掉重连。
-                if now - st.get("started_at", now) > STALL_SEC + 30:
+                #
+                # 0.9.78 加一条**无需等待**的快路：录像目录本身没了。
+                # 用户清盘 / 误删目录时，ffmpeg 手里那个 .part 已经是 unlink 掉的
+                # inode —— 它继续写得好好的，但路径上永远长不出新文件，看门狗只能
+                # 看到"从未写入"，要等到 STALL_SEC+30 才动手。真机 2026-10-26
+                # 05:06 清盘现场：4 路白等 105 秒 + 串行收尾 47 秒 ≈ 2.5 分钟空洞。
+                # 目录消失是无歧义的，直接重建 + 立即重连。
+                dir_gone = (not os.path.isdir(os.path.join(self.root, dname))
+                            or not os.path.isdir(os.path.join(self.root, dname, today)))
+                if dir_gone or now - st.get("started_at", now) > STALL_SEC + 30:
                     age = self._newest_age(cam)
                     # age is None = 这一路运行超过 STALL_SEC+30 秒却一个字节都没落盘
                     # （建连握手成功但拿不到码流）。以前这里直接放行，而删掉
                     # -timeout 之后就再没人管这种"假活"进程了 —— 必须在这里兜住。
-                    if age is None or age > STALL_SEC:
+                    starving = (age is None or age > STALL_SEC)
+                    # 0.9.82：磁盘上没新字节，未必是录制自己的错。上游取流已经在
+                    # 「等相机自己回来」时，那段时间机器上根本没有数据 —— 此刻
+                    # 重启录制只是把同一段空窗再走一遍：5 秒退避 + 10 秒探测，
+                    # 而且失败账会算到录制头上。真机 2026-10-26 09:33 三路
+                    # （院子 R / 餐厅 / 车库）被相机端同时掐流 120 秒，录制层
+                    # 75 秒先判死、取流 120 秒才认命，两轮重启叠加成 140 秒空洞。
+                    # 责任划清：**等不等由取流决定，录制只管把拿到的字节写下去**。
+                    upstream_wait = (starving and not dir_gone
+                                     and self._pause(cid))
+                    if upstream_wait:
+                        # 提醒按时间节流而不是布尔锁：布尔锁要靠"恢复时复位"，
+                        # 异常路径漏一次就再也不提示了（0.9.72 的教训）。
+                        if now - (self._pause_logged.get(cid) or 0) > 600:
+                            self._pause_logged[cid] = now
+                            self.log("录制 %s 暂不重启：上游取流正在等相机"
+                                     "（磁盘已有 %s 秒没有新分片，数据本来就没有）"
+                                     % (cam.get("name") or cid,
+                                        "∞" if age is None else "%d" % int(age)))
+                    elif dir_gone or starving:
                         # 卡住与「连不上」分开计数：卡住说明流本来是通的，
                         # 不该把连不上的长退避（300 秒）背到这一路身上 ——
                         # 那样每次抖动都要等 5 分钟，白丢录像（0.9.73）。
-                        stall = st.get("stall", 0) + 1
-                        wait = stall_wait(stall, self.reconnect)
-                        self.log("录制 %s 卡住（%s 秒没有新数据），重启进程"
-                                 "（第 %d 次，%d 秒后重连）"
-                                 % (cam.get("name") or cid,
-                                    "从未写入" if age is None else int(age),
-                                    stall, wait))
-                        # 这里以前是 p.kill() —— 直接 SIGKILL。而"卡住"绝大多数
-                        # 只是 socket read 阻塞，进程本身是活的，SIGINT 能打断
-                        # read 并让 segment muxer 写完 moov。硬杀的结果就是
-                        # 这个分片永久停在 .part（真机 12 个残片全出自这里）。
-                        closed = self._grace_close(p)
-                        if not closed:
-                            self.log("录制 %s 收尾超时（SIGINT 两次无响应），已强制结束"
-                                     % (cam.get("name") or cid))
+                        if dir_gone:
+                            # 不是摄像头的错，不占"卡住"次数，也不退避
+                            stall = st.get("stall", 0)
+                            wait = 0
+                            self.log("录制 %s 的目录被删除（%s），重建后立即重启"
+                                     % (cam.get("name") or cid,
+                                        os.path.join(self.root, dname)))
+                            ensure_day(self.root, dname)
+                        else:
+                            stall = st.get("stall", 0) + 1
+                            wait = stall_wait(stall, self.reconnect)
+                            self.log("录制 %s 卡住（%s），重启进程"
+                                     "（第 %d 次，%d 秒后重连）"
+                                     % (cam.get("name") or cid,
+                                        "从未写入" if age is None
+                                        else "%d 秒没有新数据" % int(age),
+                                        stall, wait))
+                        # 收尾改成非阻塞（0.9.78）：只发 SIGINT，等待交给后续巡检
+                        # 的 _close_step 推进。以前在这里同步等 15+10 秒，四路
+                        # 串行就是 47 秒不录 —— 见 CLOSE_POLL_SEC 的注释。
+                        closing = p if self._begin_close(p) else None
                         self.procs[cid] = {
                             "p": None, "day": st["day"],
                             "tries": st.get("tries", 0), "stall": stall,
                             "next": now + wait, "started_at": now, "dead": None,
                             "sig": st.get("sig"),
+                            "closing": closing, "close_at": now + KILL_SOFT_SEC,
+                            "close_round": 1,
                         }
                         continue
                 continue
@@ -1074,11 +1476,18 @@ class Recorder:
 
             st["dead"] = p.pid
             st["tries"] = st.get("tries", 0) + 1
-            err = ""
-            try:
-                err = (p.stderr.read(65536) or b"").decode("utf-8", "replace").strip()
-            except (OSError, ValueError):
-                pass
+            # 0.9.84：不再 p.stderr.read() —— 排空线程早已接管这条管道，
+            # 这里只取它留下的尾部。旧写法运行期无人读，64KB 攒满会把
+            # ffmpeg 卡死在 write 上（假活），是录像空洞的实锤病因之一。
+            # join 一下等排空线程读完 EOF：poll() 发现死的那一刻，线程
+            # 可能还有最后几行没进缓冲，不等就诊断会拿到半截文本。
+            th = st.get("errth")
+            if th is not None:
+                try:
+                    th.join(timeout=3)
+                except RuntimeError:
+                    pass
+            err = self._stderr_text(cid, p)
 
             # ---- 选项自愈：ffmpeg 说它不认某个参数，就删掉立刻重试 ----
             # 这是 0.9.11(-rw_timeout) / 0.9.13(-timeout) 两次事故的教训：
@@ -1095,9 +1504,11 @@ class Recorder:
                 # 和 "Error opening output" 都可能只在其中某一行，只留最后一行
                 # 会把真正的病因丢掉，用户只能看到"中断"两个字。
                 self.last_error[cid] = " ".join(err.split())[:300]
-                self._diag(cam, record_cmd(self.ffmpeg, cam["url"],
+                self._diag(cam, record_cmd(self.ffmpeg, self._url_of(cam),
                                            out_pattern(self.root, dname),
-                                           self.seg_of(cam), opts=self.eff_opts()), err)
+                                           self.seg_of(cam),
+                                           transport=cam_transport(cam),
+                                           opts=self.eff_opts()), err)
             # 指数封顶用的是 `min(tries-1, 9)` 而不是 4：4 意味着 5×2⁴=80 秒就
             # 到顶了（2 的指数不再增长），MAX_BACKOFF=300 形同虚设 —— 真机
             # 2026-10-26 车库日志里"卡住→重启"精确地每 80 秒一次，越杀越连不上，
@@ -1141,6 +1552,7 @@ class Recorder:
                 "stall": st.get("stall", 0) if st else 0,
                 "segments": len(segs),
                 "segment_sec": self.seg_of(cam),
+                "direct": bool((self._fb.get(cid) or {}).get("on")),
                 "last_seg": os.path.basename(last) if last else None,
                 "last_age_sec": age,
                 "error": self.last_error.get(cid),

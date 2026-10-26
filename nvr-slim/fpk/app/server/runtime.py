@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.73"
+VERSION = "0.9.87"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -41,6 +41,11 @@ DEFAULTS = {
     "record_enable": True,
     "record_segment_sec": 300,        # 分片时长 60~900 秒
     "record_reconnect_sec": 5,        # 断流重连退避基数
+    # ---- 统一取流（0.9.80）----
+    # 每路只对摄像头建一条 RTSP 连接，再在本机用 MPEG-TS 广播给录制/取帧/AI。
+    # 以前三处各自拉流：5 路每 5 秒就是 120 次新建会话，廉价摄像头会因此踢人。
+    # 关掉即退回旧流程（各自直连）—— 留这条开关是为了现场能立刻回退。
+    "ingest_enable": True,
     # 分片 MP4（0.9.71 默认开）：moov 写在文件头、每个关键帧一个 moof，
     # 进程被硬杀/断电后已写下的部分仍能播，损失上限是一个 GOP 而不是整片。
     # 关掉退回整片 moov（moov 在尾部，必须正常收尾才完整）。

@@ -607,7 +607,9 @@ class Engine:
 
 def grab_ppm_cmd(ffmpeg, url, use_tcp=True):
     c = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error"]
-    if use_tcp:
+    # -rtsp_transport 只对 RTSP 输入有意义；喂 tcp:// 或本地文件时会变成
+    # "Option not found" 直接退出（0.9.80 起检测也可能吃本机取流端口）。
+    if use_tcp and str(url).lower().startswith("rtsp"):
         c += ["-rtsp_transport", "tcp"]
     c += ["-i", url, "-frames:v", "1", "-f", "image2pipe",
           "-vcodec", "ppm", "-"]
@@ -632,6 +634,36 @@ def grab_ppm(ffmpeg, url, timeout=10, use_tcp=True):
     return True, proc.stdout, ""
 
 
+# 取帧层健康、只是没有新图。**不是错误**：检测节拍（5 秒）比取帧节拍
+# （snapshot_interval，默认 10 秒）密，每两轮必有一轮拿到同一张图。
+# 这种情况既不能记账（会重复计数），也不能记失败（会把诊断页刷红）。
+NO_NEW_FRAME = "[no-new-frame]"
+
+
+def grab_ppm_image(ffmpeg, path, timeout=8):
+    """把取帧层写好的 JPEG 解成 PPM。**不碰网络**，所以没有建连成本。
+
+    0.9.80 统一取流之后，预览 / 移动侦测 / AI 共用同一张图：摄像头只看到
+    取流层那一条连接。本地解一张 200~600KB 的 jpg 只要几十毫秒。
+    """
+    if not ffmpeg:
+        return False, "", "ffmpeg 未找到"
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error",
+             "-i", path, "-frames:v", "1", "-f", "image2pipe",
+             "-vcodec", "ppm", "-"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, "", "解图超时（%d 秒）" % timeout
+    except OSError as e:
+        return False, "", "ffmpeg 无法启动：%s" % str(e)[:120]
+    if proc.returncode != 0 or not proc.stdout:
+        tail = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        return False, "", (tail[-1].strip()[:200] if tail else "rc=%d" % proc.returncode)
+    return True, proc.stdout, ""
+
+
 # ---------------------------------------------------------------- 调度 Worker
 
 class DetectWorker:
@@ -642,13 +674,17 @@ class DetectWorker:
     """
 
     def __init__(self, engine, ffmpeg, var_dir, record_root_fn, cams_fn,
-                 cfg_fn, interval=5, timeout=10, log=None, notifier=None):
+                 cfg_fn, interval=5, timeout=10, log=None, notifier=None,
+                 frame_path_fn=None):
         self.engine = engine
         self.ffmpeg = ffmpeg
         self.var_dir = var_dir
         self.record_root_fn = record_root_fn
         self.cams_fn = cams_fn
         self.cfg_fn = cfg_fn            # 返回 (detect_cfg, cameras) 快照
+        # 0.9.80：优先读取帧层写好的那张 jpg（cam_id -> path），不再自己拉 RTSP。
+        # 返回 None/空 → 退回直连抽帧（取流没起来时的降级路径）。
+        self.frame_path_fn = frame_path_fn
         self.interval = max(1, min(60, int(interval or 5)))
         self.timeout = int(timeout)
         self.log = log or (lambda m: None)
@@ -714,8 +750,10 @@ class DetectWorker:
             self._one(c, url, conf_map, classes, now)
 
     def _one(self, cam, url, conf_map, classes, now):
-        ok, data, err = grab_ppm(self.ffmpeg, url, timeout=self.timeout)
+        ok, data, err = self._grab(cam, url)
         if not ok:
+            if err == NO_NEW_FRAME:
+                return                     # 没有新图：本轮不算失败，也不记账
             self._fail(cam["id"], err)
             return
         ppm = parse_ppm(data)
@@ -736,6 +774,28 @@ class DetectWorker:
             self._write_ledger(cam, dets, now)
             self._notify(cam, dets)
         self._ok_stat(cam["id"], dets)
+
+    def _grab(self, cam, url):
+        """取一帧 PPM：优先用取帧层的本地 jpg，没有才退回自己拉流。
+
+        统一取流之后，「每路每 5 秒新建两次 RTSP 会话」变成零次 —— 摄像头只
+        看到 ingest 那一条连接。
+
+        **取帧层在跑时不再退回直连**：退回等于把刚拆掉的连接风暴重新装回来，
+        而且是在摄像头本来就异常的时候。宁可这一轮不出检测结果（诊断页会
+        显示「取帧层还没有新画面」），也不要偷偷多开一路 RTSP。
+        """
+        if self.frame_path_fn is not None:
+            try:
+                path = self.frame_path_fn(cam["id"])
+            except Exception as e:
+                return False, "", "取帧层异常：%r" % e
+            if path == "":
+                return False, "", NO_NEW_FRAME
+            if not path:
+                return False, "", "取帧层还没有新画面"
+            return grab_ppm_image(self.ffmpeg, path, timeout=self.timeout)
+        return grab_ppm(self.ffmpeg, url, timeout=self.timeout)
 
     def _notify(self, cam, dets):
         """检出 → 通知入队（person/vehicle 口径；two_wheeler 归 vehicle）。

@@ -541,6 +541,10 @@ class TestStallRestartBackoff(unittest.TestCase):
         self.cam = cam
         self.rec = recorder.Recorder("ffmpeg", self.root, [cam],
                                      log=self.msgs.append, var_dir=self.root)
+        # 正在录的一路，当天目录必然存在（_spawn 里 ensure_day 建的）。
+        # 0.9.78 起「目录不存在」会被认成清盘而不是卡住，这里要给出真实前提，
+        # 否则测的就不是卡住这条路径了。
+        recorder.ensure_day(self.root, "车库")
 
     def tearDown(self):
         shutil.rmtree(self.root, ignore_errors=True)
