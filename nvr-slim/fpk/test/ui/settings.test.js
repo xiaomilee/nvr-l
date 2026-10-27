@@ -348,6 +348,12 @@ ck("实时流·宫格也走流（不再是只拉快照）",
 ck("实时流·流失败要回落快照",
    src.includes("img.onerror") && src.includes("实时流不可用 · 已回落快照")
    && src.includes("pullSnap(c.id, img"));
+ck("直播·回到前台立刻补一次快照（不等定时轮询，0.9.88）",
+   src.includes("function refreshLiveSnapsNow")
+   && src.includes('document.addEventListener("visibilitychange"')
+   && src.includes('window.addEventListener("pageshow"'));
+ck("直播·重渲不闪「等待第一帧」：保留并复用上一帧",
+   src.includes("st.lastSrc = img.src") && src.includes("if(st.lastSrc && snapImg)"));
 ck("实时流·服务端端点接线", src.includes("/api/live/stream/"));
 ck("实时流·进入实时层默认播放", src.includes("state.liveStream = true"));
 ck("回放·缩时清单通道", src.includes('realSegs(state.camId, curDay(), "clip")') && src.includes("rec.clips"));
@@ -1158,9 +1164,18 @@ ck("每路·未保存计数含检测项",
 run('closeEditor();');
 
 /* 回放页类别筛选（0.9.67：移动侦测/人员/车辆 三类并列，互不重叠） */
-ck("回放·类别 chips 三枚（移动侦测 + 人员 + 车辆）",
+ck("回放·类别筛选三枚已并入图例，不再单开「只看」行（0.9.88）",
    (src.match(/data-pvcls="(motion|person|vehicle)"/g) || []).length === 3
-   && src.includes('<button data-pvcls="motion">移动侦测</button>'));
+   && src.includes('<button type="button" class="lg" data-pvcls="motion">')
+   && !src.includes('id="pvCatRow"') && !src.includes('class="pcat"')
+   && src.includes(".evlegend.actmode .lg.on{background:var(--primary)"));
+ck("回放·图例选中态只在活动模式亮（全时只读）",
+   src.includes('evl.classList.toggle("actmode", actMode)')
+   && src.includes('x.classList.toggle("on", actMode && !!PPLAY.cls[x.dataset.pvcls])'));
+ck("回放·暂停时画面中央悬浮「继续」键（0.9.88）",
+   src.includes('id="playPauseFloat"')
+   && src.includes(".pstage .pfloat.on{display:flex}")
+   && src.includes('pf.classList.toggle("on", !!(PPLAY.on && pvCur && pvCur.paused && !pvCur.ended))'));
 ck("回放·PPLAY.cls 默认三类全勾", (()=>{
   const c = get('PPLAY.cls');
   return c.motion && c.person && c.vehicle;
@@ -1237,7 +1252,24 @@ ck("回放·移动侦测不参与类别判定（0.9.77 起 mv 只用于气泡措
    && src.includes("if(!k.person && !k.vehicle) k.motion = true;")
    && src.includes("function mvText(ev)")
    && src.includes("mvText(ev0)")
-   && src.includes("起止由移动侦测确认"));
+   /* 0.9.89：mv=1 的「起止由移动侦测确认（车来了 → 车走了）」已去掉，只留反常提示 */
+   && !src.includes("起止由移动侦测确认")
+   && src.includes("这段时间画面没有变化"));
+ck("回放·时间轴精简（0.9.89）：非全屏不再有常驻摘要行，高度全给时间轴",
+   !src.includes('class="heatcap"')
+   && src.includes(".vtlstat{display:none")
+   && src.includes("function vtlNote(txt)"));
+ck("回放·全天统计保留在全屏（非全屏隐藏、全屏 display:flex，信息别丢）",
+   src.includes('<div class="vtlstat" id="vtlStat">')
+   && src.includes('id="vtlSum"')
+   && src.includes("body.fsmode #page-play.on .vtlstat{display:flex")
+   && src.includes('document.getElementById("vtlSum")'));
+ck("回放·时间轴缩放改为贴右侧、竖向居中的悬浮胶囊（＋ 倍率 − 竖排）",
+   src.includes(".vtlzoom{position:absolute;right:10px;top:50%;transform:translateY(-50%)")
+   && src.includes("flex-direction:column")
+   && /id="vtlZoom">[\s\S]{0,90}id="btnVtlIn"[\s\S]{0,90}id="vtlPct"[\s\S]{0,90}id="btnVtlOut"/.test(src)
+   && src.includes(".vtlcard.bubbleopen .vtlzoom")
+   && src.includes('card.classList.add("bubbleopen")'));
 ck("回放·三格车道：左 1/3 移动侦测 · 中 1/3 人员 · 右 1/3 车辆（横线与时段块共用）",
    src.includes("function vtlLanes(kind, h)")
    && src.includes(`if(kind.motion)  out += '<i class="c-motion mot"' + st + "></i>";`)

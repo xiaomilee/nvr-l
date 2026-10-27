@@ -171,9 +171,15 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .phone.land .p-tl{display:none}
 .player.fshide .p-tl{opacity:0;pointer-events:none}
 .player .p-tl{transition:opacity .25s ease}
-.heatcap{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-bottom:8px}
-.heatcap b{color:var(--text2);font-weight:600;font-size:12px}
-.heatcap .sp{margin-left:auto}
+/* 全天统计行（0.9.89）：非全屏一律 display:none —— 一行 24px + 8px 间距全部让给
+   时间轴；只有全屏才露出来（全屏时间轴本来就浮在画面上方，空间不缺，信息不该丢）。 */
+.vtlstat{display:none;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-bottom:6px}
+.vtlstat b{color:var(--text2);font-weight:600;font-size:12px}
+/* 「没有内容」的浅提示（0.9.89）：台账暂无活动 / 读取失败时才出现。
+   原来这类话常驻在时间轴顶上那行摘要里，为了给时间轴腾高度整行撤掉了，
+   改成按需覆盖一层浅字——有活动时一个像素都不占。 */
+.vtlnote{position:absolute;left:12px;right:12px;top:10px;text-align:center;
+  font-size:11.5px;color:var(--muted);pointer-events:none;z-index:3}
 
 /* 片段列表 */
 .listhead{display:flex;align-items:center;padding:13px 16px 7px;font-size:12.5px;color:var(--muted)}
@@ -1034,17 +1040,50 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .vtl .vevspan.dim{opacity:.18}
 .vtl .vmark.dim .lanes{opacity:.22}
 /* 标注气囊：点横线弹出，随轨道滚动，列表行/播放钮直接跳播 */
-.vbubble{position:absolute;left:114px;z-index:6;min-width:190px;max-width:272px;background:var(--surface);
+/* 事件气泡（0.9.90）：左边界从 114 挪到 132，给「事件线 → 气泡」的曲线留出 24px 弧长。
+   原来只隔 9px（车辆车道线尾在 105），曲线没有可画的长度，等于画了也看不见。
+   宽度上限跟着收：窄屏（375）时 375-148=227px 仍放得下标题+副文+按钮。 */
+.vbubble{position:absolute;left:132px;z-index:6;
+  min-width:min(190px, calc(100% - 148px));max-width:min(272px, calc(100% - 148px));
+  background:var(--surface);
   border:1px solid var(--line);border-radius:13px;padding:10px 12px;
   box-shadow:0 14px 36px rgba(10,14,22,.26);cursor:default}
-.vbubble .bt{font-size:13px;font-weight:600;color:var(--text)}
+/* 气泡描边 = 事件类型色，与连到它的那根曲线同色（类型一眼对上） */
+.vbubble.k-motion{border-color:var(--warn)}
+.vbubble.k-person{border-color:var(--primary)}
+.vbubble.k-vehicle{border-color:var(--ev-veh)}
+/* 事件线 → 气泡的连接曲线（0.9.90）。整张 svg 盖在 #vtl 内容层上，
+   所以滚动/缩放/捏合时连线天然跟着走，不必逐帧重算坐标。
+   pointer-events:none：绝不抢事件线的点击。 */
+.vtlwire{position:absolute;left:0;top:0;pointer-events:none;z-index:4;overflow:visible}
+.vtlwire path{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+/* 簇内多条线并排：降一档线宽与不透明度，三条挤在同一小段里也不糊 */
+.vtlwire.multi path{stroke-width:1.3;stroke-opacity:.9}
+.vtlwire circle{stroke:none}
+.vtlwire .w-motion{stroke:var(--warn)}
+.vtlwire .w-person{stroke:var(--primary)}
+.vtlwire .w-vehicle{stroke:var(--ev-veh)}
+.vtlwire .d-motion{fill:var(--warn)}
+.vtlwire .d-person{fill:var(--primary)}
+.vtlwire .d-vehicle{fill:var(--ev-veh)}
+/* 行高与行距是硬约定：VTL_ROW_Y0 / VTL_ROW_PITCH 靠它们算连线落点（有测试对账），
+   改这里必须同步改 JS 常量，否则线会连偏 */
+.vbubble .bt{font-size:13px;font-weight:600;color:var(--text);line-height:18px}
 .vbubble .bi{font-size:11.5px;color:var(--muted);margin-top:2px}
-.vbubble .row{display:flex;align-items:center;gap:8px;padding:6px 8px;margin:2px -8px 0;border-radius:8px;font-size:12px;cursor:pointer;color:var(--text)}
+.vbubble .row{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;margin:2px -8px 0;border-radius:8px;font-size:12px;cursor:pointer;color:var(--text)}
+/* 簇气泡的分行：行首类别色圆点 = 线的落点色，正在播的那一行淡底高亮 */
+.vbubble .row .bul{width:9px;height:9px;border-radius:50%;flex:0 0 9px}
+.vbubble .row .bul.motion{background:var(--warn)}
+.vbubble .row .bul.person{background:var(--primary)}
+.vbubble .row .bul.vehicle{background:var(--ev-veh)}
+.vbubble .row .lab{font-weight:600}
+.vbubble .row .cnt{font-size:11.5px;color:var(--muted);white-space:nowrap}
+.vbubble .row.on{background:var(--hover)}
 .vbubble .row:active{background:var(--hover)}
 .vbubble .row b{font-variant-numeric:tabular-nums}
 .vbubble .row .d{margin-left:auto;font-size:10.5px;color:var(--primary);white-space:nowrap}
 /* 事件气泡里的类别摘要（0.9.60）：加粗 + 类别色 + 小色片，和时间轴横线段同一套色。
-   顶部全天摘要（#vtlSum）复用同一套类，故不限定在 .vbubble 内。
+   事件气泡里的类别摘要复用同一套类（0.9.89 起顶部不再有全天摘要行），故不限定在 .vbubble 内。
    色片类名用 cd 不用 d：.vbubble .row .d 是「播放 ▸」，会撞 */
 .clsw{display:inline-flex;align-items:center;gap:3px;font-weight:600;white-space:nowrap}
 .clsw .cd{display:block;width:8px;height:3px;border-radius:2px;flex:0 0 auto}
@@ -1060,10 +1099,20 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
   color:var(--danger);background:var(--surface);border-radius:4px;padding:1px 3px;font-variant-numeric:tabular-nums}
 /* 回放页菜单栏：更矮更轻（仅回放页，不动其它页的 .hdr） */
 #page-play .hdr{padding:3px 16px 7px}
-.vtlzoom{display:flex;align-items:center;gap:3px;margin-left:auto}
-.vtlzoom button{width:26px;height:24px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text2);font-size:15px;line-height:1;cursor:pointer;padding:0}
+/* 时间轴缩放（0.9.89）：原来占卡片顶上单独一行（标题｜摘要｜− ×1.0 ＋），
+   现改为贴时间轴最右侧、竖向居中的悬浮胶囊，那行高度整个让给时间轴。
+   「＋ / 倍率 / −」竖排：与时间轴上下滚动的方向一致，拇指操作不别扭。 */
+.vtlzoom{position:absolute;right:10px;top:50%;transform:translateY(-50%);z-index:4;
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:5px 4px;border-radius:13px;background:var(--surface);border:1px solid var(--line);
+  box-shadow:0 6px 18px rgba(10,14,22,.14);transition:opacity .12s}
+.vtlzoom button{width:30px;height:28px;border-radius:9px;border:1px solid var(--line);
+  background:var(--surface);color:var(--text2);font-size:15px;line-height:1;cursor:pointer;padding:0}
 .vtlzoom button:active{background:var(--fill)}
 .vtlzoom b{font-size:10.5px;color:var(--muted);min-width:34px;text-align:center;font-weight:600}
+/* 事件气囊从 left:114px 铺开、最宽 272px，会横穿到右侧缩放胶囊上：
+   气囊打开期间把缩放藏起来，别让两个浮层叠在一起 */
+.vtlcard.bubbleopen .vtlzoom{opacity:0;pointer-events:none}
 /* 回放页固定布局：画面区/控制条固定，时间轴卡吃满剩余高度（vtlscroll 内部滚动）。
    不用整页滚动——固定高 flex 列里 pstage 会被压扁（实测 205px→68px）。 */
 .vtlcard{margin:10px 12px 12px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 12px 6px;flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
@@ -1091,6 +1140,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .pstage video.on{opacity:1}
 .pstage .pbig{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:rgba(0,0,0,.28);font-size:13px;cursor:pointer;z-index:2}
 .pstage .pbig.off{display:none}
+/* 暂停浮层（0.9.88）：画面中央的胶囊继续键，只在"已开始播且暂停"时出现。
+   不做整屏变暗（那是未开播的 .pbig 才需要），只让按钮自己浮在画面上。 */
+.pstage .pfloat{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;
+  display:none;align-items:center;gap:8px;padding:9px 15px;border:1px solid rgba(255,255,255,.28);
+  border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:12.5px;font-family:inherit;
+  line-height:1;cursor:pointer;backdrop-filter:blur(4px);box-shadow:0 8px 22px rgba(0,0,0,.4)}
+.pstage .pfloat.on{display:flex}
+.pstage .pfloat svg{width:20px;height:20px;fill:#fff;display:block;flex:0 0 auto}
+.pstage .pfloat:active{transform:translate(-50%,-50%) scale(.96);opacity:.85}
 /* 操作条：画面区外的下方（不遮画面）；全屏时同栏变渐变底白字 */
 .pops{position:relative;display:flex;align-items:center;gap:4px;margin:8px 12px 0;flex:0 0 auto}
 .pbtn{height:30px;min-width:32px;border:0;background:none;color:var(--text2);cursor:pointer;padding:0 4px;
@@ -1124,7 +1182,17 @@ body.fsmode #page-play.on .pcat button.on{background:rgba(255,255,255,.94);color
    图例本身就是「位置语义」的说明书。AI 没开（台账无 cls）时两个 AI 类别降透明度 */
 .evlegend{display:flex;align-items:center;gap:11px;margin:7px 12px 0;flex:0 0 auto;
   font-size:10px;color:var(--faint2);line-height:1}
-.evlegend .lg{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.evlegend .lg{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;
+  border:1px solid transparent;background:none;color:inherit;font:inherit;line-height:1;
+  padding:3px 8px;border-radius:20px;cursor:default}
+/* 活动模式下图例本身就是筛选器（0.9.88）：选中项裹蓝色胶囊底，
+   不再单开一行「只看…」chips。全时模式下保持只读。 */
+.evlegend.actmode .lg{cursor:pointer}
+.evlegend.actmode .lg:active{opacity:.72}
+.evlegend.actmode .lg.on{background:var(--primary);border-color:var(--primary);color:#fff;
+  text-shadow:none}
+.evlegend.actmode .lg.on .d{background:rgba(255,255,255,.30)}
+.evlegend.noai.actmode .lg.ai.on{opacity:.55}   /* AI 没数据时即便勾上也留"未启用"暗示 */
 .evlegend .lg .d{position:relative;display:block;width:18px;height:6px;border-radius:2px;flex:0 0 auto;
   background:var(--track)}
 .evlegend .lg .d i{position:absolute;top:2px;display:block;height:2px;border-radius:1px}
@@ -1171,9 +1239,15 @@ body.fsmode #page-play.on .vtlcard{position:absolute;left:0;right:0;
   background:transparent;border:0;border-radius:0;padding:8px 14px 4px;
   box-shadow:none;transition:opacity .18s,transform .18s}
 body.fsmode #page-play.on .vtlscroll{background:transparent}
-body.fsmode #page-play.on .heatcap{color:rgba(255,255,255,.72);text-shadow:0 1px 2px rgba(0,0,0,.7)}
-body.fsmode #page-play.on .heatcap b{color:#fff}
-body.fsmode #page-play.on .vtlzoom b{color:rgba(255,255,255,.75)}
+/* 全屏时背景是视频画面：缩放胶囊要自带深色底才看得清；
+   全天统计行只在这一刻露出来（白字 + 投影，压在画面上也读得清） */
+body.fsmode #page-play.on .vtlstat{display:flex;color:rgba(255,255,255,.74);text-shadow:0 1px 2px rgba(0,0,0,.7)}
+body.fsmode #page-play.on .vtlstat b{color:#fff}
+body.fsmode #page-play.on .vtlzoom{background:rgba(18,22,30,.84);border-color:rgba(255,255,255,.22);
+  box-shadow:0 8px 22px rgba(0,0,0,.5)}
+body.fsmode #page-play.on .vtlzoom button{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.26);color:#fff}
+body.fsmode #page-play.on .vtlzoom b{color:rgba(255,255,255,.78)}
+body.fsmode #page-play.on .vtlnote{color:rgba(255,255,255,.78);text-shadow:0 1px 2px rgba(0,0,0,.7)}
 body.fsmode #page-play.on .vtl .vhour{color:rgba(255,255,255,.66);
   border-top-color:rgba(255,255,255,.28);text-shadow:0 1px 2px rgba(0,0,0,.65)}
 /* 未录制的底轨在画面上是浅灰块，透明底时太扎眼——压成半透明白 */
@@ -1320,6 +1394,10 @@ body.rot .vtlscroll{touch-action:none}
         <video id="playVidA" playsinline preload="auto"></video>
         <video id="playVidB" playsinline preload="auto"></video>
         <div class="pbig" id="playBig"><span>▶ 点按开始回放</span></div>
+        <!-- 暂停时浮在画面中央的继续键（0.9.88）：不再只有底栏那颗小按钮 -->
+        <button class="pfloat" id="playPauseFloat" type="button" aria-label="继续播放">
+          <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5l11 7-11 7z"/></svg><span>已暂停 · 点按继续</span>
+        </button>
         <div class="vspop" id="vspop"></div>
       </div>
       <!-- 操作条：画面区外的下方，不遮画面；全屏时同栏保留（渐变底） -->
@@ -1341,33 +1419,33 @@ body.rot .vtlscroll{touch-action:none}
            时间轴上不命中的时段同步变淡。图例行常驻：每项带一枚迷你车道图示，
            色片位置就是时间轴里的实际位置（左 1/3 / 中 1/3 / 右 1/3） -->
       <div class="pvcatwrap">
-        <div class="pcat" id="pvCatRow">
-          <span class="pcatlab">只看</span>
-          <button data-pvcls="motion">移动侦测</button>
-          <button data-pvcls="person">人员</button>
-          <button data-pvcls="vehicle">车辆</button>
-        </div>
-        <!-- 默认带 noai（AI 类别降透明度）：等台账回来确认真有 AI 事件再点亮，
-             不摆用不上的色 -->
+        <!-- 图例即筛选（0.9.88）：不再单开一行「只看…」chips。活动模式下直接点图例
+             切换类别，选中项套蓝色胶囊底；全时模式下它只是配色对照表（不可点）。
+             默认带 noai（AI 类别降透明度）：等台账回来确认真有 AI 事件再点亮。 -->
         <div class="evlegend noai" id="evLegend">
-          <span class="lg"><i class="d mot"><i class="c-motion"></i></i>移动侦测</span>
-          <span class="lg ai"><i class="d per"><i class="c-person"></i></i>人员</span>
-          <span class="lg ai"><i class="d veh"><i class="c-veh"></i></i>车辆</span>
+          <button type="button" class="lg" data-pvcls="motion"><i class="d mot"><i class="c-motion"></i></i>移动侦测</button>
+          <button type="button" class="lg ai" data-pvcls="person"><i class="d per"><i class="c-person"></i></i>人员</button>
+          <button type="button" class="lg ai" data-pvcls="vehicle"><i class="d veh"><i class="c-veh"></i></i>车辆</button>
         </div>
       </div>
       <div class="vtlcard" id="vtlCard">
-        <div class="heatcap">
-          <b id="vtlTitle">全天</b>
-          <span id="vtlSum"></span>
-          <div class="vtlzoom">
-            <button id="btnVtlOut" aria-label="缩小">−</button>
-            <b id="vtlPct">×1.0</b>
-            <button id="btnVtlIn" aria-label="放大">＋</button>
-          </div>
+        <!-- 0.9.89 瘦身：原来顶上那行「全天 ｜ N 个活动 · 累计… ｜ − ×1.0 ＋」在非全屏
+           不再常驻（把约 32px 高度让给时间轴）。① 缩放改为贴最右侧、竖向居中的悬浮胶囊；
+           ② 全天统计整行移到 .vtlstat，只在全屏露出（见下方）；③「暂无活动 / 读取失败」
+           这类提示由 #vtlNote 覆盖显示，不占位。 -->
+        <div class="vtlzoom" id="vtlZoom">
+          <button id="btnVtlIn" aria-label="放大">＋</button>
+          <b id="vtlPct">×1.0</b>
+          <button id="btnVtlOut" aria-label="缩小">−</button>
         </div>
+        <!-- 全天统计（0.9.89）：非全屏不占位（高度全给时间轴），全屏时再露出来——
+             全屏本来就把时间轴浮在画面上方，这一行信息（活动数 / 累计时长 / 各类别
+             计数）值得保留，别为了腾高度把它彻底删掉。 -->
+        <div class="vtlstat" id="vtlStat"><b>全天</b><span id="vtlSum"></span></div>
         <div class="vtlscroll" id="vtlScroll">
           <div class="vtl" id="vtl"></div>
         </div>
+        <div class="vtlnote" id="vtlNote" hidden></div>
         <!-- 固定时刻线：钉在滚动视口自下而上 2/3 高度处，播放时时间轴内容在它下面滚动 -->
         <div class="vnowline" id="vnowline"><em id="vnowTime">--:--:--</em><i></i></div>
       </div>
@@ -2451,6 +2529,9 @@ document.querySelectorAll(".tb").forEach(b=>{
     });
     const big = document.getElementById("playBig");
     if(big) big.addEventListener("click", e=>{ e.stopPropagation(); pvResume(); });
+    /* 暂停浮层：点它继续播。stopPropagation 防止再触发 stage 的"轻点=切换" */
+    const pf = document.getElementById("playPauseFloat");
+    if(pf) pf.addEventListener("click", e=>{ e.stopPropagation(); pvResume(); });
   }
   /* 全屏：整个回放页进全屏（画面铺满，时间轴/操作条悬浮），横屏锁 + 旋转兑底复用既有基建 */
   const bf = document.getElementById("btnPlayFull");
@@ -2481,6 +2562,8 @@ document.querySelectorAll(".tb").forEach(b=>{
   document.querySelectorAll("[data-pvcls]").forEach(b=>{
     b.onclick = e=>{
       e.stopPropagation();
+      /* 图例即筛选（0.9.88）：只有「活动」模式才可点。全时模式它就是配色对照表。 */
+      if(PPLAY.filter !== "act"){ toast("toast2", "切到「活动」筛选后，点图例可按类别过滤"); return; }
       const k = b.dataset.pvcls;
       if(!(k in PPLAY.cls)) return;
       const next = Object.assign({}, PPLAY.cls);
@@ -3702,7 +3785,7 @@ function snapSt(camId){
   let st = snapState[camId];
   /* live/frozen：实时流的时刻追踪 —— 流活着右上角跟当前钟走；
      流断了冻结在断流那一刻（frozen 记下断流时间），不继续假装在走 */
-  if(!st) st = snapState[camId] = { at:0, since:0, pend:false, fails:0, shownAt:0, live:false, frozen:0 };
+  if(!st) st = snapState[camId] = { at:0, since:0, pend:false, fails:0, shownAt:0, live:false, frozen:0, lastSrc:"" };
   return st;
 }
 const SNAP_FAIL_MS = 3000;       // 一次请求超过这个时间没结果就算超时（RTSP 拉不起来时不能干等）
@@ -3733,11 +3816,20 @@ function pullSnap(camId, img, onDone){
       st.shownAt = token;
       st.fails = 0;
       st.since = 0;
+      st.lastSrc = img.src;                  // 记住这张图，重渲直播墙时先贴回去，不再闪"等待第一帧"
       img.parentNode && img.parentNode.classList.add("hasphoto");
     }else{
       st.fails += 1;
       if(!st.since) st.since = token;        // 失败起点，用来区分"偶发一次"和"一直不通"
-      img.parentNode && img.parentNode.classList.remove("hasphoto");
+      /* 曾经成功出过图就别把画面清空：冻结上一帧 + 角标显示"未更新"，
+         比整块翻回"等待第一帧"更像正常 NVR（0.9.88）。
+         恢复 lastSrc 会触发一次 onload，但 settled 已置真，不会误判成刷新成功。 */
+      if(st.lastSrc && img){
+        img.src = st.lastSrc;
+        img.parentNode && img.parentNode.classList.add("hasphoto");
+      }else{
+        img.parentNode && img.parentNode.classList.remove("hasphoto");
+      }
     }
     onDone && onDone(ok);
   };
@@ -4087,10 +4179,14 @@ function renderLive(){
     };
     wrap.appendChild(d);
     d._camIdx = i;
+    const snapImg = d.querySelector(".snap-img");
+    /* 重渲直播墙时（每次切回直播页都会）先把上一次成功的那张立刻贴回去：
+       同 URL，浏览器缓存里就有，不会先闪一下"等待第一帧"再出图（0.9.88） */
+    if(st.lastSrc && snapImg){ snapImg.src = st.lastSrc; d.classList.add("hasphoto"); }
     if(state.wallStream && ready){
       mountLiveStream(d, c, true);
     }else{
-      pullSnap(c.id, d.querySelector(".snap-img"), ok=>{
+      pullSnap(c.id, snapImg, ok=>{
         if(ok){
           const s = d.querySelector("[data-stamp]");
           if(s) s.textContent = snapTime(snapSt(c.id).shownAt);
@@ -4322,6 +4418,27 @@ function tickSnaps(dt){
   updateSnapLabels();
   syncLiveStamps();
 }
+
+/* 回到前台立刻补一次快照，不等下一次定时轮询（0.9.88）：
+   手机锁屏再打开、切到别的 App 再切回来，上一张往往已经旧了。
+   pullSnap 由 pend 去重，和 tickSnaps 撞上也不会叠请求。 */
+function refreshLiveSnapsNow(){
+  if(typeof activePage === "function" && activePage() !== "live") return;
+  document.querySelectorAll("#liveWrap .livecard").forEach(card=>{
+    const c = CAMERAS[card._camIdx];
+    if(!c) return;
+    if(state.wallStream && card.classList.contains("streaming") && !card.classList.contains("fallback")) return;
+    pullSnap(c.id, card.querySelector(".snap-img"), ok=>{
+      const s = ok ? card.querySelector("[data-stamp]") : null;
+      if(s) s.textContent = snapTime(snapSt(c.id).shownAt);
+      updateSnapLabels();
+    });
+  });
+}
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState === "visible") refreshLiveSnapsNow();
+});
+window.addEventListener("pageshow", ()=> refreshLiveSnapsNow());
 
 /* online 必须以服务端真实快照三态（/api/live 的 snap）为准：
    localStorage 里存的 online 是保存那一刻的静态值，服务端快照恢复后如果不回写，
@@ -7538,6 +7655,11 @@ const VTL_TOP = 30;                        // 顶部留 30px（0:00 刻度标签
 const VTL_PXH_DEF = 120, VTL_PXH_MIN = 30, VTL_PXH_MAX = 600;
 let vtlPxh = VTL_PXH_DEF;                  // 1 小时 = 120px（旧版 60 太挤，热点事件互相叠）
 let vtlData = null, vtlDay = null;         // 最近一次台账缓存，缩放重绘时复用
+/* 事件线 → 气泡的连接曲线（0.9.90）：svg 层与 #vtl 内容同层，path 里直接写内容坐标
+   （不设 viewBox，避免被缩放），滚动由外层 vtlscroll 承担 —— 所以曲线天然跟着内容走。
+   vtlMarks 记下每个可点的横线标注（含它代表的事件组），供「播放扫过自动跟随」查表。 */
+const SVG_NS = "http://www.w3.org/2000/svg";
+let vtlWireSvg = null, vtlMarks = [];
 /* ---------- 上下留白（0.9.68）----------
    固定时刻线钉在视口自下而上 2/3 高度（距顶 1/3 处）。以前内容顶端只留 30px、
    底端 24px，于是滚动到两端时 00:00:00 / 24:00:00 还离时刻线很远 —— 想定位
@@ -7617,24 +7739,36 @@ function renderPlay(autoStart){
       if(!d || !d.ok) throw new Error((d && d.error) || "台账读取失败");
       renderVtl(d, day);
       const sum = d.summary || {count:0, active_sec:0};
+      /* 全天统计写进 #vtlSum：非全屏这行是 display:none（不占高度），全屏才露出。
+         有活动才写全（带各类别计数与色片）；一条都没有时留空，交给下面的
+         vtlNote 用一层浅提示说明原因——两处都写会重复。 */
       const sumEl = document.getElementById("vtlSum");
       if(sumEl){
-        /* 摘要用 innerHTML：全天各类别计数带色（与时间轴同色）。无 AI 数据时
-           这段为空串，摘要与旧版逐字一致 */
         sumEl.innerHTML = sum.count
           ? (sum.count + " 个活动 · 累计 " + durText(sum.active_sec) + clsDayText(d.events))
-          : "暂无活动记录（判定进行中，或这一路的缩时方案是「关闭」）";
+          : "";
       }
+      vtlNote(sum.count ? "" : "暂无活动记录（判定进行中，或这一路的缩时方案是「关闭」）");
       /* 图例：这天一条 AI 类别都没有（AI 没开 / 旧台账）→ 两个 AI 类别降透明度 */
       const lg = document.getElementById("evLegend");
       if(lg) lg.classList.toggle("noai", !clsDayText(d.events));
     }).catch(e=>{
       const sumEl = document.getElementById("vtlSum");
-      if(sumEl) sumEl.textContent = "台账读取失败";
+      if(sumEl) sumEl.textContent = "";      // 读失败不能留着上一次的统计冒充这一天的
+      vtlNote("台账读取失败");
       const lg = document.getElementById("evLegend");
       if(lg) lg.classList.add("noai");
       toast("toast2", String(e.message || e));
     });
+}
+
+/* 时间轴上的「没有内容」浅提示（0.9.89）：传空串 = 隐藏。
+   替代原来常驻在时间轴顶上那行摘要里的「暂无活动 / 读取失败」。 */
+function vtlNote(txt){
+  const el = document.getElementById("vtlNote");
+  if(!el) return;
+  el.textContent = txt || "";
+  el.hidden = !txt;
 }
 
 function renderPlayDates(){
@@ -7701,6 +7835,12 @@ function renderVtl(d, day, anchorSec, anchorY){
   if(d){ vtlData = d; vtlDay = day; }
   vtlBubbleHide();
   box.innerHTML = "";
+  vtlMarks = [];
+  vtlWireSvg = document.createElementNS(SVG_NS, "svg");
+  vtlWireSvg.setAttribute("class", "vtlwire");
+  vtlWireSvg.setAttribute("width", "100%");
+  vtlWireSvg.setAttribute("height", "100%");
+  box.appendChild(vtlWireSvg);
   vtlSyncPad();   // 上下留白先算：下面的坐标、高度、滚动定位全依赖它
   box.style.height = (vtlTop() + 24 * vtlPxh + vtlPadBot + 24) + "px";
   /* 刻度步进随缩放变精细：默认 120px/h 仍是 1 小时刻度，
@@ -7808,9 +7948,15 @@ function renderVtl(d, day, anchorSec, anchorY){
     el.className = "vmark" + (cnt > 1 ? " grp" : "") + (grpHit ? "" : " dim");
     el.style.top = vtlY(ev0.s) + "px";
     el.innerHTML = '<div class="lanes">' + vtlLanes(uk) + "</div>";
+    /* 0.9.91：簇内再按类别拆「分组」，气泡按分组分行、连线按分组各画一条。
+       单事件不建分组，保持旧气泡（详细时长 / 密度 / AI 计数 + 一条线到气泡腰）。 */
+    const list = cnt > 1 ? evs.slice(lo, hi + 1) : null;
+    const groups = list ? vtlClusterGroups(list) : null;
     el.onclick = e=>{ e.stopPropagation();
-      vtlBubbleShow(e.currentTarget, ev0, cnt > 1 ? evs.slice(lo, hi + 1) : null); };
+      vtlBubbleShow(e.currentTarget, ev0, list, groups); };
     box.appendChild(el);
+    /* 登记：跟随逻辑要按「红线落在哪个事件」找回对应的可点标注 */
+    vtlMarks.push({ el, ev0, list, groups });
     i = j + 1;
   }
   /* 时刻线不再画进内容层：改为固定在滚动视口垂直居中的 .vnowline（Aqara 式），
@@ -7876,20 +8022,31 @@ function syncVnowline(){
 }
 
 /* 运动佐证（0.9.69）：事件起止是不是帧差确认的。
-   mv=1 → 边界来自移动侦测（车真的进来了 / 真的走了）；
+   0.9.89 起不再为 mv=1（帧差确认的起止）追加任何文案——这是绝大多数事件的常态，
+   多一句只是噪声，还把气囊顶高一行。只保留真正需要解释的反常情况：
    mv=0 → 有帧差管线，但这段时间画面没动过（AI 可能误检，如实提示）；
-   mv=-1 / 缺 → 这条台账没有帧差数据，边界就是 AI 自己判的，不额外解释。 */
+   mv=1 / -1 / 缺 → 不解释。 */
 function mvText(ev){
   const mv = ev && ev.mv;
-  if(mv === 1) return '<div class="bi">起止由移动侦测确认（车来了 → 车走了）</div>';
   if(mv === 0) return '<div class="bi">这段时间画面没有变化 · AI 单独判定</div>';
   return "";
 }
 /* 标注气囊：点横线弹出（再点同一根 = 关）；列表行/播放钮直接跳播 */
 let vtlBubbleEl = null, vtlBubbleRef = null;
+/* 当前气泡如果是密集簇：groups = 按类别的分组表，vtlRowIdx = 正在播的那一行（-1 无）。
+   跟随只改这两样，不重建气泡（0.9.91）。 */
+let vtlBubbleGroups = null, vtlRowIdx = -1;
+/* 跟随换气泡时的「先关旧再开新」窗口（0.9.90）：置位期间不摘/不加 bubbleopen，
+   否则缩放胶囊会跟着闪一下。声明放这么前是因为 vtlBubbleHide 也要读它。 */
+let vtlSwapKeep = false, vtlFollowAt = 0;
 function vtlBubbleHide(){
   if(vtlBubbleEl){ vtlBubbleEl.remove(); vtlBubbleEl = null; }
   vtlBubbleRef = null;
+  vtlBubbleGroups = null; vtlRowIdx = -1;
+  if(vtlWireSvg) vtlWireSvg.innerHTML = "";   // 连线跟着气泡一起消失（0.9.90）
+  const card = document.getElementById("vtlCard");
+  /* 跟随切换时是「旧的先关、新的立刻开」：类不摘掉，缩放胶囊就不会跟着闪一下 */
+  if(card && !vtlSwapKeep) card.classList.remove("bubbleopen");
 }
 function densText(d){ return d >= 0.3 ? " · 高密度" : d >= 0.1 ? " · 中密度" : " · 低密度"; }
 /* 事件类别摘要（0.9.60）：台账 events_of 聚合出的各类别计数。
@@ -7926,14 +8083,33 @@ function clsDayText(evs){
     .filter(Boolean).join(' <span class="csep">·</span> ');
 }
 
-function vtlBubbleShow(anchor, ev0, list){
+function vtlBubbleShow(anchor, ev0, list, groups){
   const boxv = document.getElementById("vtl");
   if(!boxv || !anchor) return;
   if(vtlBubbleRef === anchor){ vtlBubbleHide(); return; }
   vtlBubbleHide();
   const el = document.createElement("div");
-  el.className = "vbubble";
-  if(list){
+  /* 描边 = 事件类型色（0.9.90）：与连到它的曲线同色，一眼对上「这根线说的是这件事」。
+     密集簇是多类型混在一起，不套单色描边（否则等于宣称「这簇只有这一类」）。 */
+  const clu = !!(groups && groups.length);
+  el.className = "vbubble" + (clu ? "" : " k-" + evLaneKey(ev0));
+  if(clu){
+    /* 0.9.91 密集簇：按类别分行（行序 = 车道序），每行一条连线。
+       同一类别的多起合并进一行数字 —— 气泡高度与事件数解耦，30 个事件也还是三行。
+       不做逐条展开：3 秒内挤 8 个事件时逐条本来也选不准，展开还会改行高、
+       把已经画好的连线落点带歪。 */
+    let html = '<div class="bt">' + hms(list[0].s) + " 附近 · " + list.length + " 个事件</div>";
+    groups.forEach(g=>{
+      let sum = 0;
+      g.evs.forEach(e=> { sum += Math.max(0, (e.e || e.s) - e.s); });
+      html += '<div class="row" data-t="' + Math.max(0, g.ev0.s - PV_ROLL) + '">'
+        + '<i class="bul ' + g.key + '"></i>'
+        + '<b class="lab">' + laneLabel(g.key) + '</b>'
+        + '<span class="cnt">' + g.evs.length + " 个 · 共 " + durText(sum) + '</span>'
+        + '<span class="d">播放 ▸</span></div>';
+    });
+    el.innerHTML = html;
+  }else if(list){
     let html = '<div class="bt">' + hms(list[0].s) + " 附近 · " + list.length + " 个事件</div>";
     list.forEach(ev=>{
       html += '<div class="row" data-t="' + Math.max(0, ev.s - PV_ROLL) + '"><b>' + hms(ev.s) + '</b>'
@@ -7950,6 +8126,12 @@ function vtlBubbleShow(anchor, ev0, list){
   el.style.top = (parseFloat(anchor.style.top) + 10) + "px";
   boxv.appendChild(el);
   vtlBubbleEl = el; vtlBubbleRef = anchor;
+  /* 跟随高亮的分组表：红线在簇内移动时只换「亮哪一行」，不重建气泡 */
+  vtlBubbleGroups = clu ? groups : null;
+  vtlRowIdx = -1;
+  /* 气囊会横穿到右侧缩放胶囊上（0.9.89）：这期间把胶囊淡出 */
+  const card = document.getElementById("vtlCard");
+  if(card && !vtlSwapKeep) card.classList.add("bubbleopen");
   el.querySelectorAll("[data-t]").forEach(x=> x.onclick = e=>{
     e.stopPropagation();
     if(pvPlayAt(+x.dataset.t)) vtlBubbleHide();
@@ -7961,6 +8143,129 @@ function vtlBubbleShow(anchor, ev0, list){
     if(top + bh > sc.scrollTop + sc.clientHeight)
       el.style.top = Math.max(sc.scrollTop, sc.scrollTop + sc.clientHeight - bh - 8) + "px";
   }
+  /* 位置定稿后再画连线：上提会改变气泡位置，线必须照最终位置连。
+     簇内多条线把线宽降一档，三条并排时不至于糊成一片。 */
+  const bubTop = parseFloat(el.style.top) || 0;
+  if(vtlWireSvg && vtlWireSvg.classList) vtlWireSvg.classList.toggle("multi", clu);
+  vtlWireDraw(anchor, ev0, groups, bubTop);
+  /* 暂停态点开也要立即亮出「现在红线在哪一行」 */
+  if(clu) vtlRowHi(PPLAY.on ? PPLAY.t : ev0.s);
+}
+
+/* 事件该算在哪一道：取最右命中的那一格（车辆 > 人员 > 移动侦测），
+   线越短越不碍眼；三格 x 与 CSS `.vtl .vmark .lanes i` 的 left 严格对应 */
+function evLaneKey(ev){
+  const k = evKind(ev);
+  if(k.vehicle) return "vehicle";
+  if(k.person) return "person";
+  return "motion";
+}
+const VTL_LANE_X = { motion: 65, person: 85, vehicle: 105 };   // 46 + 格位(0/20/40) + 格宽 19
+const VTL_BUBBLE_X = 132;    // 与 CSS .vbubble 的 left 必须一致（有测试对账）
+/* 行序固定按车道序（移动 → 人员 → 车辆），不按时间排。
+   这是「曲线永不交叉」的唯一保证：左边车道配上面行，右边车道配下面行，
+   同一簇里的几条线各自单调下降，互相不会穿插。 */
+const VTL_LANE_ORDER = ["motion", "person", "vehicle"];
+function laneLabel(k){
+  return k === "vehicle" ? "车辆" : k === "person" ? "人员" : "移动侦测";
+}
+/* 把一簇事件按类别拆成分组（0.9.91）。evLaneKey 每个事件只归一道，
+   所以这里是不重不漏的划分；空类别不占行，最多三行。 */
+function vtlClusterGroups(list){
+  const out = [];
+  VTL_LANE_ORDER.forEach(k=>{
+    const evs = (list || []).filter(ev=> evLaneKey(ev) === k);
+    if(evs.length) out.push({ key: k, evs, ev0: evs[0] });
+  });
+  return out;
+}
+/* 气泡分行的坐标：只靠注释里的固定值算，不量 DOM。
+   padding-top 10 + 标题行高 18 + 行 margin 2 + 行高 28 / 2 = 44，行距 = 28 + 2 = 30。
+   CSS 里 .bt 的 line-height 与 .row 的 height 必须与这两个数一致（有测试对账）。 */
+const VTL_ROW_Y0 = 44, VTL_ROW_PITCH = 30;
+
+/* 画「事件线尾 → 气泡」的柔和曲线。
+   单事件：一条，起点 = 该事件车道格右端，终点 = 气泡左腰（0.9.90 的行为，不变）。
+   密集簇：每种类别一条（最多 3 条），终点 = 气泡里该类别的行中线（0.9.91）。
+   控制点各取水平差的 45%，保证 c1 < c2，两端都是水平切线，S 形不会反折。
+   气泡被上提夹紧时垂直差变大，曲线自然拉长 —— 这正是选曲线而非直线的理由。 */
+function vtlWireDraw(anchor, ev, groups, bubTop){
+  if(!vtlWireSvg) return;
+  vtlWireSvg.innerHTML = "";
+  if(!anchor || !ev || !vtlBubbleEl) return;
+  const r = v => Math.round(v * 10) / 10;
+  const top = parseFloat(anchor.style.top) || 0;
+  const y1base = bubTop == null ? (parseFloat(vtlBubbleEl.style.top) || top) : bubTop;
+  const draw = (kind, y1)=>{
+    const x0 = VTL_LANE_X[kind] || VTL_LANE_X.motion;
+    const x1 = VTL_BUBBLE_X;
+    const dx = x1 - x0;
+    const c1 = x0 + dx * 0.45, c2 = x1 - dx * 0.45;
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", "M" + r(x0) + " " + r(top)
+      + " C" + r(c1) + " " + r(top) + " " + r(c2) + " " + r(y1) + " " + r(x1) + " " + r(y1));
+    path.setAttribute("class", "w-" + kind);
+    /* 起点小圆点：气泡被上提、垂直差很大时，一眼看出线是从哪一刻出发的 */
+    const dot = document.createElementNS(SVG_NS, "circle");
+    dot.setAttribute("cx", r(x0));
+    dot.setAttribute("cy", r(top));
+    dot.setAttribute("r", "2.6");
+    dot.setAttribute("class", "d-" + kind);
+    vtlWireSvg.appendChild(path);
+    vtlWireSvg.appendChild(dot);
+  };
+  if(groups && groups.length){
+    /* 起点与终点都随分组下标单调排列，所以多条线只会并流分开、不会交叉 */
+    groups.forEach((g, i)=> draw(g.key, y1base + VTL_ROW_Y0 + i * VTL_ROW_PITCH));
+    return;
+  }
+  const bh = vtlBubbleEl.offsetHeight || 90;
+  draw(evLaneKey(ev), y1base + bh / 2);
+}
+
+/* 播放扫过自动跟随（0.9.90）：红线进入某个事件的起止区间，就把气泡与连线一起切过去。
+   三条自我约束，缺一条都会变得很烦人：
+   ① 只在用户已经点开过气泡时跟随 —— 不主动弹（需求：只有点击才开始连线）；
+   ② 只在真正播放中跟随 —— 暂停后手动拖时间轴是「我要看这条」，不许被抢；
+   ③ 300ms 迟滞 + 红线落在事件之外时保持原样 —— 相邻事件边界不会来回抖。 */
+function vtlFollow(tSec){
+  if(!vtlBubbleEl || !vtlMarks.length) return;
+  if(!PPLAY.on || !pvCur || pvCur.paused || pvCur.ended) return;
+  if(Date.now() - vtlHold < 2000) return;      // 用户刚拖过，2 秒内不抢
+  let hit = null;
+  for(const m of vtlMarks){
+    const list = m.list || [m.ev0];
+    if(list.some(ev=> ev.s <= tSec && tSec <= ev.e)){ hit = m; break; }
+  }
+  if(!hit || vtlBubbleRef === hit.el) return;
+  const now = Date.now();
+  if(now - vtlFollowAt < 300) return;
+  vtlFollowAt = now;
+  vtlSwapKeep = true;                          // 换气泡期间别让缩放胶囊闪
+  try{ vtlBubbleShow(hit.el, hit.ev0, hit.list, hit.groups); }
+  finally{ vtlSwapKeep = false; }
+}
+
+/* 簇内行高亮（0.9.91）：红线在簇内移动时，不换气泡，只把「现在播到哪一类」那一行点亮。
+   密集簇里按事件换气泡会 1~2 秒闪一次；按簇保持 + 行高亮，切换次数从事件数降到簇数。
+   行命中口径与连线/筛选一致：该行的任一事件起止区间含当前时刻。 */
+/* 红线此刻落在哪一行（-1 = 不在一簇内）。抽成纯函数是为了能直接测：
+   命中口径 = 该行任一事件的起止区间含当前时刻，与连线、筛选同一口径。 */
+function vtlRowIdxAt(groups, tSec){
+  if(!groups || !groups.length) return -1;
+  for(let i = 0; i < groups.length; i++){
+    if(groups[i].evs.some(ev=> ev.s <= tSec && tSec <= ev.e)) return i;
+  }
+  return -1;
+}
+function vtlRowHi(tSec){
+  if(!vtlBubbleEl || !vtlBubbleGroups) return;
+  const idx = vtlRowIdxAt(vtlBubbleGroups, tSec);
+  if(idx === vtlRowIdx) return;
+  vtlRowIdx = idx;
+  const rows = vtlBubbleEl.querySelectorAll ? vtlBubbleEl.querySelectorAll(".row") : [];
+  if(!rows || !rows.forEach) return;
+  rows.forEach((r, i)=> { if(r && r.classList) r.classList.toggle("on", i === idx); });
 }
 
 /* 0.9.67 起取消「播放落点胶囊」：以前手指点到时间轴某处（正好落在活动上）
@@ -8425,6 +8730,9 @@ function pvSyncOsd(){
 function pvSyncCtl(){
   const big = document.getElementById("playBig");
   if(big) big.classList.toggle("off", PPLAY.on);
+  /* 暂停浮层：已开始播 + 当前暂停时浮现（未开播交给 .pbig，不重复长按钮） */
+  const pf = document.getElementById("playPauseFloat");
+  if(pf) pf.classList.toggle("on", !!(PPLAY.on && pvCur && pvCur.paused && !pvCur.ended));
   /* 全屏时：播放中隐藏时间轴悬浮层，暂停恢复（CSS 由 pvplaying 类驱动）。
    注意用「正在播」而不是 PPLAY.on：暂停后要能看到时间轴拖动跳转 */
   const pg = document.getElementById("page-play");
@@ -8432,11 +8740,13 @@ function pvSyncCtl(){
   if(pg) pg.classList.toggle("pvplaying", nowPlaying);
   document.querySelectorAll("[data-pvfilter]").forEach(x=>
     x.classList.toggle("on", x.dataset.pvfilter === PPLAY.filter));
-  /* 活动类别筛选：只在活动模式显示；勾选态跟着 PPLAY.cls */
-  const catRow = document.getElementById("pvCatRow");
-  if(catRow) catRow.classList.toggle("on", PPLAY.filter === "act");
-  document.querySelectorAll("[data-pvcls]").forEach(x=>
-    x.classList.toggle("on", !!PPLAY.cls[x.dataset.pvcls]));
+  /* 活动类别筛选：图例即筛选（0.9.88）——只有活动模式可点，选中项亮蓝色胶囊；
+     全时模式保持只读（actmode 不加，.on 也不加） */
+  const evl = document.getElementById("evLegend");
+  const actMode = PPLAY.filter === "act";
+  if(evl) evl.classList.toggle("actmode", actMode);
+  document.querySelectorAll("#evLegend [data-pvcls]").forEach(x=>
+    x.classList.toggle("on", actMode && !!PPLAY.cls[x.dataset.pvcls]));
   /* 播放/暂停图标随真实状态变（暂停/切分片/快进都会触发 pause 事件） */
   const ico = document.getElementById("playTogIco");
   if(ico){
@@ -8455,6 +8765,11 @@ function pvSyncVtl(){
   if(sc && PPLAY.on && Date.now() - vtlHold > 2000)
     sc.scrollTop = Math.max(0, vtlY(PPLAY.t) - Math.round(sc.clientHeight / 3));
   syncVnowline();
+  /* 红线扫过事件 → 气泡与连线自动跟随（0.9.90）。放在滚动之后：
+     换气泡要用最新的 scrollTop 判断是否上提 */
+  vtlFollow(PPLAY.t);
+  /* 簇内不换气泡，只点亮「现在播到哪一类」那一行（0.9.91） */
+  vtlRowHi(PPLAY.t);
 }
 
 /* 换机位/换日期：停播并重装分片清单 */

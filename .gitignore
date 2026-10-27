@@ -16,6 +16,14 @@ st*.json
 lg*.json
 log.json
 
+# 真机观测采集与打包暂存目录（_obs 为 observe.py 的 jsonl 采样，
+# _stage/_st3/_s4 为历史 fpk 解包暂存，_dbg 为本地复现夹具）
+NVR-ARM/_obs/
+NVR-ARM/_stage/
+NVR-ARM/_st3/
+NVR-ARM/_s4/
+NVR-ARM/_dbg/
+
 # 构建产物 fpk：单个约 100MB，dist 累计 1.1GB，不入库（按需 build.sh 生成）
 dist/
 *.fpk

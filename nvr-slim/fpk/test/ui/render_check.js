@@ -14,20 +14,30 @@ const code = blocks[blocks.length - 1].replace(/^<script>/, "").replace(/<\/scri
 
 /* 记录所有 createElement 产物：appendChild 是空转，只能自己收 */
 const made = [];
-const mk = id => {
+const mk = (id, isSvg) => {
   const el = {
     id, _html: "", className: "", style: {}, dataset: {},
     classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
     textContent: "", onclick: null,
-    appendChild(){}, querySelectorAll(){ return []; }
+    appendChild(){}, remove(){}, querySelectorAll(){ return []; }
   };
+  if(isSvg){ el.ns = ""; el.attrs = {}; el.children = [];
+    el.setAttribute = (k, v) => { el.attrs[k] = String(v); };
+    el.getAttribute = k => el.attrs[k];
+    el.appendChild = ch => { el.children.push(ch); };
+  }
   Object.defineProperty(el, "innerHTML", {
     get(){ return el._html; },
-    set(v){ el._html = String(v); }
+    /* SVG 桩里清空内容要真的清 child 列表：连线重画走的就是 innerHTML = ""，
+       否则上一个气泡的曲线会残留在断言里 */
+    set(v){ el._html = String(v); if(isSvg && !v) el.children.length = 0; }
   });
   return el;
 };
 document.createElement = tag => { const el = mk(tag); made.push(el); return el; };
+/* SVG 元素桩（0.9.90）：renderVtl 会建一张 <svg> 承载「事件线 → 气泡」的曲线，
+   path/circle 的属性存进 attrs，供断言 d 与 class */
+document.createElementNS = (ns, tag) => mk(tag, true);
 
 const ctx = vm.createContext(global);
 vm.runInContext(code, ctx, { filename: "index.html" });
@@ -220,10 +230,101 @@ ck("evKind：mv 不参与类别判定（有 AI 类别时橙格不亮，与 pvCls
 ck("evKind 与 pvClsMatch 对「移动侦测」完全同口径（同一个事件两边判定必须一致）",
    JSON.parse(run("JSON.stringify([{cls:{person:1,vehicle:1},mv:1},{cls:{vehicle:2},mv:1},{cls:{},mv:1}].map(e=>[evKind(e).motion, !!(e.cls.person||e.cls.vehicle)]))"))
      .every(([m, hasAi]) => m === !hasAi));
-ck("mvText：佐证 / 无变化 / 无从判断三种措辞，最后一种不显示",
-   run("mvText({ mv:1 })").includes("移动侦测确认")
-   && run("mvText({ mv:0 })").includes("画面没有变化")
+ck("mvText：只有「画面没动」才提示，帧差确认的起止（mv=1）不再啰嗦",
+   run("mvText({ mv:0 })").includes("画面没有变化")
+   && run("mvText({ mv:1 })") === ""
    && run("mvText({ mv:-1 })") === "" && run("mvText({})") === "");
+
+/* 事件线 → 气泡的柔和曲线（0.9.90）：点开一条事件后真跑一遍，检查 path 与端点 */
+const wire = JSON.parse(run(`(function(){
+  const evs = (vtlData && vtlData.events) || [];
+  const ev = evs.filter(x => evLaneKey(x) === "vehicle")[0] || evs[0];
+  if(!ev) return JSON.stringify({ skip:true });
+  vtlBubbleShow({ style: { top: "36000" } }, ev, null);
+  const kids = (vtlWireSvg && vtlWireSvg.children) || [];
+  const p = (kids[0] && kids[0].attrs) || {}, dot = (kids[1] && kids[1].attrs) || {};
+  return JSON.stringify({ d: p.d || "", cls: p.class || "", dot: dot.class || "",
+                          kind: evLaneKey(ev),
+                          bub: (vtlBubbleEl && vtlBubbleEl.className) || "" });
+})()`));
+const LANE_X = { motion: 65, person: 85, vehicle: 105 };
+ck("连线·从该事件所在车道的线尾起笔，终点落在气泡左腰 x=132",
+   !wire.skip && wire.d.indexOf("M" + LANE_X[wire.kind] + " ") === 0
+   && /\s132\s/.test(wire.d) && wire.d.indexOf(" C") > 0);
+ck("连线·颜色跟着事件类型走（路径与起点圆点同一类型色）",
+   !wire.skip && wire.cls === "w-" + wire.kind && wire.dot === "d-" + wire.kind);
+ck("气泡·描边与连到它的曲线同色", !wire.skip && wire.bub === "vbubble k-" + wire.kind);
+ck("连线·三格起点 65 / 85 / 105（与 .lanes i 的 left 0/20/40 + 19 一致）",
+   run(`JSON.stringify([{cls:{}},{cls:{person:1}},{cls:{vehicle:1}}].map(e => VTL_LANE_X[evLaneKey(e)]))`)
+     === "[65,85,105]");
+ck("连线·气泡左边界常量与 CSS 的 .vbubble{left:132px} 一致",
+   src.includes(".vbubble{position:absolute;left:132px") && src.includes("VTL_BUBBLE_X = 132"));
+ck("跟随·三个保险都在：已开气泡 / 真在播 / 300ms 迟滞，并由播放同步驱动",
+   src.includes("if(!vtlBubbleEl || !vtlMarks.length) return;")
+   && src.includes("if(!PPLAY.on || !pvCur || pvCur.paused || pvCur.ended) return;")
+   && src.includes("if(now - vtlFollowAt < 300) return;")
+   && src.includes("vtlFollow(PPLAY.t)"));
+
+/* ---- 0.9.91：密集簇按类别分行 + 多条连线 ----
+   一簇里人车混在一起时，一条线说不清「这根线指的是哪件事」，所以改成
+   一类一条线、各落各自的行。这里真跑一遍簇气泡，检查分组顺序、线数、落点。 */
+const clu = JSON.parse(run(`(function(){
+  const list = [
+    { s:36000, e:36030, cls:{ vehicle:1 } },
+    { s:36004, e:36040, cls:{} },
+    { s:36008, e:36020, cls:{ person:1 } },
+    { s:36012, e:36050, cls:{ person:1 } }
+  ];
+  const groups = vtlClusterGroups(list);
+  vtlBubbleShow({ style:{ top:"36000" } }, list[0], list, groups);
+  const kids = (vtlWireSvg && vtlWireSvg.children) || [];
+  const ds = [], cs = [];
+  kids.forEach(k=>{ if(!k.attrs) return;
+    if(k.attrs.d) ds.push(k.attrs.d);
+    if(k.attrs.class) cs.push(k.attrs.class); });
+  return JSON.stringify({ order: groups.map(g=>g.key), cnt: groups.map(g=>g.evs.length),
+    ds, cs, bub:(vtlBubbleEl&&vtlBubbleEl.className)||"",
+    html:(vtlBubbleEl&&vtlBubbleEl.innerHTML)||"",
+    bt: parseFloat((vtlBubbleEl&&vtlBubbleEl.style.top)||"0") });
+})()`));
+const ROW0 = 44, PITCH = 30;
+ck("密集簇·按类别分行，行序 = 车道序（移动→人员→车辆），不按时间",
+   JSON.stringify(clu.order) === '["motion","person","vehicle"]'
+   && JSON.stringify(clu.cnt) === "[1,2,1]");
+ck("密集簇·每类一条线，起笔在各自车道 65/85/105，终点都落在气泡左缘 132",
+   clu.ds.length === 3
+   && clu.ds[0].indexOf("M65 ") === 0
+   && clu.ds[1].indexOf("M85 ") === 0
+   && clu.ds[2].indexOf("M105 ") === 0
+   && clu.ds.every(d=> / 132 [-0-9.]+$/.test(d)));
+ck("密集簇·三条线终点各在自己那一行中线（行距 30，不挤成一点）",
+   clu.ds.length === 3
+   && Math.abs(+clu.ds[0].split(" ").pop() - (clu.bt + ROW0)) < 0.6
+   && Math.abs(+clu.ds[1].split(" ").pop() - (clu.bt + ROW0 + PITCH)) < 0.6
+   && Math.abs(+clu.ds[2].split(" ").pop() - (clu.bt + ROW0 + 2 * PITCH)) < 0.6);
+ck("密集簇·线色与行首圆点都跟类别走；多类型不套单色描边（不冒充只有一类）",
+   clu.bub === "vbubble"
+   && JSON.stringify(clu.cs.filter(c=>c.indexOf("w-") === 0)) === '["w-motion","w-person","w-vehicle"]'
+   && clu.html.includes('class="bul motion"') && clu.html.includes('class="bul person"')
+   && clu.html.includes('class="bul vehicle"'));
+ck("密集簇·同类合并成一行（多个时刻不各占一行），气泡高度与事件数解耦",
+   clu.html.includes("4 个事件") && clu.html.includes("2 个 · 共")
+   && (clu.html.match(/class="row"/g) || []).length === 3
+   && !clu.html.includes("展开"));
+ck("密集簇·行高常量与 CSS 对账（标题 18 + 行 28 + margin 2 → Y0 44 / 行距 30）",
+   src.includes("line-height:18px}")
+   && src.includes(".vbubble .row{display:flex;align-items:center;gap:8px;height:28px;")
+   && src.includes("const VTL_ROW_Y0 = 44, VTL_ROW_PITCH = 30;"));
+ck("簇内跟随·只换高亮行不换气泡（切换次数从事件数降到簇数）",
+   src.includes("vtlRowHi(PPLAY.t)")
+   && src.includes("const idx = vtlRowIdxAt(vtlBubbleGroups, tSec);"));
+const hi = JSON.parse(run(`JSON.stringify([
+  vtlRowIdxAt(vtlClusterGroups([{s:0,e:10,cls:{}},{s:5,e:20,cls:{person:1}}]), 3),
+  vtlRowIdxAt(vtlClusterGroups([{s:0,e:10,cls:{}},{s:5,e:20,cls:{person:1}}]), 15),
+  vtlRowIdxAt(vtlClusterGroups([{s:0,e:10,cls:{}}]), 99),
+  vtlRowIdxAt(null, 5)])`));
+ck("簇内行命中：红线落在哪一类的事件里就亮哪一行，出簇为 -1",
+   JSON.stringify(hi) === "[0,1,-1,-1]");
 
 /* 筛选口径：三类互不重叠 */
 run("PPLAY.cls = { motion:false, person:false, vehicle:true };");

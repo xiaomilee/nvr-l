@@ -19,6 +19,7 @@
 """
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -48,6 +49,14 @@ class _LiveProc:
 
     def kill(self):
         self.killed = True
+
+    def wait(self, timeout=None):
+        """替身：默认「收到 SIGINT 就退出」（直接返回 0）。
+        要模拟僵死不退的用例，把 self._stubborn 置 True 让它抛 TimeoutExpired。"""
+        if getattr(self, "_stubborn", False):
+            raise subprocess.TimeoutExpired("ffmpeg", timeout)
+        self._rc = 0
+        return 0
 
     def exit(self):
         self._rc = 0
@@ -104,7 +113,7 @@ class TestTickStall(unittest.TestCase):
 
     def _stuck(self, r, cam, now, started):
         p = _LiveProc()
-        r.procs["c1"] = {"p": p, "day": "2026-10-26", "tries": 0, "stall": 0,
+        r.procs["c1"] = {"p": p, "day": recorder.datetime.date.today().isoformat(), "tries": 0, "stall": 0,
                          "next": 0, "started_at": started, "dead": None,
                          "sig": r._sig(cam)}
         return p
@@ -151,7 +160,7 @@ class TestTickStall(unittest.TestCase):
         recorder.ensure_day(tmp, "c1")
         now = 1_000_000.0
         p = _LiveProc()
-        r.procs["c1"] = {"p": None, "day": "2026-10-26", "tries": 0, "stall": 1,
+        r.procs["c1"] = {"p": None, "day": recorder.datetime.date.today().isoformat(), "tries": 0, "stall": 1,
                          "next": 0, "started_at": now, "dead": None,
                          "sig": r._sig(cam), "closing": p,
                          "close_at": now + recorder.KILL_SOFT_SEC, "close_round": 1}
@@ -175,7 +184,7 @@ class TestDirDeletedSelfHeal(unittest.TestCase):
         now = 1_000_000.0
         p = _LiveProc()
         # 刚启动 3 秒（远没到 STALL_SEC+30），但目录已经不在了
-        r.procs["c1"] = {"p": p, "day": "2026-10-26", "tries": 0, "stall": 0,
+        r.procs["c1"] = {"p": p, "day": recorder.datetime.date.today().isoformat(), "tries": 0, "stall": 0,
                          "next": 0, "started_at": now - 3, "dead": None,
                          "sig": r._sig(cam)}
         r._newest_age = lambda c: None
@@ -195,7 +204,7 @@ class TestDirDeletedSelfHeal(unittest.TestCase):
         recorder.ensure_day(tmp, "c1")
         now = 1_000_000.0
         p = _LiveProc()
-        r.procs["c1"] = {"p": p, "day": "2026-10-26", "tries": 0, "stall": 0,
+        r.procs["c1"] = {"p": p, "day": recorder.datetime.date.today().isoformat(), "tries": 0, "stall": 0,
                          "next": 0, "started_at": now - 3, "dead": None,
                          "sig": r._sig(cam)}
         r._newest_age = lambda c: None

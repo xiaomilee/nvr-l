@@ -35,6 +35,8 @@ global.document = {
   querySelectorAll(){ return []; },
   querySelector(){ return mkEl("qs"); },
   createElement(){ return mkEl("tmp"); },
+  /* SVG 元素（0.9.90 起 renderVtl 会建一张 <svg> 承载「事件线 → 气泡」的曲线） */
+  createElementNS(ns, tag){ return mkEl(tag || "svg"); },
   addEventListener(){},
   documentElement:{ dataset:{} },
   body:{ appendChild(){}, classList:{ add(){}, remove(){}, toggle(){} } }
