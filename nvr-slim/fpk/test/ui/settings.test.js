@@ -106,7 +106,7 @@ ck("编辑·未保存提示", h.includes("编辑中 · 未保存"));
 ck("手风琴·默认展第一段（名称与码流）", get('SET.acc') === "base"
    && h.includes('data-k="main"') && !h.includes('data-cond="1"'));
 ck("手风琴·四段标题齐全", (h.match(/data-acc="(base|keep|condense|mask)"/g) || []).length === 4);
-ck("手风琴·收起段标题带当前值", h.includes("全时 3 天") && h.includes("整段拼接 · 1× · 10 天"));
+ck("手风琴·收起段标题带当前值", h.includes("全时 3 天") && h.includes("事件侦测 · 仅台账"));
 ck("手风琴·删除收在编辑页底部", h.includes('data-delcam="') && h.includes("删除这个摄像头")
    && h.includes("已录的文件不会被删除"));
 run('SET.acc="keep"; renderCamTabs();');
@@ -114,17 +114,18 @@ h = body();
 ck("保留·全时天数 stepper", h.includes('data-ret="fullDays"'));
 ck("保留·分片长度 chips 六档", (h.match(/data-camseg="/g) || []).length === 6);
 ck("保留·缩时保留不在这段", !h.includes('data-ret="clipDays"'));
-ck("保留·指明缩时天数在缩时压制里", h.includes("缩时片段的保留天数在「缩时压制」里单独设"));
+ck("保留·指明归档保留天数在通用设置", h.includes("天数见通用设置的「归档保留」"));
 run('SET.acc="condense"; renderCamTabs();');
 h = body();
-/* 0.9.43：每路 condense 布尔总开关 → 缩时方案四选（follow/virtual/materialize/off），
-   切分/倍速/片段保留/影响预估收进 materialize 分支，虚拟模式给提示 */
-ck("缩时·展开后有方案四选", (h.match(/data-cmcam="/g) || []).length === 4);
-ck("缩时·方案行独立在首行", h.includes("缩时方案") && h.includes('data-cmcam="follow"'));
+/* 0.9.43→0.9.96：每路事件侦测方案三选（follow/virtual/off），materialize 不再 UI 暴露
+   （clipOut 物化切片仅配置可设），切分/倍速/片段保留收进 materialize 分支、虚拟模式给提示 */
+ck("事件侦测·展开后有方案三选", (h.match(/data-cmcam="/g) || []).length === 3);
+ck("事件侦测·方案行带三选项（跟随全局/开启/关闭）",
+   h.includes('data-cmcam="follow"') && h.includes('data-cmcam="virtual"') && h.includes('data-cmcam="off"'));
 ck("缩时·跟随全局（虚拟）时物化专属行隐藏",
    !h.includes('data-clipmode="join"') && !h.includes('data-ret="clipDays"')
    && (h.match(/data-speed="\d"/g) || []).length === 0);
-ck("缩时·虚拟模式有提示", h.includes("虚拟缩时"));
+ck("事件侦测·虚拟(仅台账)模式有提示", h.includes("仅台账"));
 /* 0.9.61：判读参数从「缩时压制」搬进「检测」段（与 AI 识别并列） */
 ck("缩时·判读参数已搬去检测段", !h.includes("data-sens=") && !h.includes('data-adv="1"'));
 run('SET.acc="mask"; renderCamTabs();');
@@ -142,10 +143,11 @@ ck("检测·进阶展开后有最短事件/模糊/抽样/采样/合并滑杆",
 ck("检测·进阶底部标默认值", h.includes("默认值：门槛 24"));
 run('SET.acc="condense"; renderCamTabs();');
 h = body();
-ck("缩时·画质默认收起", h.includes('data-outopen="1"') && !h.includes('data-k="day.crf"'));
+ck("事件侦测·非物化模式隐藏输出画质块（materialize 仅配置可开）",
+   !h.includes('data-outopen') && !h.includes('data-k="day.crf"'));
 run('SET.outOpen = true; renderCamTabs();');
 h = body();
-ck("缩时·展开后有画质滑杆", h.includes('data-k="day.crf"'));
+ck("事件侦测·virtual 提示（仅台账）切换 outOpen 后仍在", h.includes("仅台账"));
 ck("缩时·画质折叠行收起时显示当前档", src.includes('(SET.outOpen ? "" : esc(qualLine(p)))'));
 run('SET.acc="condense"; draftSet("condenseMode", "materialize"); renderCamTabs();');
 h = body();
@@ -155,11 +157,11 @@ ck("缩时·切物化后显示切分方式/倍速四档/片段保留",
 ck("缩时·物化后影响预估四格", (h.match(/class="c"><div class="kv"/g) || []).length === 4);
 run('draftSet("condenseMode", "off"); renderCamTabs();');
 h = body();
-ck("缩时·关闭后判读区 dim", h.includes('class="dim"'));
-ck("缩时·关闭后有提示（只录全时不判定）", h.includes("只录全时、不判定"));
+ck("事件侦测·关闭后显示「事件侦测已关闭」提示", h.includes("事件侦测已关闭"));
+ck("事件侦测·关闭后有提示（只录全时不判定）", h.includes("只录全时、不判定"));
 run('draftSet("condenseMode", "follow"); SET.adv=false; SET.outOpen=false; SET.acc="mask"; renderCamTabs();');
 h = body();
-ck("缩时·收起后明细消失只剩标题条", !h.includes('data-cond="1"') && h.includes("整段拼接 · 1× · 10 天"));
+ck("事件侦测·收起后明细消失只剩标题条", !h.includes('data-cond') && h.includes("事件侦测 · 仅台账"));
 ck("缩时·展开后有忽略区画布", h.includes("maskCv-ig"));
 ck("编辑·画布可画", !h.includes("maskstage locked"));
 
@@ -241,7 +243,11 @@ ck("布局·四段装配顺序固定", (()=>{
   return a > 0 && a < b && b < c && c < d;
 })());
 ck("布局·保留段内含全时天数与分片", /保留与分片[\s\S]{0,1600}全时录像保留[\s\S]{0,1600}录制分片长度/.test(src));
-ck("布局·缩时段在保留段之后（含总闸与倍速）", /缩时压制[\s\S]{0,900}data-cond[\s\S]{0,900}data-speed/.test(src));
+ck("布局·事件侦测(condense)段在保留(keep)段之后，含总闸 data-cond 与倍速 data-speed",
+   src.indexOf('camAcc("keep"') > -1
+   && src.indexOf('camAcc("condense"') > src.indexOf('camAcc("keep"')
+   && src.includes('data-cond')
+   && src.includes('data-speed='));
 ck("布局·忽略区独立成段", src.includes('camAcc("mask", 4')
    && src.indexOf('camAcc("mask", 4') > src.indexOf('data-speed'));
 run('closeEditor(); SET.open="cam-01"; renderCamTabs();');
@@ -805,8 +811,9 @@ ck("排版·CH/文件数并入摄像头名行（HTML）",
    src.includes('<span class="hdr-sub" id="hdrSub">CH01 · 13 个录像文件</span>')
    && !src.includes('<div class="hdr-sub" id="hdrSub">'));
 ck("排版·并入行小字弱化样式", src.includes(".camsel .hdr-sub{font-weight:400"));
-ck("排版·renderOverview 只剩名字 + CH/文件数",
-   src.includes('cam.ch + " · " + state.segs.length + " 个录像文件"')
+ck("排版·renderOverview 只剩名字 + CH/文件数（按 kind 区分）",
+   src.includes('cam.ch + " · " + state.segs.length + (state.curKind === "full" ? " 个录像文件"')
+   && src.includes('state.curKind === "archive" ? " 个归档片段" : " 个缩时片段"')
    && !src.includes("ovKeep") && !src.includes("ovPct")
    && !src.includes("ovCnt") && !src.includes("ovSize"));
 ck("排版·概览四格 HTML/CSS 下线",
@@ -922,13 +929,15 @@ ck("竖线·接线：syncPlayer 轻量跟随 + renderTl 重建即摆位",
    && src.includes("syncTlCursor();          /* 重建后立即摆到当前播放位置 */"));
 
 /* ---- 30. 0.9.38：切分方式（通用 + 每路） ---- */
-ck("通用·卡片有切分方式 chips（join/split）",
-   src.includes('data-clipstyle="join">整段拼接</button>')
-   && src.includes('data-clipstyle="split">活动切片</button>'));
+/* 0.9.96：缩时切分方式（clipStyle）从 UI 移出，仅配置可设（materialize 仅配置可开） */
+ck("通用·卡片不再暴露缩时切分方式 chips（clipStyle 仅配置可设）",
+   !src.includes('data-clipstyle="join">整段拼接</button>')
+   && get("LK.clipStyle") === "join");
 ck("通用·LK 默认整段拼接", get("LK.clipStyle") === "join");
-ck("通用·处理器写回 LK.clipStyle 并推服务端",
-   src.includes('LK.clipStyle = el.dataset.clipstyle === "split" ? "split" : "join";')
-   && src.includes("clip_style: LK.clipStyle"));
+ck("通用·clipStyle 仍推服务端且可配置回读（UI 无 chip）",
+   src.includes("clip_style: LK.clipStyle")
+   && src.includes("if(ls.clip_style) LK.clipStyle = ls.clip_style;")
+   && src.includes('if(g.clipStyle) LK.clipStyle = g.clipStyle === "split" ? "split" : "join";'));
 ck("通用·服务端回读对齐（/api/link 与 /api/config 两条路）",
    src.includes("if(ls.clip_style) LK.clipStyle = ls.clip_style;")
    && src.includes("if(c.clip_style && c.clip_style !== LK.clipStyle) LK.clipStyle = c.clip_style;")
@@ -969,14 +978,28 @@ ck("播放当前时刻·红色",
    src.includes(".p-times .pt-c{flex:1;text-align:center;font-size:12.5px;font-weight:600;color:#ff6b6b}"));
 
 /* ===== 32. 0.9.44：夜间归档裁剪 + 三层保留 ===== */
-ck("归档·通用卡有开关与保留天数步进（仅虚拟缩时显示）",
+ck("归档·通用卡有开关与保留天数步进，②归档回溯始终渲染（事件侦测关时呈现禁用说明）",
    src.includes("data-archen=\"1\"") && src.includes("data-archdec=\"1\"")
    && src.includes("data-archinc=\"1\"") && src.includes("id=\"archDaysInput\"")
-   && src.includes('<span class="n">夜间归档裁剪</span>')
-   && src.includes('LK.condenseMode==="virtual" ?'));
+   && src.includes('<span class="n">② 归档回溯</span>')
+   && src.includes("需先开启事件侦测"));
+ck("设置页简化为「事件侦测 + 归档」：ledger 总闸 + 归档开关 + syncCondenseMode 实时推导",
+   src.includes('data-ledger="1"')
+   && src.includes('querySelectorAll("[data-ledger]")')
+   && src.includes('data-archen="1"')
+   && src.includes("function syncCondenseMode()"));
 ck("归档·LK 默认开 + 7 天 + 批量 120",
    get("LK.archEnable") === true && get("LK.archDays") === 7
    && get("LK.archBatch") === 120);
+ck("回放设置·从事件侦测与归档卡迁出为独立卡，含活动连播静止段处理偏好",
+   (function(){ run('SET.genOpen=true; renderCamTabs();'); var hp = body();
+     return hp.includes("回放设置") && hp.includes("活动连播 · 静止段处理") && src.includes('data-silent="skip"'); })());
+/* 0.9.97：事件侦测关闭时，归档回溯整块呈现「需先开启事件侦测」且不再渲染控件 */
+run('LK.ledger=false; syncCondenseMode(); SET.genOpen=true; renderCamTabs();');
+var hOff = body();
+ck("归档·事件侦测关闭时呈现禁用说明且控件不渲染",
+   hOff.includes("需先开启事件侦测") && !hOff.includes('data-archen="1"') && !hOff.includes("开启归档裁剪"));
+run('LK.ledger=true; syncCondenseMode(); renderCamTabs();');
 ck("归档·步进/直填写回并钳到 1–3650，重拉候选摘要",
    src.includes('body.querySelectorAll("[data-archdec],[data-archinc]")')
    && src.includes("Math.max(1, Math.min(3650, (parseInt(LK.archDays,10)||7) + dir))")
@@ -997,7 +1020,7 @@ ck("三层·保留策略文本含台账永久",
    && src.includes("+ \" 天 / 台账永久\""));
 ck("三层·预算含归档项且按方案分摊",
    src.includes("else if(eff === \"virtual\")")
-   && src.includes("arch += dayGB * 0.07 * (LK.archDays || 7)")
+   && src.includes("arch += dayGB * 0.07 * Math.max(0, (LK.archDays || 7) - p.fullDays)")
    && src.includes("const need = full + clip + arch;"));
 ck("存储·占用载荷三类 + 台账单列",
    src.includes("活动台账 <b>") && src.includes("永久保留 · 几乎不占空间"));

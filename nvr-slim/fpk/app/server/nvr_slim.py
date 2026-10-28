@@ -323,10 +323,10 @@ def gpu(force=False):
 # 这样打开应用不占解码、不占带宽；用户点了某一路才真正拉子码流。
 
 CAMERA_DEFAULTS = [
-    {"id": "cam-01", "name": "车库入口", "online": True, "full_days": 4, "clip_days": 90},
-    {"id": "cam-02", "name": "一楼大堂", "online": True, "full_days": 4, "clip_days": 90},
-    {"id": "cam-03", "name": "货梯走廊", "online": True, "full_days": 2, "clip_days": 180},
-    {"id": "cam-04", "name": "后门通道", "online": True, "full_days": 4, "clip_days": 90},
+    {"id": "cam-01", "name": "车库入口", "online": True, "full_days": 3, "clip_days": 90},
+    {"id": "cam-02", "name": "一楼大堂", "online": True, "full_days": 3, "clip_days": 90},
+    {"id": "cam-03", "name": "货梯走廊", "online": True, "full_days": 3, "clip_days": 180},
+    {"id": "cam-04", "name": "后门通道", "online": True, "full_days": 3, "clip_days": 90},
 ]
 
 
@@ -1183,16 +1183,20 @@ def parts_payload(cam_filter=""):
 def recordings_payload():
     """磁盘上真实存在的录像：每路每天有哪些分片、多大。
 
-    full（全时）与 clip（缩时，_clip/ 下）分开出清单 —— 回放页两种模式各吃各的。
+    full（全时）、clip（物化切片，_clip/ 下）、archive（虚拟缩时归档浓缩，_archive/ 下）
+    三套清单分开出 —— 回放页/文件页各按 kind 取用。archive 与 clip 同构
+    （<base>.cNN.mp4 + <base>.idx.json），只是目录不同，所以扫描逻辑照搬 clip。
     新目录（摄像头名称）与旧 id 目录都扫，升级前的存量数据不丢。
     """
     root = record_dir()
     per = {}
     clips = {}
+    arch = {}
     total = 0
     for c in cameras():
         days = {}
         cdays = {}
+        adays = {}
         for dname in cam_storage_dirs(c):
             for f in _scan_day_dirs(os.path.join(root, dname)).items():
                 merged = {x["n"]: x for x in days.get(f[0], [])}
@@ -1208,21 +1212,33 @@ def recordings_payload():
                 merged = {x["n"]: x for x in cdays.get(f[0], [])}
                 merged.update({x["n"]: x for x in f[1]})
                 cdays[f[0]] = [merged[k] for k in sorted(merged)]
-        # 缩时片段必须是真实时长：拿 segment_sec 冒充会让时间轴显示 2 个半小时，
+            abase = os.path.join(root, "_archive", dname)
+            for f in _scan_day_dirs(abase).items():
+                # 归档浓缩与物化切片同构：idx 侧车补真实源时间窗（w）直接复用
+                for x in f[1]:
+                    w = _clip_window(os.path.join(abase, f[0]), x["n"])
+                    if w:
+                        x["w"] = w
+                merged = {x["n"]: x for x in adays.get(f[0], [])}
+                merged.update({x["n"]: x for x in f[1]})
+                adays[f[0]] = [merged[k] for k in sorted(merged)]
+        # 缩时片段 / 归档浓缩必须是真实时长：拿 segment_sec 冒充会让时间轴显示 2 个半小时，
         # 实际 3 秒播完，然后疯狂切文件。
         _attach_durations(cdays)
+        _attach_durations(adays)
         # 内部用的绝对路径不出去（前端只需要 n/b/d，路径由 /api/record/file 拼）
-        for files in list(days.values()) + list(cdays.values()):
+        for files in list(days.values()) + list(cdays.values()) + list(adays.values()):
             for x in files:
                 x.pop("p", None)
         per[c["id"]] = days
         clips[c["id"]] = cdays
+        arch[c["id"]] = adays
         total += sum(len(v) for v in days.values())
     # 回放页时间轴要用真实分片长度，不能在前端写死 300 秒
     return {"ok": True, "root": root, "total": total,
             "segment_sec": runtime.segment_sec(runtime.load_config(
                 STATE["var_dir"]).get("record_segment_sec")),
-            "cameras": per, "clips": clips}
+            "cameras": per, "clips": clips, "archive": arch}
 
 
 # ---------------------------------------------------------------- 存储占用统计
@@ -2209,18 +2225,19 @@ class Handler(BaseHTTPRequestHandler):
         if not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
             return self._send(400, {"ok": False, "error": "bad day"})
         kind = (q.get("kind") or ["full"])[0]
-        if kind not in ("full", "clip"):
+        if kind not in ("full", "clip", "archive"):
             return self._send(400, {"ok": False, "error": "bad kind"})
-        if not ((NAME_CLIP_RE if kind == "clip" else NAME_FULL_RE).match(name)):
+        # archive 与 clip 同构（<base>.cNN.mp4），都用 CLIP 名校验；full 才是纯 HH-MM-SS.mp4
+        if not ((NAME_CLIP_RE if kind in ("clip", "archive") else NAME_FULL_RE).match(name)):
             return self._send(400, {"ok": False, "error": "bad name"})
         # cam 参数是摄像头 id；实际目录可能是名称（新）或 id（旧），逐个试探
         cam_rec = next((c for c in cameras() if c["id"] == cam), None)
         if cam_rec is None:
             return self._send(400, {"ok": False, "error": "bad cam"})
         full = None
+        sub = "_archive" if kind == "archive" else ("_clip" if kind == "clip" else "")
         for dname in cam_storage_dirs(cam_rec):
-            cand = os.path.join(record_dir(), "_clip" if kind == "clip" else "",
-                                dname, day, name)
+            cand = os.path.join(record_dir(), sub, dname, day, name)
             if os.path.isfile(cand):
                 full = cand
                 break

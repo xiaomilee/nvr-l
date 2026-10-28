@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """归档裁剪（Aqara 式三层存储的执行层）。
 
-三层寿命：台账（_ledger，永久）> 归档片段（_archive，默认 90 天）> 全时录像（默认数天）。
+三层寿命：台账（_ledger，永久）> 归档片段（_archive，默认 7 天）= 总回溯天数 > 全时录像（默认 3 天，嵌套在归档窗口最前面）。
 
 核心思路：全时录像保留期短（体积大），到期前夜把其中的活动窗口按台账
 裁出来存进 _archive（体积只有活动占比那么大），之后全时目录就可以放心被
@@ -29,7 +29,7 @@ from runtime import under  # noqa: F401  (re-export 供 nvr_slim 路径校验)
 
 DEFAULTS = {
     "archive_enable": True,   # 夜间任务是否做归档裁剪
-    "archive_days": 90,       # 归档片段保留天数
+    "archive_days": 7,        # 归档片段保留天数（= 总回溯天数）
     "archive_batch": 120,     # 单次运行最多裁多少个分片（跨夜分批）
 }
 
@@ -140,11 +140,11 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
             continue
         dn = cam.get("dir_name") or cid
         cc = cfg.get(cid) or {}
-        full_days = cc.get("full_days", 4)
+        full_days = cc.get("full_days", 3)
         try:
             full_days = int(full_days)
         except (TypeError, ValueError):
-            full_days = 4
+            full_days = 3
         mode = modes.get(cid) or "virtual"
         pol = {"cam": cid, "name": cam.get("name", cid), "mode": mode,
                "full_days": full_days,

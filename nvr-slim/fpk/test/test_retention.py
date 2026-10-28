@@ -4,7 +4,7 @@
 重点守四条：
   - 边界：保留 4 天 = 今天 + 前 3 天，第 4 天前的才删（差一天就少留一批）
   - 保护：今天/未来目录、非日期目录、含 .part/.pending 的目录永不删
-  - 两类分开：全时 4 天、缩时 90 天各自算，互不影响
+  - 两类分开：全时 3 天、缩时 90 天各自算，互不影响
   - 幂等：dry_run 不落盘；真删完再算一次计划为空
 """
 import os
@@ -63,7 +63,7 @@ class TestPlan(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="nvrret")
         self.cam_cfg = {}
-        # 全时：20 今天 / 19 / 18 / 17 保留，16 删除
+        # 全时：20 今天 / 19 / 18 保留（3 天），17 / 16 删除
         for day in ("2026-10-20", "2026-10-19", "2026-10-18", "2026-10-17", "2026-10-16"):
             mk(os.path.join(self.root, "cam-01"), day)
         # 缩时：8 月 1 日保留（90 天内），7 月 1 日删除
@@ -84,15 +84,16 @@ class TestPlan(unittest.TestCase):
         paths = [i["path"] for i in p["delete"]]
         self.assertIn(os.path.join(self.root, "cam-01", "2026-10-16"), paths)
         self.assertIn(os.path.join(self.root, "_clip", "cam-01", "2026-07-01"), paths)
-        # 边界：17 号恰好还在保留期内，不能删
-        self.assertNotIn(os.path.join(self.root, "cam-01", "2026-10-17"), paths)
+        # 边界：18 号恰好还在保留期内（3 天=20/19/18），17 号已超期该删
+        self.assertNotIn(os.path.join(self.root, "cam-01", "2026-10-18"), paths)
+        self.assertIn(os.path.join(self.root, "cam-01", "2026-10-17"), paths)
         # 今天不能进删除列表
         self.assertFalse(any(i["date"] == "2026-10-20" for i in p["delete"]))
         # 未来日期不碰
         self.assertFalse(any(i["date"] == "2026-10-25" for i in p["delete"]))
         # 版本：全时 4 天、缩时 90 天
         pol = {x["cam"]: x for x in p["policy"]}
-        self.assertEqual(pol["cam-01"]["full_days"], 4)
+        self.assertEqual(pol["cam-01"]["full_days"], 3)
         self.assertEqual(pol["cam-01"]["clip_days"], 90)
         self.assertGreater(p["freed_bytes"], 0)
 
@@ -138,8 +139,8 @@ class TestPlan(unittest.TestCase):
         r2 = rt.execute(p, dry_run=False)
         self.assertTrue(r2["ok"], r2["failed"])
         self.assertFalse(os.path.exists(os.path.join(self.root, "cam-01", "2026-10-16")))
-        # 保留期内的还在
-        self.assertTrue(os.path.isdir(os.path.join(self.root, "cam-01", "2026-10-17")))
+        # 保留期内的还在（3 天=20/19/18，18 号仍留）
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "cam-01", "2026-10-18")))
         # 幂等：再算一次没有可删的
         p2 = rt.plan(self.root, CAMS, self.cam_cfg, today=TODAY)
         self.assertEqual(p2["delete"], [])

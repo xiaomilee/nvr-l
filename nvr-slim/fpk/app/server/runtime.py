@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.91"
+VERSION = "0.9.97"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -22,7 +22,6 @@ DEFAULTS = {
     "process_mode": "fast",     # fast | fine
     "gpu": "auto",              # auto | qsv | off
     "concurrency": 2,
-    "retention_days": 3,
     "night_only": False,
     "low_priority": True,
     "snapshot_interval": 10,    # 直播页快照刷新间隔（秒）
@@ -35,7 +34,7 @@ DEFAULTS = {
     # 夜间任务固定顺序：先归档（临期全时里的活动窗口裁进 _archive），后清理
     # （顺序反了明天过期的日期就来不及归档，会被当普通过期目录删掉）。
     "archive_enable": True,           # 夜间任务是否做归档裁剪
-    "archive_days": 90,               # 归档片段保留天数（_archive）
+    "archive_days": 7,                # 归档片段保留天数（_archive）= 总回溯天数（全时嵌套在前 full_days 天）
     "archive_batch": 120,             # 单次归档最多裁多少个分片（跨夜分批消化）
     # ---- 录制（由本应用拉主码流落盘，不再依赖飞牛 NVR 的目录） ----
     "record_enable": True,

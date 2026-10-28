@@ -1806,6 +1806,11 @@ function clampNum(v, lo, hi, dft){
   return Math.max(lo, Math.min(hi, n));
 }
 
+/* 全时保留默认天数（与后端 retention.DEFAULTS["full_days"]=3 同源）。
+   设为单一常量：defaultCamParams 与全局「缩时与存储方案」模型说明共用，
+   改一处即全站生效，避免数字在多处写死漂移。 */
+const FULL_DAYS_DEFAULT = 3;
+
 function defaultCamParams(cam, i){
   i = i || 0;
   return {
@@ -1820,7 +1825,7 @@ function defaultCamParams(cam, i){
     /* 判读条件（引擎参数，全部推到服务端 profiles） */
     judge: Object.assign({}, JUDGE_DEFAULTS),
     speed:1, speedMode:"pts", prescan:true,
-    /* 缩时压制（每路总开关 + 输出倍速）：
+    /* 事件侦测（每路总开关 + 输出倍速）：
        condense=false 时这一路只录全时、不产出缩时片段；
        clipSpeed>1 时导出走重编码压时间轴（2× = 播放时间缩短一半） */
     condense: true,
@@ -1828,8 +1833,9 @@ function defaultCamParams(cam, i){
     /* 切分方式：follow=跟随通用设置；join=整段拼接；split=活动切片
        （对这一路强制「录完即切」，即使通用选了定时批量） */
     clipMode: "follow",
-    /* 保留周期：全时录像按天、缩时片段按天，各自独立 */
-    fullDays: 3,
+    /* 保留周期：全时录像按天、归档浓缩片段按天（总回溯天数见通用设置 archive_days）。
+       fullDays 默认 FULL_DAYS_DEFAULT，服务端每路可单独覆盖。 */
+    fullDays: FULL_DAYS_DEFAULT,
     clipDays: 10,
     /* 单路分片长度（秒）；0 = 跟随「通用设置」。这是真正写进 ffmpeg 命令行的值 */
     segSec: 0,
@@ -1949,9 +1955,11 @@ const LK = {
      关掉退回整片 moov（必须正常收尾才完整，硬杀即残片）。 */
   frag:true,
   clipStyle:"join",   // 通用切分方式：join=整段拼接 | split=活动切片（每路可用 clipMode 覆盖）
-  condenseMode:"virtual", // 缩时方案：virtual=只记台账 | materialize=产出片段 | off（服务端 _ENUM_KEYS 白名单）
-  archEnable:true,     // 夜间归档裁剪开关（仅虚拟缩时有意义）
-  archDays:7,         // 归档片段保留天数
+  condenseMode:"virtual", // 事件侦测方案：ledger 开→virtual(仅台账) / 关→off；clipOut(物化切片)为配置项 UI 不暴露
+  ledger:true,       // 维度① 活动判读/台账开关：开=写台账、回放有标记、可归档
+  clipOut:false,     // 浓缩片段产出(物化切片)，仅配置可开；UI 不暴露，默认仅台账
+  archEnable:true,     // 维度③ 归档裁剪开关（仅台账/virtual 下才裁 _archive）
+  archDays:7,         // 归档片段保留天数（= 总回溯天数）
   archBatch:120,       // 单晚最多裁多少个分片（跨夜分批）
   /* ---- AI 检测（0.9.60）：全局默认，每路可覆盖。全部进 pushCfg body ——
      只改内存不推送就是「假设置」，这个坑本项目踩过不止一次。 ---- */
@@ -1960,7 +1968,7 @@ const LK = {
   detDevice:"auto",    // auto | cpu | gpu（P1）
   detCls:{ person:true, two_wheeler:true, vehicle:true },  // 全局默认检测类别
   detSens:"std",       // 灵敏度：high | std | low → 分品类阈值
-  detTrigger:{ motion:true, person:true, vehicle:true },   // 缩时触发：未勾选=静止画面
+  detTrigger:{ motion:true, person:true, vehicle:true },   // 活动触发：未勾选=静止画面
   detFps:5,            // 实时帧率（P1）
   detNight:"throttle", // 夜间策略（P1）
   /* ---- 通知（0.9.60）：三开关 + 自定义 Webhook + 冷却 ---- */
@@ -2735,9 +2743,10 @@ function renderDates(){
   list.forEach((d,i)=>{
     const dt = new Date(d+"T00:00:00");
     const rec = state.rec || {};
-    const src = state.pmode === "clip" ? rec.clips : rec.cameras;
-    const camDays = (src && src[state.camId]) || {};
-    const files = camDays[d] || [];
+    const camDays = (rec.cameras && rec.cameras[state.camId]) || {};
+    const clipDays = (rec.clips && rec.clips[state.camId]) || {};
+    const archDays = (rec.archive && rec.archive[state.camId]) || {};
+    const files = (camDays[d] || []).concat(clipDays[d] || [], archDays[d] || []);
     const bytes = files.reduce((a,f)=>a+(f.b||0),0);
     const ktext = files.length
       ? (bytes >= 1073741824 ? (bytes/1073741824).toFixed(1)+"G" : Math.max(1,Math.round(bytes/1048576))+"M")
@@ -2852,7 +2861,8 @@ function renderTl(){
   if(!el) return;
   const fulls = realSegs(state.camId, curDay(), "full") || [];
   const clips = realSegs(state.camId, curDay(), "clip") || [];
-  if(!fulls.length && !clips.length){ el.style.display = "none"; el.innerHTML = ""; return; }
+  const archives = realSegs(state.camId, curDay(), "archive") || [];
+  if(!fulls.length && !clips.length && !archives.length){ el.style.display = "none"; el.innerHTML = ""; return; }
   /* 0.9.34 恢复跟随选中的时段：回放页热力条选中某个 2 小时格（hourBlock）
      后，时间轴放大到该窗口看片段级分布；未选中则显示全天。 */
   const zoom = state.hourBlock >= 0;
@@ -2891,11 +2901,31 @@ function renderTl(){
     cb.push({s:ca, e:cz, d:Math.max(0, c.e - c.s)/span});
   });
 
+  /* 归档浓缩：与缩时同构（<base>.cNN.mp4 + .idx.json），逐片成块、密度随片携带 */
+  let archCov = 0, aWatch = 0;
+  const ab = [];
+  const astarts = [...new Set(archives.map(c=>segA(c)))].sort((p,q)=>p-q);
+  const abyStart = {};
+  archives.forEach(c=>{ abyStart[segA(c)] = c; });
+  astarts.forEach((st,i)=>{
+    const en = i+1 < astarts.length ? Math.min(st+segLen, astarts[i+1]) : st+segLen;
+    const ca = Math.max(st, a), cz = Math.min(en, b);
+    if(cz <= ca) return;
+    const span = Math.max(0.001, en - st);
+    const ov = cz - ca;
+    archCov += ov;
+    const c = abyStart[st];
+    aWatch += Math.max(0, c.e - c.s) * ov / span;
+    ab.push({s:ca, e:cz, d:Math.max(0, c.e - c.s)/span});
+  });
+
   const blocksHtml = (blocks, kind)=>blocks.map(x=>
     '<span class="tl-block" data-t0="' + x[0] + '" data-t1="' + x[1] + '"'
     + ' style="left:' + ((x[0]-a)/real*100).toFixed(2) + '%;width:'
     + Math.max(0.5, (x[1]-x[0])/real*100).toFixed(2) + '%'
-    + (kind === "full" ? ';background:var(--keep)' : ';background:var(--warn);opacity:' + tlDens(x.d))
+    + (kind === "full" ? ';background:var(--keep)'
+       : kind === "archive" ? ';background:#378ADD;opacity:' + tlDens(x.d)
+       : ';background:var(--warn);opacity:' + tlDens(x.d))
     + '"></span>').join("");
   /* 0.9.34 行结构：说明行（名称左 · 摘要右）在上，色条独占一整行贯穿全宽，
      高度 20px 方便手指点按跳播 */
@@ -2912,6 +2942,9 @@ function renderTl(){
   const clipVal = clipCov <= 0 ? "无缩时片段"
     : watch > 0 ? durText(watch) + " · 压缩 ≈" + (clipCov/watch).toFixed(1) + "×"
     : durText(clipCov) + " · 无成片";
+  const archVal = archCov <= 0 ? "无归档片段"
+    : aWatch > 0 ? durText(aWatch) + " · 压缩 ≈" + (archCov/aWatch).toFixed(1) + "×"
+    : durText(archCov) + " · 无成片";
   const ticks = zoom
     ? [0,1,2,3,4].map(i=>hm(a + i*1800))
     : [0,4,8,12,16,20,24].map(h=>String(h).padStart(2,"0"));
@@ -2924,6 +2957,7 @@ function renderTl(){
       + '<span class="tl-hint">' + (zoom ? "点色块跳播" : "点色块选中时段") + '</span></div>'
     + row("全时录像", "full", blocksHtml(fb, "full"), fullVal)
     + row("缩时录像", "clip", blocksHtml(cb.map(c=>{ const x=[c.s, c.e]; x.d = c.d; return x; }), "clip"), clipVal)
+    + row("归档浓缩", "archive", blocksHtml(ab.map(c=>{ const x=[c.s, c.e]; x.d = c.d; return x; }), "archive"), archVal)
     + '<div class="tl-ticks">' + ticks.map(t=>"<span>" + t + "</span>").join("") + '</div>';
 
   /* 0.9.36 顶部热力图 ↔ 底部 12 格双向联动：
@@ -3062,7 +3096,8 @@ function renderOverview(){
   const sub = document.getElementById("hdrSub");
   if(sub) sub.textContent = !cam
     ? "还没有摄像头 · 去设置页添加一台"
-    : cam.ch + " · " + state.segs.length + " 个录像文件";
+    : cam.ch + " · " + state.segs.length + (state.curKind === "full" ? " 个录像文件"
+        : (state.curKind === "archive" ? " 个归档片段" : " 个缩时片段"));
 }
 
 /* ================= 缩略图 ================= */
@@ -3105,17 +3140,20 @@ function renderClips(){
   const box = document.getElementById("clips");
   const list = visibleSegs();
   const p = camParams[state.camId];
-  const full = state.pmode === "full";
+  const full = state.curKind === "full";
+  const arch = state.curKind === "archive";
   const cam = CAMERAS.find(c=>c.id===state.camId);
   box.innerHTML = "";
   document.getElementById("listTitle").textContent =
-    state.hourBlock >= 0 ? pad(state.hourBlock*2)+":00 – "+pad(state.hourBlock*2+2)+":00" : (full ? "全时录像" : "全部片段");
+    state.hourBlock >= 0 ? pad(state.hourBlock*2)+":00 – "+pad(state.hourBlock*2+2)+":00"
+      : (full ? "全时录像" : (arch ? "归档浓缩" : "缩时片段"));
   document.getElementById("listCount").textContent = list.length + " 段";
 
   if(!list.length){
     box.innerHTML = '<div style="text-align:center;color:var(--faint);font-size:13px;padding:44px 0">'
       + (full ? "该时段没有录像"
-              : "这个时段没有缩时片段（该时段的画面可能被判为静止，或缩时压制未开启）") + '</div>';
+              : (arch ? "这个时段没有归档浓缩片段（全时录像过期后才由归档任务裁出）"
+                      : "这个时段没有缩时片段（该时段的画面可能被判为静止，或缩时压制未开启）")) + '</div>';
     return;
   }
 
@@ -3134,7 +3172,9 @@ function renderClips(){
         '<div style="margin-top:5px;display:flex;gap:5px">' +
           (full
             ? '<span class="tag">' + (s.hits ? "含活动 " + s.hits + " 段" : (s.file ? "连续录像" : "无活动")) + '</span>'
-            : '<span class="tag g">' + (s.src != null ? "缩时 · " + hms(s.src) : s.reason) + '</span>') +
+            : '<span class="tag g">' + (s.src != null
+                  ? (s.arch ? "归档 · " : "缩时 · ") + hms(s.src)
+                  : s.reason) + '</span>') +
         '</div>' +
       '</div>' +
       '<svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
@@ -3886,7 +3926,7 @@ function pushCfg(){
              url_clear: !!p.urlClear, sub_clear: !!p.subClear,
              enabled:p.enabled !== false,
              full_days:p.fullDays, clip_days:p.clipDays,
-             /* 每路缩时压制总开关与倍速：必须真的推上去，
+             /* 每路事件侦测总开关与倍速：必须真的推上去，
                 link 调度靠 condense 决定这一路入不入队 */
              condense: p.condense !== false,
              clip_speed: p.clipSpeed || 1,
@@ -3964,6 +4004,9 @@ function applyServerCfg(c){
   if(c.clip_style && c.clip_style !== LK.clipStyle) LK.clipStyle = c.clip_style;
   if(c.condense_mode && ["virtual","materialize","off"].indexOf(c.condense_mode) >= 0
      && c.condense_mode !== LK.condenseMode) LK.condenseMode = c.condense_mode;
+  /* 事件侦测由 condense_mode 推导（ledger→virtual/off）；clipOut 为配置项，UI 不暴露 */
+  LK.ledger = LK.condenseMode !== "off";
+  LK.clipOut = LK.condenseMode === "materialize";
   if(typeof c.archive_enable === "boolean") LK.archEnable = c.archive_enable;
   if(c.archive_days){ const v = +c.archive_days; if(v >= 1) LK.archDays = v; }
   if(c.archive_batch){ const v = +c.archive_batch; if(v >= 10) LK.archBatch = v; }
@@ -4776,7 +4819,7 @@ function drawLiveScene(cv, idx){
 */
 /* 设置页展开态。
    genOpen / diagOpen 是两个大分区；acc 是摄像头编辑里的手风琴（一次只开一段）；
-   adv / outOpen 是缩时压制里的两个小节（进阶判读 / 输出画质）。 */
+   adv / outOpen 是事件侦测里的两个小节（进阶判读 / 输出画质）。 */
 const SET = { open:null, editing:false, draft:null, adv:false, armed:null,
               genOpen:false, diagOpen:false, addArmed:false,
               acc:"base", outOpen:false };
@@ -4826,7 +4869,7 @@ function recBudgetText(){
     if(eff === "materialize")
       clip += dayGB * 0.07 * p.clipDays;      /* 缩时片段 ≈ 活动占比 7% */
     else if(eff === "virtual")
-      arch += dayGB * 0.07 * (LK.archDays || 7);  /* 归档同量级，但时长随全时过期滚动 */
+      arch += dayGB * 0.07 * Math.max(0, (LK.archDays || 7) - p.fullDays);  /* 归档只算全时过期后的浓缩尾巴，不与全时重复 */
   });
   const need = full + clip + arch;
   const free = (REC.diskFreeGB == null || isNaN(REC.diskFreeGB)) ? null : +REC.diskFreeGB;
@@ -4926,66 +4969,46 @@ function cardRec(){
 
 function cardLink(){
   return '<div class="gcard">'
-    + '<h3>缩时与存储方案 <span class="sub">所有摄像头共用 · 每路可单独覆盖</span></h3>'
-    + '<div class="srow" style="padding-top:0;border-top:none">'
-      + '<div class="n">方案模式</div>'
-      + '<div class="chips">'
-        + '<button class="chip ' + (LK.condenseMode==="virtual"?"on":"") + '" data-cmode="virtual">虚拟缩时</button>'
-        + '<button class="chip ' + (LK.condenseMode==="materialize"?"on":"") + '" data-cmode="materialize">物化切片</button>'
-        + '<button class="chip ' + (LK.condenseMode==="off"?"on":"") + '" data-cmode="off">关闭</button>'
-      + '</div>'
-      + '<div class="h" style="margin-top:8px;line-height:1.55">' + condenseHint() + '</div>'
+    + '<h3>事件侦测与归档 <span class="sub">所有摄像头共用 · 每路可单独覆盖</span></h3>'
+    + '<div class="srow" style="display:flex;align-items:center">'
+      + '<span class="n">① 事件侦测</span>'
+      + '<div class="sw ' + (LK.ledger?"on":"") + '" data-ledger="1" style="margin-left:auto"></div>'
     + '</div>'
-    + (LK.condenseMode==="virtual" ? '<div class="srow">'
-      + '<div class="top"><span class="n">回放静默段处理</span><span class="v">' + silentLabel() + '</span></div>'
-      + '<div class="chips">'
-        + '<button class="chip ' + (PPLAY.silent==="skip"?"on":"") + '" data-silent="skip">直接跳过</button>'
-        + '<button class="chip ' + (PPLAY.silent==="16"?"on":"") + '" data-silent="16">16× 快进</button>'
-        + '<button class="chip ' + (PPLAY.silent==="32"?"on":"") + '" data-silent="32">32× 快进</button>'
-      + '</div>'
-      + '<div class="h">回放页「模拟缩时」播放时，两个活动之间的静止画面怎么过：跳过最省时间、观感最接近 Aqara；快进保留时间连续感，但对无核显机器 seek 压力大。</div>'
-    + '</div>' : '')
-    + (LK.condenseMode==="virtual" ? '<div class="srow">'
-      + '<div class="top"><span class="n">夜间归档裁剪</span>'
-        + '<span class="v">归档保留 ' + (LK.archDays || 7) + ' 天</span></div>'
-      + '<div class="swrow" style="border:none;padding:6px 0 0"><span>开启（夜间任务时刻自动执行）</span>'
-        + '<div class="sw ' + (LK.archEnable?"on":"") + '" data-archen="1"></div></div>'
-      + '<div class="chips" style="margin-top:8px">'
-        + '<button class="chip" data-archdec="1" aria-label="减少一天">−</button>'
-        + '<input id="archDaysInput" type="number" inputmode="numeric" min="1" max="3650" step="1" value="'
-          + (LK.archDays || 7) + '" style="width:76px;height:34px;text-align:center;'
-          + 'border:1px solid var(--line);border-radius:8px;background:transparent;'
-          + 'color:inherit;font-size:13.5px;padding:0 6px">'
-        + '<button class="chip" data-archinc="1" aria-label="增加一天">＋</button>'
-        + '<span style="align-self:center;color:var(--muted);font-size:12px">天 · 自定义 1–3650</span>'
-      + '</div>'
-      + '<div class="h" style="margin-top:8px;line-height:1.55">全时到期前夜，把台账标记的活动窗口裁进 <code style="font-size:10.5px">_archive</code>'
-        + '（体积 ≈ 活动占比），全时目录次日就能被正常清理删掉。三层寿命：'
-        + '<b>全时（各路自定）→ 归档 ' + (LK.archDays || 7) + ' 天 → 台账永久</b>。'
-        + '无台账的临期日期会跳过并计入「未归档」，不在临期前夜临时算判定。'
-        + '单晚最多裁 ' + (LK.archBatch || 120) + ' 个分片，裁不完的跨夜继续。</div>'
-      + '<div class="h" id="archStatus" style="color:var(--muted)">' + (ARCH.sum || "候选情况加载中…") + '</div>'
-      + '<button class="btnline" id="btnArchNow" style="margin-top:9px">' + (ARCH.arm ? "确认执行归档" : "立即归档（先预览）") + '</button>'
-      + '<div class="hint" id="archOut" style="margin-top:6px">' + (ARCH.out || "") + '</div>'
-    + '</div>' : '')
+    + '<div class="h" style="margin-top:4px;line-height:1.55">事件侦测开：每路每天写几 KB 的「活动台账」(_ledger)，回放页时间轴出现活动标记、活动触发与通知可用、全时过期后能裁归档浓缩。关：只录全时、不判定，回放页无活动标记、不归档。</div>'
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">② 归档回溯</span>'
+        + '<span class="v">' + (LK.condenseMode==="off" ? "需先开启事件侦测"
+            : (LK.archEnable ? "全时 + 归档浓缩" : "仅全时")) + ' · 归档保留 ' + (LK.archDays || 7) + ' 天</span></div>'
+      + (LK.condenseMode==="off"
+          ? '<div class="h" style="margin-top:6px;line-height:1.55">归档回溯依赖「事件侦测」写出的活动台账：关闭事件侦测后不会裁出归档浓缩片段，此处自动停用。开启事件侦测后恢复可配置。</div>'
+          : ('<div class="swrow" style="border:none;padding:6px 0 0"><span>开启归档裁剪（全时 + 归档浓缩）</span>'
+             + '<div class="sw ' + (LK.archEnable?"on":"") + '" data-archen="1"></div></div>'
+             + '<div class="chips" style="margin-top:8px">'
+             + '<button class="chip" data-archdec="1" aria-label="减少一天">−</button>'
+             + '<input id="archDaysInput" type="number" inputmode="numeric" min="1" max="3650" step="1" value="'
+               + (LK.archDays || 7) + '" style="width:76px;height:34px;text-align:center;'
+               + 'border:1px solid var(--line);border-radius:8px;background:transparent;'
+               + 'color:inherit;font-size:13.5px;padding:0 6px">'
+             + '<button class="chip" data-archinc="1" aria-label="增加一天">＋</button>'
+             + '<span style="align-self:center;color:var(--muted);font-size:12px">天 · 自定义 1–3650</span>'
+             + '</div>'
+             + '<div class="h" style="margin-top:8px;line-height:1.55">'
+               + '<b>总回溯 ' + (LK.archDays || 7) + ' 天 = 归档保留天数</b>：'
+               + '最前面 ' + FULL_DAYS_DEFAULT + ' 天是<b>全时原画</b>（在「摄像头 → 保留与分片」可逐路改），'
+               + '之后 ' + Math.max(0, (LK.archDays || 7) - FULL_DAYS_DEFAULT) + ' 天是<b>归档浓缩片段</b>（_archive）；台账永久。'
+               + '全时到期前夜自动把活动窗口裁进 _archive，全时目录次日即删——<b>不重复占用空间</b>。'
+               + '单晚最多裁 ' + (LK.archBatch || 120) + ' 个分片，裁不完的跨夜继续。</div>'
+             + '<div class="h" id="archStatus" style="color:var(--muted)">' + (ARCH.sum || "候选情况加载中…") + '</div>'
+             + '<button class="btnline" id="btnArchNow" style="margin-top:9px">' + (ARCH.arm ? "确认执行归档" : "立即归档（先预览）") + '</button>'
+             + '<div class="hint" id="archOut" style="margin-top:6px">' + (ARCH.out || "") + '</div>'))
+    + '</div>'
     + (LK.condenseMode!=="off" ? '<div class="srow">'
-      + '<div class="n">' + (LK.condenseMode==="materialize" ? "录完之后什么时候压" : "判定什么时候跑") + '</div>'
+      + '<div class="n">' + "判定什么时候跑" + '</div>'
       + '<div class="chips">'
-        + '<button class="chip ' + (LK.mode==="live"?"on":"") + '" data-link="live">' + (LK.condenseMode==="materialize" ? "即刻压制" : "即刻判定") + '</button>'
-        + '<button class="chip ' + (LK.mode==="scheduled"?"on":"") + '" data-link="scheduled">' + (LK.condenseMode==="materialize" ? "定时压制" : "定时判定") + '</button>'
+        + '<button class="chip ' + (LK.mode==="live"?"on":"") + '" data-link="live">' + "即刻判定" + '</button>'
+        + '<button class="chip ' + (LK.mode==="scheduled"?"on":"") + '" data-link="scheduled">' + "定时判定" + '</button>'
       + '</div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">' + linkHint() + '</div>'
-    + '</div>' : '')
-    + (LK.condenseMode==="materialize" ? '<div class="srow">'
-      + '<div class="top"><span class="n">缩时片段切分方式</span><span class="v">'
-        + (LK.clipStyle==="split" ? "活动切片" : "整段拼接") + '</span></div>'
-      + '<div class="chips">'
-        + '<button class="chip ' + (LK.clipStyle==="join"?"on":"") + '" data-clipstyle="join">整段拼接</button>'
-        + '<button class="chip ' + (LK.clipStyle==="split"?"on":"") + '" data-clipstyle="split">活动切片</button>'
-      + '</div>'
-      + '<div class="h">整段拼接：一个分片的活动区间拼成一个片段，流复制零损失，切点按关键帧（误差约 1~2 秒）。'
-        + '活动切片：每个活动区间单独成片、重编码精确到帧，热力图与跳播定位更细，也能省掉片段内的静止段；'
-        + '编码开销更高，建议有核显的机器使用。每路可在摄像头设置里单独覆盖。</div>'
     + '</div>' : '')
     + (LK.mode==="scheduled" ? '<div class="srow">'
       + '<div class="top"><span class="n">每隔多久压一次</span><span class="v">' + LK.intervalH + ' 小时</span></div>'
@@ -5010,7 +5033,7 @@ function cardLink(){
       + '</div>'
       + '<div class="h">分片 MP4 让每个关键帧自带索引，进程被强杀或断电时已经写下的部分仍能播放，最多丢 1~2 秒；整片 MP4 必须正常收尾，被强杀就整段打不开（残片）。只有在老播放器播不动时才需要切回。</div>'
     + '</div>'
-    + '<div class="srow">'
+    + (LK.clipOut ? ('<div class="srow">'
       + '<div class="top"><span class="n">同时处理</span><span class="v">' + GS.conc + ' 路</span></div>'
       + '<div class="chips">'
         + '<button class="chip ' + (GS.conc===1?"on":"") + '" data-conc="1">串行 · 1 路</button>'
@@ -5026,6 +5049,25 @@ function cardLink(){
       + '<div class="h">已压制 ' + LK.done + ' · 静默 ' + LK.silent + (LK.failed ? ' · <span style="color:var(--warn)">失败 ' + LK.failed + '</span>' : '') + (LK.lastItem ? ' · 最近 ' + LK.lastItem : '') + '</div>'
       + '<div class="h">下次入队 ' + LK.nextBatch + ' · 上次 ' + LK.lastBatch + '</div>'
       + '<button class="btnline" id="btnLinkRun" style="margin-top:9px">立即处理一批</button>'
+    + '</div>') : '')
+  + '</div>';
+}
+
+/* ---------------- 回放设置（0.9.97：从「事件侦测与归档」卡迁出，回到放本身） ----------------
+   原「回放静默段处理」夹在 ① 事件侦测 与 归档回溯 之间，既非存储概念、又只在 virtual 下显示，
+   造成编号与概念混乱。它是回放偏好（活动连播时两段活动间静止画面怎么过），与事件侦测/归档正交，
+   独立成卡更清晰。data-silent 处理器仍在全局 body 上绑定，移卡不影响交互。 */
+function cardPlay(){
+  return '<div class="gcard">'
+    + '<h3>回放设置 <span class="sub">活动连播与呈现 · 全局</span></h3>'
+    + '<div class="srow">'
+      + '<div class="top"><span class="n">活动连播 · 静止段处理</span><span class="v">' + silentLabel() + '</span></div>'
+      + '<div class="chips">'
+        + '<button class="chip ' + (PPLAY.silent==="skip"?"on":"") + '" data-silent="skip">直接跳过</button>'
+        + '<button class="chip ' + (PPLAY.silent==="16"?"on":"") + '" data-silent="16">16× 快进</button>'
+        + '<button class="chip ' + (PPLAY.silent==="32"?"on":"") + '" data-silent="32">32× 快进</button>'
+      + '</div>'
+      + '<div class="h">回放页「活动连播」播放时，两个活动之间的静止画面怎么过：跳过最省时间、观感最接近 Aqara；快进保留时间连续感，但对无核显机器 seek 压力大。该偏好仅在开启事件侦测（有活动台账可连播）时影响活动连播。</div>'
     + '</div>'
   + '</div>';
 }
@@ -5033,9 +5075,9 @@ function cardLink(){
 
 /* ---------------- 检测：移动侦测 + AI 识别（0.9.61 合并为一个菜单） ----------------
    用户不需要区分「帧差」和「AI」是两套实现——面对的都是「检测」：
-   组 1 移动侦测（像素差，不需要 AI、随缩时方案运行、无总闸，只做说明与指路）；
+   组 1 移动侦测（像素差，不需要 AI、随事件侦测运行、无总闸，只做说明与指路）；
    组 2 AI 识别（总闸/类别/灵敏度，缩在闸后）；
-   组 3 触发与通知（缩时触发三勾选 + 通知三开关，刻意放在总闸之外——
+   组 3 触发与通知（活动触发三勾选 + 通知三开关，刻意放在总闸之外——
    移动侦测的通知不需要 AI，以前藏在 detEnable 里导致关了 AI 就配不了）。
    每路开关与判读参数在摄像头手风琴「检测」段；台账 cls 消费在回放页筛选 chips。
    所有选项都进 pushCfg body（LK.det 系列 / LK.nt 系列），
@@ -5077,15 +5119,15 @@ function cardDetect(){
     + '<div class="sw ' + (on?"on":"") + '" data-ntsw="' + k + '"></div></div>';
   return '<div class="gcard">'
     + '<h3>检测 <span class="sub">移动侦测 + AI 识别 · 所有摄像头共用 · 每路可单独覆盖</span></h3>'
-    /* 组 1：移动侦测（像素差）。不需要 AI、没有自己的总闸——它随「缩时与存储
+    /* 组 1：移动侦测（像素差）。不需要 AI、没有自己的总闸——它随「事件侦测与归档
        方案」运行，方案关闭就不判定。参数在每路「检测」段，这里只做说明与指路，
        免得用户到处找「帧差设置在哪」。 */
     + '<div class="srow" style="padding-top:0;border-top:none">'
       + '<div class="top"><span class="n">移动侦测（像素差）</span>'
         + '<span class="v">' + (LK.condenseMode === "off"
-            ? "未启用 · 缩时方案已关闭" : "运行中 · 随缩时方案") + '</span></div>'
+            ? "未启用 · 事件侦测已关闭" : "运行中 · 随事件侦测") + '</span></div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">不需要 AI：ffmpeg 把画面缩到 320×180 后逐像素比对，'
-        + '变化超过门槛的时段记为活动，写进活动台账。它随「缩时与存储方案」运行——'
+        + '变化超过门槛的时段记为活动，写进活动台账。它随「事件侦测与归档」运行——'
         + '方案选「关闭」就<b>不判定</b>，回放页时间轴也不会有活动标记。'
         + '灵敏度、判读引擎、像素差门槛等参数在<b>摄像头设置 → 检测段</b>，每路可单独调；'
         + '判读滤镜是否可用见「诊断与日志 · 环境自检」。</div>'
@@ -5097,7 +5139,7 @@ function cardDetect(){
         + '<div class="sw ' + (LK.detEnable?"on":"") + '" data-deten="1"></div></div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">默认关闭。开启后每 5 秒对每路抽 1 帧推理（YOLO11n · CPU），'
         + '检出的人 / 两轮车 / 车辆按<b>每路勾选的类别</b>记进活动台账，与移动侦测的台账合并后'
-        + '一起供给回放页筛选、缩时触发和通知。不换硬件也能跑：i3-12100 扛 5 路只占约半个核。</div>'
+        + '一起供给回放页筛选、活动触发和通知。不换硬件也能跑：i3-12100 扛 5 路只占约半个核。</div>'
     + '</div>'
     + (LK.detEnable ? (
       /* 检测类别（全局默认）：每路三开关初值从这里拷过去 */
@@ -5117,7 +5159,7 @@ function cardDetect(){
         + '<button class="chip ' + (LK.detSens==="std"?"on":"") + '" data-detsens="std">标准</button>'
         + '<button class="chip ' + (LK.detSens==="low"?"on":"") + '" data-detsens="low">低</button>'
       + '</div>'
-      + '<div class="h">高=多报（阈值 人.45/两轮.28/车.35），低=少报（.55/.38/.45）。漏检比误检好——误检会污染台账和缩时。</div>'
+      + '<div class="h">高=多报（阈值 人.45/两轮.28/车.35），低=少报（.55/.38/.45）。漏检比误检好——误检会污染台账和事件判定。</div>'
     + '</div>'
       /* P1 项：模式（置灰 + 说明，不装可用） */
     + '<div class="srow">'
@@ -5132,12 +5174,12 @@ function cardDetect(){
     /* 组 3：触发与通知。刻意放在 AI 总闸之外——移动侦测的通知不需要 AI，
        以前这两组缩在 detEnable 里，「关了 AI 就配不了移动侦测通知」。 */
     + '<div class="srow">'
-      + '<div class="top"><span class="n">缩时触发</span><span class="v">未勾选的类别按静止画面剔除</span></div>'
+      + '<div class="top"><span class="n">活动触发</span><span class="v">未勾选的类别按静止画面剔除</span></div>'
       + trigRow("motion", "移动侦测（像素差，不需要 AI）")
       + trigRow("person", "人员")
       + trigRow("vehicle", "车辆（含两轮车）")
       + '<div class="h" style="margin-top:6px;line-height:1.55">台账照实记录所有检出类别（回放页可分别筛选）；'
-        + '<b>算不算活动、进不进缩时</b>由这里裁决。至少保留一项。AI 关闭时只有「移动侦测」一项生效，行为与以前完全一致。</div>'
+        + '<b>算不算活动、进不进事件</b>由这里裁决。至少保留一项。AI 关闭时只有「移动侦测」一项生效，行为与以前完全一致。</div>'
     + '</div>'
     + '<div class="srow">'
       + '<div class="n">通知</div>'
@@ -5194,7 +5236,7 @@ async function loadDiagEnv(){
       const ff = d.ffmpeg ? ("<b class='ok'>✓</b> " + esc(d.ffmpeg))
                           : "<b class='bad'>✗ 未找到 ffmpeg</b>（预览/录制会失效）";
       const fp = d.ffprobe ? ("<b class='ok'>✓</b> " + esc(d.ffprobe))
-                           : "<b class='bad'>✗ 未找到 ffprobe</b>（压制/缩时分析会失效）";
+                           : "<b class='bad'>✗ 未找到 ffprobe</b>（事件侦测分析会失效）";
       el.innerHTML = "服务端版本 <b>v" + esc(d.version) + "</b>"
         + "　ffmpeg " + ff
         + "　ffprobe " + fp
@@ -5508,14 +5550,16 @@ function renderCamRead(c, p){
       + roRow("该路状态", p.enabled ? "启用" : "已停用", p.enabled ? "" : "dim")
     + '</div>'
     + '<div class="sub">'
-      + '<h4>缩时压制 <em>' + cmLabel(cmOf(p)) + '</em></h4>'
-      + roRow("缩时方案", cmOf(p) === "follow" ? "跟随全局" : cmLabel(cmOf(p))
+      + '<h4>事件侦测 <em>' + cmLabel(cmOf(p)) + '</em></h4>'
+      + roRow("事件侦测", cmOf(p) === "follow" ? "跟随全局" : cmLabel(cmOf(p))
               + (cmOf(p) !== "off" ? " · 判定照常" : " · 只录全时"))
       + (cmOf(p) === "materialize"
         ? roRow("切分方式", clipModeLabel(p.clipMode, true))
-          + roRow("缩时片段保留", p.clipDays + " 天")
+          + roRow("浓缩片段保留", p.clipDays + " 天")
           + roRow("输出倍速", (p.clipSpeed || 1) + "×")
-        : "")
+        : (cmOf(p) === "virtual"
+            ? roRow("归档浓缩片段", (LK.archDays || 7) + " 天（通用设置）")
+            : ""))
     + '</div>'
     + '<div class="sub">'
       + '<h4>判读条件 <em>' + judgeLine(p) + '</em></h4>'
@@ -5590,15 +5634,19 @@ function cmOf(p){
   return m === "follow" ? (LK.condenseMode || "virtual") : m;
 }
 function cmLabel(m){
-  return m === "virtual" ? "虚拟缩时" : m === "materialize" ? "物化切片"
-       : m === "off" ? "关闭" : "跟随全局";
+  return m === "off" ? "关闭" : m === "materialize" ? "含浓缩片段（仅配置）"
+       : m === "virtual" ? "仅台账" : "跟随全局";
+}
+/* 事件侦测→virtual/off 映射到服务端 condense_mode；浓缩片段(clipOut)为配置项，UI 不暴露，改后会同步 */
+function syncCondenseMode(){
+  LK.condenseMode = !LK.ledger ? "off" : (LK.clipOut ? "materialize" : "virtual");
 }
 function condenseHint(){
-  if(LK.condenseMode === "virtual")
-    return "虚拟缩时：判定只记「活动台账」（每路每天几 KB，可永久保留），不产出任何缩时视频；回放在回放页时间轴上点标记按需播放。零常驻编码，存储只花在全时录像上。";
+  if(LK.condenseMode === "off")
+    return "关闭：只录全时、不判定。回放页时间轴没有活动标记，也不归档。";
   if(LK.condenseMode === "materialize")
-    return "物化切片：按下面的切分方式产出缩时片段文件（传统方案），台账同步记录，时间轴回放与片段文件都可用。编码开销照旧。";
-  return "关闭：只录全时、不判定。回放页时间轴没有活动标记，也不产出缩时片段。";
+    return "含浓缩片段（仅配置开启）：除活动台账外，还按切分方式产出缩时片段文件，编码开销更高。";
+  return "事件侦测开启：判定只记「活动台账」（每路每天几 KB，可永久保留），不产出缩时视频；回放在回放页时间轴上点标记按需播放，全时过期后自动裁归档浓缩。零常驻编码，存储只花在全时录像上。";
 }
 function silentLabel(){
   return PPLAY.silent === "skip" ? "跳过" : PPLAY.silent + "× 快进";
@@ -5641,7 +5689,7 @@ function renderCamEdit(c, p){
       + '<div class="top"><span class="n">全时录像保留</span><span class="v" data-out="fullDays">' + p.fullDays + ' 天</span></div>'
       + '<div class="stepper" style="margin-top:8px"><button data-ret="fullDays" data-d="-1">−</button>'
         + '<span class="val">' + p.fullDays + ' 天</span><button data-ret="fullDays" data-d="1">+</button></div>'
-      + '<div class="h">全时体积大（一路约 20~30 GB/天），天数按可用空间估。缩时片段的保留天数在「缩时压制」里单独设。</div>'
+      + '<div class="h">最前面 ' + p.fullDays + ' 天是<b>全时原画</b>（一路约 20~30 GB/天），这也是全局「归档回溯」的前段全时天数；更早的录像以<b>归档浓缩片段</b>保留（总天数见通用设置的「归档保留」），两者不重复占用空间。</div>'
     + '</div>'
     + '<div class="srow">'
       + '<div class="top"><span class="n">录制分片长度</span>'
@@ -5654,20 +5702,20 @@ function renderCamEdit(c, p){
       + '<div class="h">分片长度写进 ffmpeg 命令行，改了会<b>优雅重启这一路录制</b>（当前分片先写完再切），不会丢数据。</div>'
     + '</div>';
 
-  /* ---- ③ 缩时压制 ---- */
+  /* ---- ③ 事件侦测 ---- */
   const fullDayGB = fullDayMbps(c) * 86400 / 8 / 1024;
   const clipDayGB = fullDayGB * 0.07 / speed;
   const segsToday = (state.activity && state.activity.length) ? state.activity.length : null;
   const drift = judgeDrift(p);
   const bodyCond =
       '<div class="srow" style="padding-top:6px">'
-      + '<div class="top"><span class="n">缩时方案</span>'
+      + '<div class="top"><span class="n">事件侦测</span>'
         + '<span class="v">' + cmLabel(p.condenseMode || "follow") + '</span></div>'
       + '<div class="chips">'
-        + [["follow","跟随全局"],["virtual","虚拟缩时"],["materialize","物化切片"],["off","关闭"]].map(([v,l])=>
+        + [["follow","跟随全局"],["virtual","开启"],["off","关闭"]].map(([v,l])=>
             '<button class="chip ' + ((p.condenseMode||"follow")===v?"on":"") + '" data-cmcam="' + v + '">' + l + '</button>').join("")
       + '</div>'
-      + '<div class="h">跟随全局 = 用「通用设置 · 缩时与存储方案」。虚拟缩时只写活动台账、不产出缩时视频（回放走回放页时间轴）；物化切片按切分方式产出片段文件；关闭 = 只录全时不判定。</div>'
+      + '<div class="h">跟随全局 = 用「通用设置 · 事件侦测与归档」。开启 = 每路单独做事件侦测、写活动台账、全时过期后裁归档浓缩；关闭 = 只录全时不判定。每路可单独覆盖全局。</div>'
     + '</div>'
     + (cm === "materialize" ? (
         '<div class="impact">'
@@ -5695,16 +5743,17 @@ function renderCamEdit(c, p){
         + '<div class="h">2× = 10 秒事件压成 5 秒，体积也约按比例缩小。倍速 &gt; 1 要重编码，CPU 占用明显上升；建议先 2× 观察一天。</div>'
       + '</div>'
       + '<div class="srow">'
-        + '<div class="top"><span class="n">缩时片段保留</span><span class="v" data-out="clipDays">' + p.clipDays + ' 天</span></div>'
+        + '<div class="top"><span class="n">浓缩片段保留</span><span class="v" data-out="clipDays">' + p.clipDays + ' 天</span></div>'
         + '<div class="stepper" style="margin-top:8px"><button data-ret="clipDays" data-d="-1">−</button>'
           + '<span class="val">' + p.clipDays + ' 天</span><button data-ret="clipDays" data-d="1">+</button></div>'
-        + '<div class="h">与全时录像各自独立，改这里不影响全时保留天数。</div>'
+        + '<div class="h">仅「物化切片」模式生效（仅配置可开），控制 <code style="font-size:10.5px">_clip</code> 片段保留天数；'
+          + '归档浓缩片段由通用设置的「归档保留」天数控制，与此处无关。</div>'
       + '</div>'
       ) : (cm === "virtual"
-        ? '<div class="hint" style="margin:6px 0 10px">这一路用<b>虚拟缩时</b>：判定照常跑、只写活动台账（回放页时间轴可看），不产出缩时视频。切分方式/输出倍速/片段保留仅在物化切片下生效。</div>'
-        : '<div class="hint" style="margin:6px 0 10px">这一路缩时已<b>关闭</b>：只录全时、不判定，回放页时间轴没有活动标记。已有片段不会被删除。</div>'))
+        ? '<div class="hint" style="margin:6px 0 10px">这一路用<b>仅台账</b>：判定照常跑、只写活动台账（回放页时间轴可看），不产出缩时片段。切分方式/输出倍速/片段保留仅在物化切片（仅配置可开）下生效。</div>'
+        : '<div class="hint" style="margin:6px 0 10px">这一事件侦测已<b>关闭</b>：只录全时、不判定，回放页时间轴没有活动标记。已有片段不会被删除。</div>'))
     /* 输出画质属于「压制产物」参数，留本段；判读参数已搬到「检测」段（0.9.61） */
-    + '<div class="' + (on ? "" : "dim") + '">'
+    + (cm === "materialize" ? '<div class="' + (on ? "" : "dim") + '">'
       + '<div class="subfold" data-outopen="1"><b>输出画质</b>'
         + '<span class="st" style="margin-left:auto">' + (SET.outOpen ? "" : esc(qualLine(p))) + '</span>'
         + '<span class="chev">' + (SET.outOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>'
@@ -5729,8 +5778,8 @@ function renderCamEdit(c, p){
           + '<div class="sumline" id="outSub" style="margin-top:6px">约 ' + mb.toFixed(1) + ' Mbps · '
             + (mb * 0.44 * 24).toFixed(1) + ' GB/天</div>'
         ) : '')
-    + '</div>'
-    + (on ? '' : '<div class="hint" style="margin:6px 0 0">缩时已关闭：以上画质参数暂不生效，开启后恢复。侦测参数在下方「检测」段，不受影响。</div>');
+    + '</div>' : '')
+    + (on ? '' : '<div class="hint" style="margin:6px 0 0">事件侦测已关闭：以上画质参数暂不生效，开启后恢复。侦测参数在下方「检测」段，不受影响。</div>');
 
   /* ---- ④ 检测忽略区 ---- */
   const maskCnt = (p.masks && p.masks.ignore) ? p.masks.ignore.length : 0;
@@ -5763,13 +5812,13 @@ function renderCamEdit(c, p){
       + '<div class="h" style="margin-top:6px">只为需要的内容花算力：院子可配「人员 + 车辆」、客厅只留「人员」。全关等于不检测。</div>'
     + '</div>'
       ) : (camDet === "off" ? '<div class="hint" style="margin:6px 0 10px">本路已<b>强制关闭</b> AI 识别：不抽帧、不推理、不通知，下面的移动侦测（像素差）不受影响。</div>' : ""))
-    /* 移动侦测（像素差）组：0.9.61 从「缩时压制」段搬来，与 AI 识别并列——
+    /* 移动侦测（像素差）组：0.9.61 从「事件侦测」段搬来，与 AI 识别并列——
        用户面对的是一个「检测」段，不该猜到帧差参数藏在缩时段落里 */
     + '<div class="srow">'
       + '<div class="top"><span class="n">移动侦测（像素差）</span>'
-        + '<span class="v">' + (on ? SENS_NAME[j.sens] + " · " + ENGINE_NAME[j.engine] : "未启用 · 缩时已关闭") + '</span></div>'
+        + '<span class="v">' + (on ? SENS_NAME[j.sens] + " · " + ENGINE_NAME[j.engine] : "未启用 · 事件侦测已关闭") + '</span></div>'
       + '<div class="h" style="margin-top:6px;line-height:1.55">不需要 AI：ffmpeg 把画面缩到 320×180 后逐像素比对，'
-        + '变化超过门槛的时段记为活动。它随本路缩时方案运行（方案关闭 = 不判定），与上面的 AI 识别各自独立。</div>'
+        + '变化超过门槛的时段记为活动。它随本路事件侦测运行（关闭 = 不判定），与上面的 AI 识别各自独立。</div>'
     + '</div>'
     + '<div class="' + (on ? "" : "dim") + '">'
       + chipRow("灵敏度", "judge.sens", j.sens,
@@ -5805,7 +5854,7 @@ function renderCamEdit(c, p){
             + ' · 抽样 ' + JUDGE_DEFAULTS.fps + ' 帧/秒 · 合并 ' + JUDGE_DEFAULTS.mergeGap + ' 秒</div>'
         ) : '')
     + '</div>'
-    + (on ? '' : '<div class="hint" style="margin:6px 0 0">本路缩时已关闭：以上侦测参数暂不生效，开启后恢复；AI 识别不受影响。</div>')
+    + (on ? '' : '<div class="hint" style="margin:6px 0 0">本路事件侦测已关闭：以上侦测参数暂不生效，开启后恢复；AI 识别不受影响。</div>')
     + '<div class="mtip" style="margin:10px 0 8px"><b style="color:var(--warn)">检测忽略区</b>：框中心落进忽略格的检出结果'
       + '<b>直接丢弃</b>（后端过滤、不改画面），AI 识别与移动侦测<b>共用</b>这块忽略区。'
       + '<b>按住拖动多选，点一下已选的格子取消。</b></div>'
@@ -5826,10 +5875,9 @@ function renderCamEdit(c, p){
     + camAcc("keep", 2, "保留与分片",
         "全时 " + p.fullDays + " 天 · " + segLabel(p.segSec || LK.segSec),
         bodyKeep, openAcc === "keep")
-    + camAcc("condense", 3, "缩时压制",
-        (on ? (clipModeLabel(p.clipMode, true).replace("跟随通用 · ", "")
-               + " · " + speed + "× · " + p.clipDays + " 天")
-             : '<span style="color:var(--faint)">已关闭 · 只录全时</span>'),
+    + camAcc("condense", 3, "事件侦测",
+        (on ? ("事件侦测" + (cmOf(p) === "materialize" ? " · 含浓缩片段" : " · 仅台账"))
+    : '<span style="color:var(--faint)">已关闭 · 只录全时</span>'),
         bodyCond, openAcc === "condense")
     + camAcc("mask", 4, "检测",
         (!LK.detEnable ? "AI 未开启"
@@ -5837,7 +5885,7 @@ function renderCamEdit(c, p){
           : (camCls.person||camCls.two_wheeler||camCls.vehicle) ? "AI 开 · " +
             [camCls.person?"人":"", camCls.two_wheeler?"两轮":"", camCls.vehicle?"车":""].filter(Boolean).join("+")
           : "AI 开 · 类别全关")
-        + " · 侦测 " + (on ? SENS_NAME[j.sens] : "随缩时关闭")
+        + " · 侦测 " + (on ? SENS_NAME[j.sens] : "随事件侦测关闭")
         + " · 忽略区 " + maskCnt + " 格",
         bodyDetect, openAcc === "mask")
     + '<div class="dz"><button class="delbtn' + (SET.armed === c.id ? " armed" : "") + '" data-delcam="' + c.id + '">'
@@ -6224,7 +6272,7 @@ function renderGenZone(){
     + '<div><b>通用设置</b><div class="zs">所有摄像头共用 · 录制 / 压制 / 外观</div></div>'
     + '<span class="chev">' + (SET.genOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>';
   if(SET.genOpen){
-    h += cardRec() + cardLink() + cardDetect() + cardLook()
+    h += cardRec() + cardLink() + cardDetect() + cardLook() + cardPlay()
       + '<div class="editbar"><button class="ok" data-gensave="1">保存通用设置</button></div>';
   }else{
     h += '<div class="gcard genfold"><div class="genline">' + genSummary() + '</div>'
@@ -6663,7 +6711,7 @@ function cardDetectDiag(){
   return head + rt + rtLine + perf + rows + ntBlock
     + '<div class="dline" style="margin-top:8px;font-size:10px;color:var(--faint)">'
     + '抽帧失败会写进运行日志（带 ffmpeg 真实报错）；命中类别同时写进活动台账，'
-    + '回放页与缩时触发都从台账读，与这里的计数同源。</div>'
+    + '回放页与活动触发都从台账读，与这里的计数同源。</div>'
     + '</div>';
 }
 
@@ -6840,21 +6888,13 @@ function bindSettings(body){
       LK.nextBatch = nextLinkAt(); renderCamTabs(); saveCfgSoon();
     };
   });
-  body.querySelectorAll("[data-clipstyle]").forEach(el=>{
+  /* ① 事件侦测总闸：开/关 */
+  body.querySelectorAll("[data-ledger]").forEach(el=>{
     el.onclick = ()=>{
-      LK.clipStyle = el.dataset.clipstyle === "split" ? "split" : "join";
+      LK.ledger = !LK.ledger;
+      syncCondenseMode();
       renderCamTabs(); saveCfgSoon();
-      toast("toast2", LK.clipStyle === "split"
-        ? "通用切分改为活动切片 · 每个活动区间单独成片、帧级切点"
-        : "通用切分改为整段拼接 · 流复制零损失");
-    };
-  });
-  /* 缩时方案（通用）：virtual/materialize/off，推服务端走 _ENUM_KEYS 白名单 */
-  body.querySelectorAll("[data-cmode]").forEach(el=>{
-    el.onclick = ()=>{
-      LK.condenseMode = el.dataset.cmode;
-      renderCamTabs(); saveCfgSoon();
-      toast("toast2", condenseHint().split("：")[0]);
+      toast("toast2", LK.ledger ? "事件侦测已开启 · 回放页出现活动标记、可归档" : "事件侦测已关闭 · 只录全时不判定");
     };
   });
   /* 回放静默段处理：客户端播放偏好，存本机（不影响服务端判定） */
@@ -6930,7 +6970,7 @@ function bindSettings(body){
       LK.detTrigger[k] = !LK.detTrigger[k];
       if(!LK.detTrigger.motion && !LK.detTrigger.person && !LK.detTrigger.vehicle){
         LK.detTrigger[k] = true;        /* 至少保留一项（与服务端强校同口径） */
-        toast("toast2", "缩时触发至少保留一项 · 全不勾所有画面都会按静止剔除");
+        toast("toast2", "活动触发至少保留一项 · 全不勾所有画面都会按静止剔除");
         return;
       }
       renderCamTabs(); saveCfgSoon();
@@ -7172,7 +7212,7 @@ function bindSettings(body){
   body.querySelectorAll("[data-en]").forEach(el=>{
     el.onclick = ()=>{ draftSet("enabled", !draftGet("enabled")); renderCamTabs(); };
   });
-  /* 缩时压制：每路总开关 / 输出倍速（草稿态，点保存才落盘）。
+  /* 事件侦测：每路总开关 / 输出倍速（草稿态，点保存才落盘）。
      折叠由手风琴的 data-acc 统一管，这里不再有自己的开关。 */
   body.querySelectorAll("[data-cond]").forEach(el=>{
     el.onclick = ()=>{
@@ -7193,7 +7233,7 @@ function bindSettings(body){
       renderCamTabs();
     };
   });
-  /* 缩时方案：follow/virtual/materialize/off（草稿态，点保存才落盘） */
+  /* 事件侦测：follow=跟随 / virtual=开启 / off=关闭（materialize 仅配置可设，草稿态，点保存才落盘） */
   body.querySelectorAll("[data-cmcam]").forEach(el=>{
     el.onclick = ()=>{
       draftSet("condenseMode", el.dataset.cmcam);
@@ -7460,9 +7500,15 @@ function cancelCamDrag(){
    选中跟「日期字符串」走（daySel），不跟下标，跨天/切模式不漂移。 */
 function recalcDayList(){
   const rec = state.rec || {};
-  const src = state.pmode === "clip" ? rec.clips : rec.cameras;
-  const days = (src && src[state.camId]) || {};
-  const all = Object.keys(days).sort();          // 旧→新，全量
+  /* 文件页覆盖「全时 + 物化切片 + 虚拟缩时归档浓缩」三源：任意一天只要任一源有文件
+     就进日期条，这样 7 天回溯里第 4~7 天（只有 _archive 归档片段）也能翻到，
+     不再像以前只看 cameras 导致后几天在文件页彻底消失。 */
+  const set = {};
+  ["cameras", "clips", "archive"].forEach(k=>{
+    const d = (rec[k] && rec[k][state.camId]) || {};
+    Object.keys(d).forEach(day=>{ if(d[day] && d[day].length) set[day] = 1; });
+  });
+  const all = Object.keys(set).sort();          // 旧→新，全量（三源并集）
   /* 日期下拉必须含当前日期：今天还没落盘第一个文件时也补进去，
      否则用户打开下拉找不到"今天"（v0.9.48 反馈） */
   if(all.length){
@@ -7473,6 +7519,19 @@ function recalcDayList(){
   let idx = state.daySel ? all.indexOf(state.daySel) : -1;
   if(idx < 0) idx = all.length ? all.length - 1 : 0;   // 没选过/选中的天没了 → 最新一天
   state.dayIdx = idx;
+}
+
+/* 某一天「以哪种 kind 展示」：当天有全时原画 → full；否则有归档浓缩 → archive；
+   否则有物化切片 → clip。文件页不再按全局 pmode 单选，而是跟着当天磁盘上实际
+   有什么文件走 —— 否则第 4~7 天的归档片段会因为没有 full 而被整个跳过。 */
+function dayKind(day){
+  const rec = state.rec || {};
+  const cam = state.camId;
+  const has = k=>{ const d = (rec[k] && rec[k][cam]) || {}; return !!(d[day] && d[day].length); };
+  if(has("cameras")) return "full";
+  if(has("archive")) return "archive";
+  if(has("clips")) return "clip";
+  return "full";
 }
 let recRetry = 0;
 function fetchRecordings(done){
@@ -7505,14 +7564,14 @@ function fetchRecordings(done){
                一律用 src，播放进度才用 s/e。 */
 function realSegs(camId, day, kind){
   const rec = state.rec || {};
-  const isClip = kind === "clip";
-  const src = isClip ? rec.clips : rec.cameras;
+  const isClip = kind === "clip" || kind === "archive";
+  const src = kind === "archive" ? rec.archive : (isClip ? rec.clips : rec.cameras);
   const days = src && src[camId];
   const files = days && days[day];
   if(!Array.isArray(files) || !files.length) return null;
   const segLen = Math.max(10, Math.min(3600, +(rec.segment_sec || LK.segSec || 300)));
   const toS = n=>{ const q = n.slice(0,8).split("-"); return (+q[0])*3600 + (+q[1])*60 + (+q[2]); };
-  const url = n=> "/api/record/file?kind=" + (isClip ? "clip" : "full")
+  const url = n=> "/api/record/file?kind=" + (kind === "archive" ? "archive" : (isClip ? "clip" : "full"))
                 + "&cam=" + encodeURIComponent(camId)
                 + "&day=" + day + "&name=" + encodeURIComponent(n);
 
@@ -7531,8 +7590,8 @@ function realSegs(camId, day, kind){
         en = Math.max(st + 1, next);          // 覆盖到下一片开始（末片按分片长度兜底）
       }
       const seg = { s: acc, e: acc + dur, src: st, srcEnd: en, dur,
-                    level:.5, reason:"缩时片段", hits:0,
-                    bytes:f.b || 0, file:url(f.n), clip:true, name:f.n };
+                    level:.5, reason: kind === "archive" ? "归档浓缩" : "缩时片段", hits:0,
+                    bytes:f.b || 0, file:url(f.n), clip:true, arch: kind === "archive", name:f.n };
       acc += dur;
       return seg;
     });
@@ -7556,10 +7615,12 @@ function curDay(){
 /* 没有录像文件就不显示日期条、片段列表这些空架子 */
 function applyPlaybackVisibility(){
   const rec = state.rec || {};
-  const camDays = rec.cameras && rec.cameras[state.camId];
-  const clipDays = rec.clips && rec.clips[state.camId];
-  const hasCam = !!(camDays && Object.keys(camDays).length)
-              || !!(clipDays && Object.keys(clipDays).length);
+  const camDays = (rec.cameras && rec.cameras[state.camId]) || {};
+  const clipDays = (rec.clips && rec.clips[state.camId]) || {};
+  const archDays = (rec.archive && rec.archive[state.camId]) || {};
+  const hasCam = Object.keys(camDays).length
+              || Object.keys(clipDays).length
+              || Object.keys(archDays).length;
   const show = !!hasCam;
   [".modebar","#dates",".heatwrap",".listhead","#clips"].forEach(sel=>{
     const el = document.querySelector(sel);
@@ -7572,8 +7633,12 @@ function applyPlaybackVisibility(){
     empty.innerHTML = "还没有任何录像文件<br><span style=\"font-size:11.5px;color:var(--faint2)\">填好 RTSP 地址并启用后，录像会按「摄像头 / 日期 / 时段」存进保存目录；出现文件后这里会自动点亮</span>";
   }else{
     const cam = curCam();
-    empty.innerHTML = "「" + esc(cam ? cam.name : "该摄像头") + "」还没有"
-      + (state.pmode === "clip" ? "缩时片段：全时录像压制完成后会出现在这里" : "录像文件");
+    const what = state.curKind === "clip"
+      ? "缩时片段：全时录像压制完成后会出现在这里"
+      : state.curKind === "archive"
+        ? "归档浓缩片段：全时录像过期后由归档任务裁出"
+        : "录像文件";
+    empty.innerHTML = "「" + esc(cam ? cam.name : "该摄像头") + "」还没有" + what;
   }
 }
 
@@ -8886,18 +8951,28 @@ function pvResume(){
 /* ================= 启动 ================= */
 function loadDay(){
   if(!state.camId || !camParams[state.camId]){
-    state.activity = []; state.segs = [];
+    state.curKind = "full"; state.activity = []; state.segs = [];
     renderDates(); renderOverview(); renderHeat(); renderClips();
     applyPlaybackVisibility();
     return;
   }
   recalcDayList();
-  const real = realSegs(state.camId, curDay(), "full");
-  /* 热力条吃「当前模式」的数据：缩时模式下按源时刻展示哪些时段有成片，
-     点格子才能正确过滤出那个时段的缩时片段（以前固定吃全时清单）。 */
-  const clips = state.pmode === "clip" ? (realSegs(state.camId, curDay(), "clip") || []) : null;
-  state.activity = clips || real || [];   // 磁盘上没有就是没有，绝不拿演示数据充数
-  state.segs = clips || (real || []);
+  const day = curDay();
+  let kind = dayKind(day);
+  /* 回放页用户主动在 full/clip 间切换时，若该天确有该源则尊重其选择；
+     文件页没有模式切换按钮，统一按当天磁盘上实际有什么文件走 dayKind ——
+     否则第 4~7 天的归档浓缩因没有 full 会被跳过，在文件页彻底消失。 */
+  const onPlay = document.getElementById("page-play").classList.contains("on");
+  if(onPlay && (state.pmode === "full" || state.pmode === "clip")){
+    if(state.pmode === "full" && ((state.rec.cameras||{})[state.camId]||{})[day])
+      kind = "full";
+    else if(state.pmode === "clip" && ((state.rec.clips||{})[state.camId]||{})[day])
+      kind = "clip";
+  }
+  state.curKind = kind;
+  const segs = realSegs(state.camId, day, kind) || [];
+  state.activity = segs;   // 磁盘上没有就是没有，绝不拿演示数据充数
+  state.segs = segs;
   renderDates(); renderOverview(); renderHeat(); renderClips();
   applyPlaybackVisibility();
 }
