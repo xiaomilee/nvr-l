@@ -1523,8 +1523,8 @@ body.rot .vtlscroll{touch-action:none}
       <div class="stage" id="stage">
         <!-- 双 video 交替：一个在播、另一个预加载下一段。切段时旧帧留在屏幕上，
              新段就绪后才互换，避免每切一次就黑屏闪一下。 -->
-        <video id="stageVideo" class="sv" playsinline></video>
-        <video id="stageVideoB" class="sv" playsinline muted></video>
+        <video id="stageVideo" class="sv" playsinline preload="auto"></video>
+        <video id="stageVideoB" class="sv" playsinline muted preload="auto"></video>
         <canvas id="scene"></canvas>
         <div class="osd mono">
           <span id="osdCam">CH01</span>
@@ -3311,6 +3311,7 @@ const vidB = document.getElementById("stageVideoB");
 let curVid = vidA, nxtVid = vidB;
 let preloadFor = -1;        /* nxtVid 里预加载的是第几段 */
 let switching = false;      /* 防止 ended 重入 */
+let segRetry = {};          /* 每段加载失败重试计数（key=segIdx），超限跳下一段避免永久黑屏 */
 
 function videoEls(){ return [vidA, vidB]; }
 
@@ -3623,6 +3624,48 @@ videoEls().forEach(v=>{
       st.style.setProperty("--vasp", v.videoWidth + "/" + v.videoHeight);
       syncRail();
     }
+  });
+  /* 外网/NAT 下视频流偶发断流：error=当前段加载失败、stalled=缓冲卡住。
+     自愈：前台播放中的 video 触发时重拉当前段，超限则跳下一段；预加载的
+     video 触发时只清预加载标记让其重新拉，不污染前台切换。 */
+  v.addEventListener("error", ()=>{
+    if(v !== curVid){                 /* 预加载失败：清标记，下轮重新预加载 */
+      if(preloadFor >= 0) preloadFor = -1;
+      return;
+    }
+    if(!state.videoSeg) return;
+    const seg = state.segs[state.segIdx];
+    if(!seg || !seg.file) return;
+    const k = state.segIdx;
+    segRetry[k] = (segRetry[k] || 0) + 1;
+    if(segRetry[k] <= 3){
+      try{
+        v.preload = "auto";
+        v.src = seg.file;
+        v.load();
+        safePlay(v);
+      }catch(e){}
+    }else{                           /* 超限放弃本段，接下一段，不让画面卡死 */
+      const ord = playOrder();
+      const pos = ord.indexOf(k);
+      if(pos >= 0 && pos < ord.length - 1) finishSegAndNext();
+    }
+  });
+  let _stalledAt = 0;
+  v.addEventListener("stalled", ()=>{
+    if(v !== curVid || !state.videoSeg) return;
+    const now = Date.now();
+    if(now - _stalledAt < 2000) return;     /* 2s 内只试一次，避免频繁重连 */
+    _stalledAt = now;
+    if(v.readyState >= 3) return;           /* 缓冲其实够，别瞎重连打断播放 */
+    const seg = state.segs[state.segIdx];
+    if(!seg || !seg.file) return;
+    try{
+      v.preload = "auto";
+      v.src = seg.file;
+      v.load();
+      safePlay(v);
+    }catch(e){}
   });
 });
 

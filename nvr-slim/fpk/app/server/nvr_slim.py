@@ -1785,6 +1785,14 @@ def set_link(body):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "nvr/" + runtime.VERSION
+    # HTTP/1.1 复用同一条 TCP 连接完成多个请求（尤其是回放视频的连续 Range 拉取）。
+    # 外网手机经 NAT 时，HTTP/1.0（默认）每次 Range 都新建连接会快速耗尽 NAT 会话表、
+    # 触发限速，导致回放缓冲断流黑屏而直播（单条 MJPEG 长连接）正常 —— 这正是外网回放
+    # 黑屏的主因。改 1.1 后浏览器复用连接，NAT 会话数从「几十条」降到「一两条」。
+    # 注意：HTTP/1.1 下「无 Content-Length 又无 chunked」的响应会让浏览器一直等，所以
+    # 下方所有空响应（304/416）都补了 Content-Length: 0；MJPEG 直播显式 Connection: close
+    # （无限流不需要复用）。
+    protocol_version = "HTTP/1.1"
 
     # fnOS 桌面壳与 health.json 会高频探测，这些请求不落日志，省磁盘写
     QUIET = ("/api/health", "/api/live", "/api/status")
@@ -2105,6 +2113,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(304)
             self.send_header("ETag", etag)
             self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
         with open(full, "rb") as f:
@@ -2257,6 +2266,7 @@ class Handler(BaseHTTPRequestHandler):
             self._responded = True
             self.send_response(416)
             self.send_header("Content-Range", "bytes */%d" % size)
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
         self._responded = True
@@ -2570,6 +2580,7 @@ class Handler(BaseHTTPRequestHandler):
             self._responded = True
             self.send_response(304)
             self.send_header("ETag", etag)
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
         cache = self._static_cache
