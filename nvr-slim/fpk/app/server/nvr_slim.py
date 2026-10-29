@@ -2322,50 +2322,6 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             pass
 
-_REMUX_LOCK = threading.Lock()
-
-def _remux_to_faststart(src, ff, cache_dir):
-    """把 fMP4（碎片化、moov 空）重封装为 moov 前置的进度式 MP4，移动端 <video> 才能播。
-    失败/不可用时返回 None（调用方退化为原文件）。结果按 源路径+mtime+size 缓存。"""
-    if not ff or not os.path.exists(ff) or not os.path.isfile(src):
-        return None
-    try:
-        os.makedirs(cache_dir, exist_ok=True)
-    except OSError:
-        return None
-    try:
-        st = os.stat(src)
-    except OSError:
-        return None
-    key = hashlib.md5(("%s\x00%d\x00%d" % (src, st.st_mtime_ns, st.st_size)).encode()).hexdigest()
-    out = os.path.join(cache_dir, key + ".mp4")
-    if os.path.isfile(out) and os.path.getsize(out) > 0:
-        return out
-    tmp = "%s.%d.tmp" % (out, os.getpid())
-    with _REMUX_LOCK:
-        if os.path.isfile(out) and os.path.getsize(out) > 0:
-            return out
-        try:
-            r = subprocess.run([ff, "-y", "-i", src, "-c", "copy",
-                                "-movflags", "+faststart", "-f", "mp4", tmp],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=180)
-            if r.returncode == 0 and os.path.getsize(tmp) > 0:
-                os.replace(tmp, out)
-                return out
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            return None
-        except Exception:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            return None
-
-
     def do_POST(self):
         # 统一兜底：任何未捕获异常都必须变成一条 500 JSON，不能直接崩掉连接。
         # 以前 save_config 撞上 Windows 文件占用时抛 PermissionError，浏览器看到的是
@@ -2660,6 +2616,50 @@ def _remux_to_faststart(src, ff, cache_dir):
             self.wfile.write(data)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+
+_REMUX_LOCK = threading.Lock()
+
+def _remux_to_faststart(src, ff, cache_dir):
+    """把 fMP4（碎片化、moov 空）重封装为 moov 前置的进度式 MP4，移动端 <video> 才能播。
+    失败/不可用时返回 None（调用方退化为原文件）。结果按 源路径+mtime+size 缓存。"""
+    if not ff or not os.path.exists(ff) or not os.path.isfile(src):
+        return None
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except OSError:
+        return None
+    try:
+        st = os.stat(src)
+    except OSError:
+        return None
+    key = hashlib.md5(("%s\x00%d\x00%d" % (src, st.st_mtime_ns, st.st_size)).encode()).hexdigest()
+    out = os.path.join(cache_dir, key + ".mp4")
+    if os.path.isfile(out) and os.path.getsize(out) > 0:
+        return out
+    tmp = "%s.%d.tmp" % (out, os.getpid())
+    with _REMUX_LOCK:
+        if os.path.isfile(out) and os.path.getsize(out) > 0:
+            return out
+        try:
+            r = subprocess.run([ff, "-y", "-i", src, "-c", "copy",
+                                "-movflags", "+faststart", "-f", "mp4", tmp],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=180)
+            if r.returncode == 0 and os.path.getsize(tmp) > 0:
+                os.replace(tmp, out)
+                return out
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return None
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return None
 
 
 def main():

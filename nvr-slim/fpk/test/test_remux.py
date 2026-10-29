@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""0.9.99 移动端回放修复的守卫测试。
+"""0.9.100 回归修复后的守卫测试（0.9.99 引入 _remux_to_faststart，0.9.100 修复其误置于类体内导致 Handler 方法被吞的回归）。
 
 为什么要测这条链：录制分片是碎片化 fMP4（empty_moov），iOS Safari / 微信 WebView
 的 <video> 渐进式播放器解析不了、必黑屏。修复是在播放请求时把分片按需重封装成
