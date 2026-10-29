@@ -3541,7 +3541,7 @@ document.getElementById("bNext").onclick = ()=> jumpSeg(1);
 /* ⋯ 导出菜单：导出当前播放的源文件（服务端 /api/record/file 加 dl=1 → 附件下载） */
 function exportUrl(){
   const seg = state.segs[state.segIdx];
-  return seg && seg.file ? (seg.file + "&dl=1") : null;
+  return seg && seg.file ? (seg.file.replace(/&remux=1/, "") + "&dl=1") : null;
 }
 function exportName(){
   const seg = state.segs[state.segIdx];
@@ -7616,7 +7616,7 @@ function realSegs(camId, day, kind){
   const toS = n=>{ const q = n.slice(0,8).split("-"); return (+q[0])*3600 + (+q[1])*60 + (+q[2]); };
   const url = n=> "/api/record/file?kind=" + (kind === "archive" ? "archive" : (isClip ? "clip" : "full"))
                 + "&cam=" + encodeURIComponent(camId)
-                + "&day=" + day + "&name=" + encodeURIComponent(n);
+                + "&day=" + day + "&name=" + encodeURIComponent(n) + "&remux=1";
 
   if(isClip){
     let acc = 0;

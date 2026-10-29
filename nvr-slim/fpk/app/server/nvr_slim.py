@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import threading
+import hashlib
 import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2252,7 +2253,19 @@ class Handler(BaseHTTPRequestHandler):
                 break
         if full is None:
             return self._send(404, {"ok": False, "error": "no such file"})
-        size = os.path.getsize(full)
+        # 移动端兼容：把 fMP4 碎片文件重封装为 moov 前置的进度式 MP4（见 _remux_to_faststart）。
+        # 仅 full 需要（clip/archive 已由 condense 产出 faststart）；下载(dl=1)永远给原片。
+        serve_path = full
+        _remux = (q.get("remux") or [""])[0] in ("1", "true")
+        _dl = (q.get("dl") or [""])[0] in ("1", "true")
+        if _remux and not _dl and kind == "full":
+            _ff = STATE.get("ffmpeg_bin")
+            if _ff:
+                _cache = os.path.join(STATE.get("var_dir") or ".", "remux")
+                _rp = _remux_to_faststart(full, _ff, _cache)
+                if _rp:
+                    serve_path = _rp
+        size = os.path.getsize(serve_path)
         start, end, code = 0, size - 1, 200
         rng = self.headers.get("Range")
         m = re.match(r"bytes=(\d*)-(\d*)", rng or "")
@@ -2285,7 +2298,7 @@ class Handler(BaseHTTPRequestHandler):
                              "attachment; filename*=UTF-8''" + _uq(fname))
         self.end_headers()
         try:
-            with open(full, "rb") as f:
+            with open(serve_path, "rb") as f:
                 f.seek(start)
                 remain = end - start + 1
                 while remain > 0:
@@ -2308,6 +2321,50 @@ class Handler(BaseHTTPRequestHandler):
                 remain -= len(chunk)
         except (OSError, ValueError):
             pass
+
+_REMUX_LOCK = threading.Lock()
+
+def _remux_to_faststart(src, ff, cache_dir):
+    """把 fMP4（碎片化、moov 空）重封装为 moov 前置的进度式 MP4，移动端 <video> 才能播。
+    失败/不可用时返回 None（调用方退化为原文件）。结果按 源路径+mtime+size 缓存。"""
+    if not ff or not os.path.exists(ff) or not os.path.isfile(src):
+        return None
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except OSError:
+        return None
+    try:
+        st = os.stat(src)
+    except OSError:
+        return None
+    key = hashlib.md5(("%s\x00%d\x00%d" % (src, st.st_mtime_ns, st.st_size)).encode()).hexdigest()
+    out = os.path.join(cache_dir, key + ".mp4")
+    if os.path.isfile(out) and os.path.getsize(out) > 0:
+        return out
+    tmp = "%s.%d.tmp" % (out, os.getpid())
+    with _REMUX_LOCK:
+        if os.path.isfile(out) and os.path.getsize(out) > 0:
+            return out
+        try:
+            r = subprocess.run([ff, "-y", "-i", src, "-c", "copy",
+                                "-movflags", "+faststart", "-f", "mp4", tmp],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=180)
+            if r.returncode == 0 and os.path.getsize(tmp) > 0:
+                os.replace(tmp, out)
+                return out
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return None
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return None
+
 
     def do_POST(self):
         # 统一兜底：任何未捕获异常都必须变成一条 500 JSON，不能直接崩掉连接。
