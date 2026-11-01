@@ -21,6 +21,7 @@
 分片数，剩下的下次继续（排序保证总是最临期的先被处理）。
 """
 import json
+import ledger
 import os
 import time
 from datetime import date, timedelta
@@ -152,18 +153,20 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
         out["policy"].append(pol)
         if mode != "virtual":
             continue                       # materialize 有 _clip，off 无台账
-        led_root = ledger_dirs(dn)
-        led_names = set()
-        if os.path.isdir(led_root):
-            # _ledger/<cam>/<YYYY-MM-DD>.json —— 是文件，不是目录
-            led_names = {n[:-5] for n in os.listdir(led_root)
-                         if len(n) == 15 and n.endswith(".json")}
         for dname in dict.fromkeys([dn, cid]):
             base = os.path.join(root, dname)
             if not os.path.isdir(base):
                 continue
+            # 台账按「这一轮在扫的目录名」定位：升级过渡期 dir_name 与 id 两个
+            # 目录都可能存在台账，各查各的（与 ledger_payload 的合并口径一致）。
+            led_root = ledger_dirs(dname)
+            led_names = set()
+            if os.path.isdir(led_root):
+                # _ledger/<cam>/<YYYY-MM-DD>.json —— 是文件，不是目录
+                led_names = {n[:-5] for n in os.listdir(led_root)
+                             if len(n) == 15 and n.endswith(".json")}
             sel = select_days(scan_fn(base), full_days, today,
-                              _done_days(root, dname), led_names)
+                              _done_days(root, dname, led_root), led_names)
             for d in sel["no_ledger"]:
                 out["no_ledger"].append({"cam": cid, "name": cam.get("name", cid),
                                          "dir": dname, "date": d})
@@ -210,26 +213,84 @@ def _scan_days(base):
             and os.path.isdir(os.path.join(base, n))]
 
 
-def _done_days(root, dname):
+def _done_files(arc_dir):
+    """.done 里记的产物片段数；读不出来返回 -1（当作有产物，不重做）。"""
+    try:
+        with open(done_path(arc_dir), "r", encoding="utf-8") as f:
+            return int((json.load(f) or {}).get("files", -1))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return -1
+
+
+def _done_days(root, dname, led_root=None):
+    """已收尾的日期集合。
+
+    给了 led_root 就顺手自愈一次：.done 记着 files=0（「整天静默」的收尾），
+    但台账里其实有活动窗口 —— 说明那次收尾读到了空台账、是误判，放回去重做。
+    0.9.100 及以前 _ledger_events 读错键，每一天都会被这样误标成已归档，
+    没有这个自愈，历史日期永远救不回来。
+    """
     arc = os.path.join(root, "_archive", dname)
     if not os.path.isdir(arc):
         return set()
-    return {n for n in os.listdir(arc)
-            if is_done(os.path.join(arc, n))}
+    out = set()
+    for n in os.listdir(arc):
+        d = os.path.join(arc, n)
+        if not is_done(d):
+            continue
+        if led_root and _done_files(d) == 0 and _ledger_events(led_root, n):
+            continue                      # 误标：台账有活动，重新归档
+        out.add(n)
+    return out
 
 
 def _ledger_events(led_root, d):
+    """台账 → 全天活动窗口 [(s, e)]（当天钟点秒，已按 GAP 合并）。
+
+    台账 v1 的真实结构是
+        {"v":1, "sources": {"<分片名>.mp4": {"start":…, "windows": [[s, e, cls], …]}}}
+    窗口嵌在 sources 下面、元素是**列表**。
+
+    0.9.100 及以前这里读的是顶层 data["windows"] 且按 w["s"]/w["e"] 取键，
+    层级和元素类型两处都不对，于是永远返回空列表：归档把每一天都判成
+    「整天静默」，写 .done(0) 之后不再重试 —— 表现就是连续运行多天、
+    _archive 里一个文件都没有。0.9.101 修复。
+    """
     p = os.path.join(led_root, d + ".json")
     if not os.path.isfile(p):
         return []
     try:
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return [(float(w["s"]), float(w["e"]))
-                for w in (data.get("windows") or [])
-                if float(w.get("e", 0)) > float(w.get("s", 0))]
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError):
         return []
+    if not isinstance(data, dict):
+        return []
+    raw = []
+    srcs = data.get("sources")
+    if isinstance(srcs, dict):
+        for v in srcs.values():
+            if not isinstance(v, dict):
+                continue
+            for w in (v.get("windows") or []):
+                try:
+                    s, e = float(w[0]), float(w[1])
+                except (TypeError, ValueError, IndexError, KeyError):
+                    continue
+                if e > s:
+                    raw.append((s, e))
+    # 兼容更早的顶层写法（dict 与 [s, e] 两种历史形态），读到就并进去
+    for w in (data.get("windows") or []):
+        try:
+            if isinstance(w, dict):
+                s, e = float(w["s"]), float(w["e"])
+            else:
+                s, e = float(w[0]), float(w[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if e > s:
+            raw.append((s, e))
+    return [(s, e) for s, e in ledger.union(raw)]
 
 
 def _day_files(day_base):
@@ -286,7 +347,13 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
                 segs[f] = (st, min(86400.0, st + seg_sec))
         cuts = slice_windows(ev, segs)
         if not cuts:
-            # 有台账但窗口为空（整天静默）：没有可裁的画面，直接收尾
+            if ev:
+                # 台账有活动窗口、却和任何一个分片都没有交集：分片缺失/已被清理/
+                # 命名不可解析。绝不写 .done —— 写了这天就永久判死，宁可下次再试。
+                log("archive: %s/%s 台账 %d 窗口但无可裁分片，跳过（不落 .done）"
+                    % (item["cam"], d, len(ev)))
+                continue
+            # 真·整天静默：没有可裁的画面，直接收尾
             write_done(arc, 0)
             archived_days.append({**item, "files": 0, "empty": True})
             continue

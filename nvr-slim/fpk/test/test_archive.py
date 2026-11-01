@@ -10,6 +10,7 @@ from datetime import date
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "server"))
 import archive  # noqa: E402
+import ledger  # noqa: E402
 
 TODAY = date(2026, 10, 24)
 
@@ -75,13 +76,15 @@ class _Env(unittest.TestCase):
                          ("2026-10-16", ["10-00-00.mp4"])):
             for f in files:
                 touch(os.path.join(self.root, "cam1", d, f))
-        # 台账：10-18 有活动窗口；10-12 也写一份（内容无所谓，存在即可）
-        for d, wins in (("2026-10-18", [{"s": 36060.0, "e": 36120.0}]),
-                        ("2026-10-12", [{"s": 100.0, "e": 200.0}])):
-            touch(os.path.join(self.root, "_ledger", "cam1", d + ".json"), 0)
-            p = os.path.join(self.root, "_ledger", "cam1", d + ".json")
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump({"windows": wins}, f)
+        # 台账：必须用真实写入端 ledger.merge 落盘。以前这里手搓
+        # {"windows": [...]}，恰好和「读错键」的实现互相印证 —— 单测全绿，
+        # 线上却一个归档文件都出不来（0.9.101 修的就是这个）。
+        for d, src, start, rel in (("2026-10-18", "10-00-00.mp4", 36000,
+                                    [[60.0, 120.0]]),
+                                   ("2026-10-12", "00-01-00.mp4", 60,
+                                    [[40.0, 140.0]])):
+            ledger.merge(self.root, "cam1", d, src, start, rel,
+                         density=0.05, engine="pixel")
 
     def cams(self):
         return [{"id": "cam1", "name": "前门", "dir_name": "cam1"}]
@@ -178,14 +181,49 @@ class TestRun(_Env):
         self.assertEqual(r["remaining"], 1)
 
     def test_silent_day_empty_done(self):
-        # 台账窗口清空 → 该日无可裁画面，直接空收尾
-        p = os.path.join(self.root, "_ledger", "cam1", "2026-10-18.json")
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump({"windows": []}, f)
+        # 台账确实没有活动窗口 → 该日无可裁画面，直接空收尾
+        ledger.merge(self.root, "cam1", "2026-10-18", "10-00-00.mp4", 36000,
+                     [], density=0.0, engine="pixel")
         r = self._run()
         self.assertTrue(archive.is_done(
             archive.archive_dir(self.root, "cam1", "2026-10-18")))
         self.assertTrue(any(x.get("empty") for x in r["days"]))
+
+
+class TestLedgerRead(unittest.TestCase):
+    """0.9.101 回归守卫：归档必须能读懂台账 v1（窗口嵌在 sources 下）。"""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="nvr-led-")
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.led = os.path.join(self.root, "_ledger", "cam1")
+
+    def test_reads_sources_schema(self):
+        ledger.merge(self.root, "cam1", "2026-10-18", "10-00-00.mp4", 36000,
+                     [[60.0, 120.0]], density=0.05, engine="pixel")
+        with open(os.path.join(self.led, "2026-10-18.json"),
+                  encoding="utf-8") as f:
+            raw = json.load(f)
+        # 写入端不产生顶层 windows —— 旧读取端正是读它才永远读空
+        self.assertNotIn("windows", raw)
+        self.assertIn("sources", raw)
+        self.assertEqual(archive._ledger_events(self.led, "2026-10-18"),
+                         [(36060.0, 36120.0)])
+
+    def test_missing_ledger_and_empty_windows(self):
+        self.assertEqual(archive._ledger_events(self.led, "2026-10-18"), [])
+        ledger.merge(self.root, "cam1", "2026-10-18", "10-00-00.mp4", 36000,
+                     [], density=0.0, engine="pixel")
+        self.assertEqual(archive._ledger_events(self.led, "2026-10-18"), [])
+
+    def test_bogus_empty_done_self_heals(self):
+        """误标为「空收尾」的日期要能自愈，真静默日不被反复扫。"""
+        ledger.merge(self.root, "cam1", "2026-10-18", "10-00-00.mp4", 36000,
+                     [[60.0, 120.0]], density=0.05, engine="pixel")
+        archive.write_done(archive.archive_dir(self.root, "cam1", "2026-10-18"), 0)
+        archive.write_done(archive.archive_dir(self.root, "cam1", "2026-10-17"), 0)
+        self.assertEqual(archive._done_days(self.root, "cam1", self.led),
+                         {"2026-10-17"})
 
 
 if __name__ == "__main__":
