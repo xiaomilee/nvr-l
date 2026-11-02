@@ -7036,40 +7036,54 @@ function bindSettings(body){
     }
     bArch.disabled = true;
     if(ao) ao.textContent = "归档中，正在准备…";
-    /* 归档是同步长任务（一批 120 片，每片几秒到几十秒），不能只留一行静态
-       文字让人干等：每 1.5 秒问一次服务端「裁到第几片了」，进度就看得见。 */
-    const tick = setInterval(()=>{
-      apiGet("/api/archive").then(a=>{
-        const run = a && a.running;
-        if(!run || !ao) return;
-        ao.innerHTML = "归档中：" + esc(run.name || run.cam || "…") + " "
-          + esc(run.date || "") + " 第 <b>" + (run.done || 0) + "/" + (run.total || 0)
-          + "</b> 片"
-          + (run.round ? "（第 " + run.round + "/" + (run.rounds_max || 6) + " 轮）" : "")
-          + (run.used ? "，本轮已裁 " + run.used + "/" + run.batch + " 片" : "")
-          + (run.files ? "，产出 " + run.files + " 段 / " + fmtBytes(run.bytes || 0) : "");
-      }).catch(()=>{});
-    }, 1500);
+    /* 归档是「点了就走」的长任务：真机上要把一天的量裁完得 80 分钟以上，
+       而 HTTP 请求在这期间一个字节都不回，中间链路（NAT/代理）早把空闲
+       连接掐了 —— 同步等结果的表现就是「跑了 84 分钟，最后弹归档失败」，
+       可文件其实全裁好了。现在服务端立刻回 202，进度与结果都靠轮询拿；
+       轮询打的是轻量 /api/archive/progress（只读内存，不扫盘重算计划）。 */
+    let poll = null;
+    const finished = new Promise((resolve)=>{
+      poll = setInterval(()=>{
+        apiGet("/api/archive/progress").then(a=>{
+          const run = a && a.running;
+          if(run){
+            if(!ao) return;
+            ao.innerHTML = "归档中：" + esc(run.name || run.cam || "…") + " "
+              + esc(run.date || "") + " 第 <b>" + (run.done || 0) + "/" + (run.total || 0)
+              + "</b> 片"
+              + (run.round ? "（第 " + run.round + "/" + (run.rounds_max || 6) + " 轮）" : "")
+              + (run.used ? "，本轮已裁 " + run.used + "/" + run.batch + " 片" : "")
+              + (run.files ? "，产出 " + run.files + " 段 / " + fmtBytes(run.bytes || 0) : "");
+            return;
+          }
+          if(a && a.result && a.result.done){
+            clearInterval(poll); poll = null;
+            resolve(a.result);
+          }
+        }).catch(()=>{});
+      }, 1500);
+    });
     try{
-      const r = await apiPost("/api/archive/run", {dry_run:false});
-      clearInterval(tick);
+      const s = await apiPost("/api/archive/run", {dry_run:false});
+      if(!s || !s.ok) throw new Error((s && s.error) || "归档任务未能启动");
+      const r = await finished;
       ARCH.arm = null;
       ARCH.out = r.ok
-        ? ("归档完成：<b>" + (r.days||[]).length + " 天</b> / " + (r.files||0)
+        ? ("归档完成：<b>" + (r.days_done||0) + " 天</b> / " + (r.files||0)
            + " 段 / " + fmtBytes(r.bytes_out||0)
            + ((r.rounds||1) > 1 ? "，连跑 " + r.rounds + " 轮" : "")
            + (r.remaining ? "，剩余 " + r.remaining + " 天跨夜继续" : "")
-           + ((r.no_ledger||[]).length ? "；无台账跳过 " + r.no_ledger.length + " 天" : ""))
-        : ("部分失败：完成 " + (r.days||[]).length + " 天，失败 "
-           + ((r.failed||[]).length) + " 片（下次自动重试）");
+           + (r.no_ledger ? "；无台账跳过 " + r.no_ledger + " 天" : ""))
+        : ("部分失败：完成 " + (r.days_done||0) + " 天，失败 "
+           + (r.failed||0) + " 片（下次自动重试）"
+           + (r.error ? "：" + esc(String(r.error)) : ""));
       STORAGE.data = null; STORAGE.at = 0;   /* 占用变了，存储卡强制重拉 */
-      if(r && r.error) ARCH.out = esc(r.error);
       fetchRecordings();                     /* 归档产物立刻出现在文件页的日期条里 */
       renderCamTabs();
     }catch(e){
-      clearInterval(tick);
+      if(poll) clearInterval(poll);
       ARCH.arm = null;
-      if(ao) ao.textContent = "归档失败：" + esc(String(e));
+      if(ao) ao.textContent = "归档未完成：" + esc(String(e));
       renderCamTabs();
     }
   };

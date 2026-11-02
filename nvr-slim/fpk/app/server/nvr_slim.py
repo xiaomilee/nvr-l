@@ -1346,6 +1346,11 @@ def archive_state_path():
 _ARCH_PROG = {"running": False}
 _ARCH_LOCK = threading.Lock()
 
+# 异步启动的归档结果（摘要，供前端轮询取）。同步等结果在真机上实测 84 分钟
+# 才返回，中间链路早就把空闲连接掐了 —— curl 拿到 http=000，界面报「归档
+# 失败」，其实文件全裁好了。这里只存摘要，别把 days/failed 明细整坨留住。
+_ARCH_RESULT = {}
+
 # 夜间归档连跑的上限。单轮受 archive_batch 限速（默认 120 片，真机调成 1000），
 # 一晚的量通常要 2~3 轮才清空；6 轮足够覆盖，4 小时是硬闸 —— 别让归档占着
 # ffmpeg 跑进白天，也别把排在后面的清理任务无限推迟（磁盘要等它腾空间）。
@@ -1424,10 +1429,11 @@ def archive_payload():
     }
 
 
-def run_archive(dry_run=False, trigger="manual", round_no=0):
+def run_archive(dry_run=False, trigger="manual", round_no=0, lock_held=False):
     """归档裁剪。dry_run 只出计划；真跑受 archive_batch 限速、idx+done 幂等。
 
     round_no：夜间连跑时的第几轮（1 起），只用于把「第 2/6 轮」暴露给界面。
+    lock_held：调用方（后台线程）已经持有 _ARCH_LOCK，这里就不要重复抢。
     """
     cfg, cams, cam_cfg = camera_cfg()
     seg = runtime.segment_sec(cfg.get("record_segment_sec"))
@@ -1442,7 +1448,7 @@ def run_archive(dry_run=False, trigger="manual", round_no=0):
                 "est_bytes": p["est_bytes"], "policy": p["policy"],
                 "batch": batch}
     logs = []
-    if not _ARCH_LOCK.acquire(blocking=False):
+    if not lock_held and not _ARCH_LOCK.acquire(blocking=False):
         return {"ok": False, "running": dict(_ARCH_PROG),
                 "error": "已有归档任务在跑，等这一轮结束再点"}
     _ARCH_PROG.clear()
@@ -1461,7 +1467,8 @@ def run_archive(dry_run=False, trigger="manual", round_no=0):
                           on_step=_ARCH_PROG.update)
     finally:
         _ARCH_PROG["running"] = False
-        _ARCH_LOCK.release()
+        if not lock_held:
+            _ARCH_LOCK.release()
     res["trigger"] = trigger
     res["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     if res["days"] or res["failed"] or trigger == "schedule":
@@ -1489,6 +1496,72 @@ def run_archive(dry_run=False, trigger="manual", round_no=0):
             pass
     res["logs"] = logs[-50:]
     return res
+
+
+def archive_progress():
+    """轻量进度：只回内存态，不重算 plan。
+
+    真机上 plan 要扫几万个分片（stat+mtime），1.5 秒轮询一次等于自己在
+    制造 IO 风暴。进度轮询走这个，只在结束时再拉一次完整 /api/archive。
+    """
+    return {"ok": True,
+            "running": dict(_ARCH_PROG) if _ARCH_PROG.get("running") else None,
+            "result": dict(_ARCH_RESULT) if _ARCH_RESULT else None}
+
+
+def _archive_worker(trigger):
+    """后台归档线程。锁由 start_archive 持有，这里负责跑完、存摘要、放锁。"""
+    try:
+        res = run_archive(dry_run=False, trigger=trigger, lock_held=True)
+        _ARCH_RESULT.update({
+            "done": True, "ok": bool(res.get("ok")),
+            "at": res.get("at") or time.strftime("%Y-%m-%d %H:%M:%S"),
+            "trigger": trigger, "error": res.get("error") or "",
+            "days_done": len(res.get("days") or []),
+            "files": res.get("files") or 0,
+            "bytes_out": res.get("bytes_out") or 0,
+            "failed": len(res.get("failed") or []),
+            "remaining": res.get("remaining") or 0,
+            "no_ledger": len(res.get("no_ledger") or []),
+            "rounds": res.get("rounds") or 1})
+    except Exception as e:                     # 线程里抛异常不能静默
+        _ARCH_RESULT.update({"done": True, "ok": False,
+                             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                             "trigger": trigger, "error": str(e)})
+        log_line("archive worker error: %s" % e)
+    finally:
+        _ARCH_PROG["running"] = False
+        _ARCH_LOCK.release()
+
+
+def start_archive(trigger="manual"):
+    """异步启动一次归档，立刻返回 —— 别把 80 分钟的活挂在一条 HTTP 连接上。
+
+    真机实测：同步等结果的那次请求跑了 84 分钟，返回时链路早已断开
+    （curl http=000 / exit 52），界面报「归档失败」，而文件其实全裁好了。
+    归档本来就是「点了就走」的长任务，改成后台线程 + 前端轮询进度。
+    """
+    if not _ARCH_LOCK.acquire(blocking=False):
+        return {"ok": False, "running": dict(_ARCH_PROG), "async": True,
+                "error": "已有归档任务在跑，等这一轮结束再点"}
+    _ARCH_RESULT.clear()
+    _ARCH_PROG.clear()
+    _ARCH_PROG.update({"running": True,
+                       "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "trigger": trigger, "cam": "", "name": "", "date": "",
+                       "done": 0, "total": 0, "used": 0, "batch": 0,
+                       "round": 0, "rounds_max": ARCH_SWEEP_ROUNDS,
+                       "files": 0, "bytes": 0,
+                       "days_done": 0, "days_total": 0})
+    try:
+        threading.Thread(target=_archive_worker, args=(trigger,),
+                         daemon=True).start()
+    except Exception as e:
+        _ARCH_PROG["running"] = False
+        _ARCH_LOCK.release()
+        return {"ok": False, "async": True, "error": str(e)}
+    return {"ok": True, "async": True, "started": True, "trigger": trigger,
+            "at": _ARCH_PROG["at"]}
 
 
 def archive_sweep(trigger="schedule", max_rounds=ARCH_SWEEP_ROUNDS,
@@ -2013,6 +2086,9 @@ class Handler(BaseHTTPRequestHandler):
                 (qs.get("cam") or [""])[0], (qs.get("date") or [""])[0]))
         if path == "/api/archive":
             return self._send(200, archive_payload())
+        if path == "/api/archive/progress":
+            # 只回内存态（当前裁到第几片 + 上一次结果），不扫盘
+            return self._send(200, archive_progress())
         if path == "/api/storage/usage":
             # 命中缓存就直接回（30 分钟内不重复扫盘）；?force=1 强制重算
             qs = parse_qs(urlparse(self.path).query)
@@ -2653,9 +2729,12 @@ class Handler(BaseHTTPRequestHandler):
             # 归档裁剪：dry_run 预览日期与预估体积 → 二次确认执行。
             # 真跑没有 retention 那种「按确认清单删」的指纹问题：idx + .done
             # 幂等，重复触发最多浪费一次目录扫描，不会重复裁同一天。
+            # 真跑一律异步（后台线程），立刻回 started；进度与结果走
+            # /api/archive/progress。同步等结果会撞上链路空闲超时。
             dry = bool(body.get("dry_run", True))
-            res = run_archive(dry_run=dry, trigger="manual")
-            return self._send(200, res)
+            if dry:
+                return self._send(200, run_archive(dry_run=True, trigger="manual"))
+            return self._send(202, start_archive(trigger="manual"))
 
         if path == "/api/shutdown":
             self._send(200, {"ok": True})

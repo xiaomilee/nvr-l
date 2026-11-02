@@ -209,6 +209,23 @@ def main():
         check("/api/archive 默认开启且保留 7 天",
               d.get("enable") is True and d.get("archive_days") == 7,
               (d.get("enable"), d.get("archive_days")))
+        # 真跑必须异步：同步等结果在真机上跑 84 分钟才返回，链路早断了
+        s, b = req("/api/archive/run", "POST", {"dry_run": False})
+        ar = json.loads(b)
+        check("POST /api/archive/run 真跑立刻回 202（异步启动）",
+              s == 202 and ar.get("async") is True and ar.get("started") is True,
+              (s, b[:120]))
+        pr = {}
+        for _ in range(40):
+            s, b = req("/api/archive/progress")
+            pr = json.loads(b)
+            if (pr.get("result") or {}).get("done"):
+                break
+            time.sleep(0.25)
+        check("/api/archive/progress 给出 done 摘要",
+              (pr.get("result") or {}).get("done") is True, pr)
+        check("progress 只回内存态（不重算 plan）",
+              "todo" not in pr and "todo_count" not in pr, sorted(pr))
         s, b = req("/api/storage/usage")
         d = json.loads(b)
         check("/api/storage/usage 三类占用 + 台账",

@@ -7,6 +7,8 @@
 """
 import os
 import sys
+import threading
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "server"))
@@ -97,6 +99,95 @@ class TestArchiveSweep(unittest.TestCase):
         res = nvr_slim.archive_sweep(budget_sec=0)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(res["rounds"], 1)
+
+
+class TestStartArchive(unittest.TestCase):
+    """异步启动：真机上同步等结果跑了 84 分钟才断在链路上（curl http=000，
+    界面报「归档失败」，文件其实全裁好了）。现在立刻回 202，结果落 _ARCH_RESULT。"""
+
+    def setUp(self):
+        self._real_run = nvr_slim.run_archive
+        self._real_load = nvr_slim.load_state_file
+        self._real_save = nvr_slim.save_state_file
+        nvr_slim.load_state_file = lambda p: {}
+        nvr_slim.save_state_file = lambda p, o: None
+        if nvr_slim._ARCH_LOCK.locked():
+            nvr_slim._ARCH_LOCK.release()
+
+    def tearDown(self):
+        nvr_slim.run_archive = self._real_run
+        nvr_slim.load_state_file = self._real_load
+        nvr_slim.save_state_file = self._real_save
+        nvr_slim._ARCH_PROG["running"] = False
+        nvr_slim._ARCH_RESULT.clear()
+        if nvr_slim._ARCH_LOCK.locked():
+            nvr_slim._ARCH_LOCK.release()
+
+    def _wait_idle(self, timeout=3.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            if not nvr_slim._ARCH_LOCK.locked():
+                return True
+            time.sleep(0.01)
+        return False
+
+    def test_returns_immediately_then_stores_summary(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow(dry_run=False, trigger="manual", round_no=0, lock_held=False):
+            self.assertTrue(lock_held)          # 锁由 start_archive 持有
+            started.set()
+            release.wait(3)
+            return {"ok": True, "days": [{}, {}], "files": 5, "bytes_out": 100,
+                    "failed": [], "remaining": 1, "no_ledger": [], "at": "01:00"}
+
+        nvr_slim.run_archive = slow
+        r = nvr_slim.start_archive()
+        self.assertTrue(r["ok"])
+        self.assertTrue(r["async"])
+        self.assertTrue(r["started"])           # 立刻返回，没等任务跑完
+        self.assertTrue(started.wait(3))
+        p = nvr_slim.archive_progress()
+        self.assertIsNotNone(p["running"])      # 跑的时候能看到进度
+        self.assertIsNone(p["result"])
+        release.set()
+        self.assertTrue(self._wait_idle())
+        p = nvr_slim.archive_progress()
+        self.assertIsNone(p["running"])
+        self.assertTrue(p["result"]["done"])
+        self.assertEqual(p["result"]["days_done"], 2)
+        self.assertEqual(p["result"]["files"], 5)
+
+    def test_second_start_rejected_while_running(self):
+        gate = threading.Event()
+
+        def hang(dry_run=False, trigger="manual", round_no=0, lock_held=False):
+            gate.wait(3)
+            return {"ok": True, "days": [], "failed": [], "files": 0,
+                    "bytes_out": 0, "remaining": 0, "no_ledger": [], "at": "x"}
+
+        nvr_slim.run_archive = hang
+        self.assertTrue(nvr_slim.start_archive()["ok"])
+        try:
+            again = nvr_slim.start_archive()
+            self.assertFalse(again["ok"])
+            self.assertIn("已有归档任务在跑", again["error"])
+        finally:
+            gate.set()
+            self.assertTrue(self._wait_idle())
+
+    def test_worker_error_is_reported(self):
+        def boom(dry_run=False, trigger="manual", round_no=0, lock_held=False):
+            raise RuntimeError("ffmpeg 挂了")
+
+        nvr_slim.run_archive = boom
+        self.assertTrue(nvr_slim.start_archive()["ok"])
+        self.assertTrue(self._wait_idle())
+        res = nvr_slim.archive_progress()["result"]
+        self.assertTrue(res["done"])
+        self.assertFalse(res["ok"])
+        self.assertIn("ffmpeg", res["error"])
 
 
 if __name__ == "__main__":
