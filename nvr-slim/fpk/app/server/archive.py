@@ -23,6 +23,7 @@
 import json
 import ledger
 import os
+import re
 import time
 from datetime import date, timedelta
 
@@ -43,6 +44,10 @@ DONE_NAME = ".done"
 # 这类空壳既不占空间也不算失败，但会让整日的 .done 记为"已完成"，
 # 且在回放页变成一串 0.2 秒的黑块 —— 一律当失败处理并清理。
 EMPTY_PART_BYTES = 1024
+
+# 产物片段的后缀：write_split 产出 <分片名>.c01.mp4、.c02.mp4…
+# 清空壳时靠它反推「这一片属于哪个 idx」，而不是把整个目录的 idx 全删。
+_PART_SUFFIX_RE = re.compile(r"^(.*)\.c\d+$", re.I)
 
 
 def _unlink(p):
@@ -148,7 +153,8 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
     cfg = cam_cfg or {}
     out = {"todo": [], "no_ledger": [], "done": [], "policy": [],
            "segments": 0, "bytes": 0, "est_bytes": 0}
-    for cam in cams:
+    order = []                             # 与 out["todo"] 平行的排序键
+    for cam_idx, cam in enumerate(cams):
         cid = cam.get("id")
         if not cid:
             continue
@@ -159,6 +165,8 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
             full_days = int(full_days)
         except (TypeError, ValueError):
             full_days = 3
+        # 这一路的「最后机会」日期：明天 0 点起就进删除清单
+        cut_name = (today - timedelta(days=max(1, full_days) - 1)).isoformat()
         # 分片长度按路取（每路可单独覆盖），别拿全局值套所有通道
         cam_seg = _cam_seg_sec(cc, seg_sec)
         mode = modes.get(cid) or "virtual"
@@ -206,11 +214,24 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
                         item["est_bytes"] = int(item["bytes"] *
                                                 min(1.0, active / covered))
                 out["todo"].append(item)
+                # 0 = 今晚就要过期（d == 这一路的 cut），1 = 回填（已过期漏网）
+                urg = 0 if d == cut_name else 1
+                order.append((urg, "" if not urg else d, cam_idx))
                 out["segments"] += item["segments"]
                 out["bytes"] += item["bytes"]
                 out["est_bytes"] += item["est_bytes"]
-    # 不做全局重排：select_days 已保证每路「临期优先、回填靠后」的顺序，
-    # run() 按 todo 顺序消费，batch 截断时最急的日期一定先被处理。
+    # 跨路重排：今晚要过期的日期整体排在回填之前。
+    # select_days 只保证「一路之内」临期优先，而 run() 是按 todo 顺序吃 batch
+    # 的 —— 只要靠前的某一路有积压（真机客厅一天 300 多片），后面的路就永远
+    # 轮不到，那些今晚就会被清掉的日期等于被判死刑。0.9.105 起按紧急度分组。
+    #
+    # 同组内**不重排**（紧急组仍按摄像头顺序，回填组按日期升序），因为
+    # d == cut 的日期截止时刻完全相同（都是下一轮清理），差别只在「哪天」；
+    # 而 batch 是按片截断的，顺序执行才能保证「一整天完整做完、写下 .done」，
+    # 交叉均匀分配只会让每一天都停在半截 —— 谁都没收尾，等于全丢。
+    if order:
+        out["todo"] = [it for _, it in
+                       sorted(zip(order, out["todo"]), key=lambda t: t[0])]
     return out
 
 
@@ -388,31 +409,46 @@ def _has_empty_parts(arc_dir):
     return False
 
 
+def _part_base(name):
+    """产物片段名 → 它所属分片的输出前缀（即 idx 侧车的主名）。
+
+    `18-40-22.c01.mp4` → `18-40-22`；不认识的形态原样去扩展名返回。
+    """
+    stem = name[:-4] if name.lower().endswith(".mp4") else name
+    m = _PART_SUFFIX_RE.match(stem)
+    return m.group(1) if m else stem
+
+
 def _purge_empty_parts(arc_dir):
-    """清掉历史空壳（0 帧片段）及其 idx 侧车，返回是否清过。
+    """清掉历史空壳（0 帧片段）及**它自己那一片**的 idx 侧车，返回是否清过。
 
     空壳是「窗口与分片错配」的痕迹：留着既占回放页的黑块，又让 write_split
     因为 idx 已存在而一直跳过重切。清过就必须让该日重做（调用方负责失效 .done）。
+
+    只删空壳所属分片的 idx，绝不整目录全删：老实现把该日所有 `.idx.json`
+    一起清掉，等于把这一天的产物全部作废重裁 —— 真机见过 300 多片的日子
+    整日重跑，同名覆盖，体积不涨、纯白烧 IO（0.9.104 及以前）。
     """
     if not os.path.isdir(arc_dir):
         return False
-    dropped = 0
     try:
         names = os.listdir(arc_dir)
     except OSError:
         return False
+    dead = []                              # 空壳所属的分片前缀（去重）
     for n in names:
         if not n.lower().endswith(".mp4"):
             continue
         p = os.path.join(arc_dir, n)
         if _fsize(p) < EMPTY_PART_BYTES:
             _unlink(p)
-            dropped += 1
-    if not dropped:
+            base = _part_base(n)
+            if base not in dead:
+                dead.append(base)
+    if not dead:
         return False
-    for n in names:
-        if n.lower().endswith(".idx.json"):
-            _unlink(os.path.join(arc_dir, n))
+    for base in dead:
+        _unlink(os.path.join(arc_dir, base + ".idx.json"))
     return True
 
 

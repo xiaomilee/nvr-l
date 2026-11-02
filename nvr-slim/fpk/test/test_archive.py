@@ -118,6 +118,26 @@ class TestPlan(_Env):
                          self.modes(), today=TODAY)
         self.assertEqual([x["date"] for x in p["todo"]], ["2026-10-12"])
 
+    def test_expiring_before_backfill_across_cams(self):
+        """跨路排序：今晚要过期的日期必须排在别的路的回填之前。
+
+        老实现按「摄像头顺序 + 每路日期」出队，run() 又按 todo 顺序吃 batch：
+        排在前面的那路只要有积压（真机客厅一天 300 多片），后面那路今晚就会
+        过期、明天源被删，永久丢失 —— 明明它更需要先做。
+        """
+        touch(os.path.join(self.root, "cam2", "2026-10-18", "10-00-00.mp4"))
+        ledger.merge(self.root, "cam2", "2026-10-18", "10-00-00.mp4", 36000,
+                     [[60.0, 120.0]], density=0.05, engine="pixel")
+        cams = self.cams() + [{"id": "cam2", "name": "后门", "dir_name": "cam2"}]
+        p = archive.plan(self.root, cams,
+                         {"cam1": {"full_days": 7}, "cam2": {"full_days": 7}},
+                         {"cam1": "virtual", "cam2": "virtual"}, today=TODAY)
+        got = [(x["cam"], x["date"]) for x in p["todo"]]
+        # cam1 的 10-18 与 cam2 的 10-18 都是最后机会，10-12 是回填 → 垫底
+        self.assertIn(("cam2", "2026-10-18"), got)
+        self.assertEqual(got[0], ("cam1", "2026-10-18"))   # 紧急组内不重排
+        self.assertEqual(got[-1], ("cam1", "2026-10-12"))
+
 
 class TestRun(_Env):
     def _run(self, batch=10, fail_names=(), part_bytes=4096):
@@ -383,6 +403,26 @@ class TestEmptyPartSelfHeal(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.arc, "10-00-00.c01.mp4")))
         self.assertFalse(os.path.exists(os.path.join(self.arc, "10-00-00.idx.json")))
         self.assertTrue(os.path.exists(os.path.join(self.arc, "10-00-00.c02.mp4")))
+
+    def test_purge_only_drops_own_idx(self):
+        """只清空壳那一片的 idx，别把整日其它分片的成果一并作废。
+
+        老实现清完空壳后把目录下**所有** `.idx.json` 删掉，于是这一天的产物
+        全部失去幂等标记，下次整日重裁、同名覆盖：体积不涨，白烧几小时 IO。
+        """
+        touch(os.path.join(self.arc, "10-05-00.c01.mp4"), 4096)   # 好片
+        touch(os.path.join(self.arc, "10-05-00.idx.json"), 90)
+        touch(os.path.join(self.arc, "10-00-00.c01.mp4"), 262)    # 空壳
+        touch(os.path.join(self.arc, "10-00-00.idx.json"), 90)
+        self.assertTrue(archive._purge_empty_parts(self.arc))
+        self.assertFalse(os.path.exists(os.path.join(self.arc, "10-00-00.idx.json")))
+        self.assertTrue(os.path.exists(os.path.join(self.arc, "10-05-00.idx.json")))
+        self.assertTrue(os.path.exists(os.path.join(self.arc, "10-05-00.c01.mp4")))
+
+    def test_part_base(self):
+        self.assertEqual(archive._part_base("18-40-22.c01.mp4"), "18-40-22")
+        self.assertEqual(archive._part_base("18-40-22.c12.MP4"), "18-40-22")
+        self.assertEqual(archive._part_base("weird.mp4"), "weird")
 
 
 if __name__ == "__main__":
