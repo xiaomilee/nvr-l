@@ -7045,6 +7045,7 @@ function bindSettings(body){
         ao.innerHTML = "归档中：" + esc(run.name || run.cam || "…") + " "
           + esc(run.date || "") + " 第 <b>" + (run.done || 0) + "/" + (run.total || 0)
           + "</b> 片"
+          + (run.round ? "（第 " + run.round + "/" + (run.rounds_max || 6) + " 轮）" : "")
           + (run.used ? "，本轮已裁 " + run.used + "/" + run.batch + " 片" : "")
           + (run.files ? "，产出 " + run.files + " 段 / " + fmtBytes(run.bytes || 0) : "");
       }).catch(()=>{});
@@ -7056,6 +7057,7 @@ function bindSettings(body){
       ARCH.out = r.ok
         ? ("归档完成：<b>" + (r.days||[]).length + " 天</b> / " + (r.files||0)
            + " 段 / " + fmtBytes(r.bytes_out||0)
+           + ((r.rounds||1) > 1 ? "，连跑 " + r.rounds + " 轮" : "")
            + (r.remaining ? "，剩余 " + r.remaining + " 天跨夜继续" : "")
            + ((r.no_ledger||[]).length ? "；无台账跳过 " + r.no_ledger.length + " 天" : ""))
         : ("部分失败：完成 " + (r.days||[]).length + " 天，失败 "

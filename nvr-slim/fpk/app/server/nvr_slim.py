@@ -1346,6 +1346,12 @@ def archive_state_path():
 _ARCH_PROG = {"running": False}
 _ARCH_LOCK = threading.Lock()
 
+# 夜间归档连跑的上限。单轮受 archive_batch 限速（默认 120 片，真机调成 1000），
+# 一晚的量通常要 2~3 轮才清空；6 轮足够覆盖，4 小时是硬闸 —— 别让归档占着
+# ffmpeg 跑进白天，也别把排在后面的清理任务无限推迟（磁盘要等它腾空间）。
+ARCH_SWEEP_ROUNDS = 6
+ARCH_SWEEP_BUDGET_SEC = 4 * 3600
+
 
 def load_state_file(path):
     if os.path.isfile(path):
@@ -1418,8 +1424,11 @@ def archive_payload():
     }
 
 
-def run_archive(dry_run=False, trigger="manual"):
-    """归档裁剪。dry_run 只出计划；真跑受 archive_batch 限速、idx+done 幂等。"""
+def run_archive(dry_run=False, trigger="manual", round_no=0):
+    """归档裁剪。dry_run 只出计划；真跑受 archive_batch 限速、idx+done 幂等。
+
+    round_no：夜间连跑时的第几轮（1 起），只用于把「第 2/6 轮」暴露给界面。
+    """
     cfg, cams, cam_cfg = camera_cfg()
     seg = runtime.segment_sec(cfg.get("record_segment_sec"))
     batch = archive.clamp("archive_batch", cfg.get("archive_batch",
@@ -1441,6 +1450,7 @@ def run_archive(dry_run=False, trigger="manual"):
                        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
                        "trigger": trigger, "cam": "", "name": "", "date": "",
                        "done": 0, "total": 0, "used": 0, "batch": batch,
+                       "round": int(round_no), "rounds_max": ARCH_SWEEP_ROUNDS,
                        "files": 0, "bytes": 0,
                        "days_done": 0, "days_total": 0})
     try:
@@ -1478,6 +1488,70 @@ def run_archive(dry_run=False, trigger="manual"):
         except OSError:
             pass
     res["logs"] = logs[-50:]
+    return res
+
+
+def archive_sweep(trigger="schedule", max_rounds=ARCH_SWEEP_ROUNDS,
+                  budget_sec=ARCH_SWEEP_BUDGET_SEC, should_stop=None):
+    """夜间归档连跑：一轮吃完 archive_batch 还剩下就接着来，直到清空。
+
+    只跑一轮等于每晚只消化一半：真机一天的量远不止一个 batch（车库 486 片、
+    客厅 300 多片），剩下的第二天叠上新的，欠账只会越滚越大 —— 表现就是
+    「归档一直在跑，但待办天数从来没归零」。
+
+    三条判停，先到先停：
+      remaining == 0      待办清空，收工
+      本轮零进展          days 空且 files 为 0（全失败或裁不动了），再跑也是空转
+      轮数 / 时长上限     别整夜占着 ffmpeg，也别把后面的清理无限推迟
+    should_stop 每轮前问一次，服务在停时立刻退出。
+    """
+    all_days, failed = [], []
+    tot_files = tot_bytes = tot_used = rounds = 0
+    remaining = 0
+    last = None
+    deadline = time.time() + max(0.0, float(budget_sec or 0))
+    while rounds < max(1, int(max_rounds)):
+        if should_stop is not None and should_stop():
+            break
+        if rounds and time.time() >= deadline:
+            break
+        r = run_archive(dry_run=False, trigger=trigger, round_no=rounds + 1)
+        if r.get("error"):
+            # 抢不到锁（用户手点了「立即归档」）或配置异常：直接把错误抛回去，
+            # 不要自己在这里重试 —— 手点那轮正在跑，两轮一起裁同一天纯属自杀。
+            r.setdefault("rounds", rounds)
+            return r
+        rounds += 1
+        last = r
+        all_days.extend(r.get("days") or [])
+        failed.extend(r.get("failed") or [])
+        tot_files += r.get("files") or 0
+        tot_bytes += r.get("bytes_out") or 0
+        tot_used += r.get("segments_used") or 0
+        remaining = r.get("remaining") or 0
+        if remaining <= 0:
+            break
+        if not (r.get("days") or r.get("files")):
+            break                          # 零进展：再跑也是空转
+    if last is None:
+        return {"ok": True, "dry_run": False, "days": [], "failed": [],
+                "segments_used": 0, "files": 0, "bytes_out": 0,
+                "no_ledger": [], "remaining": 0, "rounds": 0,
+                "trigger": trigger}
+    res = dict(last)
+    res.update({"rounds": rounds, "days": all_days, "failed": failed,
+                "files": tot_files, "bytes_out": tot_bytes,
+                "segments_used": tot_used, "remaining": remaining})
+    # state 里补一句「跑了几轮」，诊断时能一眼看出是一轮做完还是连跑了半夜
+    try:
+        st = load_state_file(archive_state_path())
+        if isinstance(st, dict) and st.get("date") == time.strftime("%Y-%m-%d"):
+            st.update({"rounds": rounds, "days": len(all_days),
+                       "files": tot_files, "bytes_out": tot_bytes,
+                       "failed": len(failed), "remaining": remaining})
+            save_state_file(archive_state_path(), st)
+    except OSError:
+        pass
     return res
 
 
@@ -1567,6 +1641,9 @@ def cleanup_loop(stop_event):
     顺序是硬约束：归档裁的是「明天 0 点就过期」的全时日期，清理删的也是
     过期目录 —— 先删后裁的话，最需要归档的那批日期已经先被删掉了。
     两个任务各自用 state 里的日期去重，重启不会重复跑。
+
+    归档走 archive_sweep 连跑到待办清空，不再是一轮了事：一轮只吃
+    archive_batch 片，剩下的拖到第二天又叠上新的，永远追不平。
     """
     while not stop_event.wait(30):
         try:
@@ -1575,7 +1652,8 @@ def cleanup_loop(stop_event):
             if retention.due(load_state_file(archive_state_path()).get("date"), at) \
                     and cfg.get("archive_enable", True):
                 try:
-                    run_archive(dry_run=False, trigger="schedule")
+                    archive_sweep(trigger="schedule",
+                                  should_stop=stop_event.is_set)
                 except Exception as e:             # 归档失败不阻塞清理
                     log_line("archive error: %s" % e)
             last = load_cleanup_state().get("date")
