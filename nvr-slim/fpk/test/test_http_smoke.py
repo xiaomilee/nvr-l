@@ -62,8 +62,13 @@ def main():
     rec = os.path.join(var, "rec")
     day = time.strftime("%Y-%m-%d")
     os.makedirs(os.path.join(rec, "车库", day), exist_ok=True)
-    # 一个"已封口"的假分片（只有大小，不参与解码）
-    with open(os.path.join(rec, "车库", day, "10-00-00.mp4"), "wb") as f:
+    # 一个"已封口"的假分片（只有大小，不参与解码）。
+    # 文件名即分片起点，必须落在「今天已经过去」的时刻：写死 10-00-00 时，
+    # 凌晨 00:xx 跑这套测试，分片起点在未来 → avail.full 判成无可用画面而误报。
+    _t = time.localtime()
+    _mark = max(0, _t.tm_hour * 3600 + _t.tm_min * 60 + _t.tm_sec - 60)
+    _seg = "%02d-%02d-%02d.mp4" % (_mark // 3600, _mark % 3600 // 60, _mark % 60)
+    with open(os.path.join(rec, "车库", day, _seg), "wb") as f:
         f.write(b"\0" * 4096)
     cfg = {"record_dir": rec, "record_enable": False, "cameras": [
         {"id": "cam-01", "name": "车库", "url": "rtsp://u:p@127.0.0.1:1/s1",

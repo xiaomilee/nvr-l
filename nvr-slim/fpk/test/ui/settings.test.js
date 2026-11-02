@@ -148,16 +148,15 @@ ck("事件侦测·非物化模式隐藏输出画质块（materialize 仅配置�
 run('SET.outOpen = true; renderCamTabs();');
 h = body();
 ck("事件侦测·virtual 提示（仅台账）切换 outOpen 后仍在", h.includes("仅台账"));
-ck("缩时·画质折叠行收起时显示当前档", src.includes('(SET.outOpen ? "" : esc(qualLine(p)))'));
+ck("缩时下线·源码不再有画质折叠行", !src.includes('(SET.outOpen ? "" : esc(qualLine(p)))'));
 run('SET.acc="condense"; draftSet("condenseMode", "materialize"); renderCamTabs();');
 h = body();
-ck("缩时·切物化后显示切分方式/倍速四档/片段保留",
-   h.includes('data-clipmode="join"') && (h.match(/data-speed="\d"/g) || []).length === 4
-   && h.includes('data-ret="clipDays"'));
-ck("缩时·物化后影响预估四格", (h.match(/class="c"><div class="kv"/g) || []).length === 4);
+ck("缩时下线·物化旧配置只留提示，不再渲染切分/倍速/保留",
+   !h.includes("data-clipmode") && !h.includes('data-speed="') && !h.includes('data-ret="clipDays"')
+   && h.includes("物化切片") && h.includes("已下线"));
 run('draftSet("condenseMode", "off"); renderCamTabs();');
 h = body();
-ck("事件侦测·关闭后显示「事件侦测已关闭」提示", h.includes("事件侦测已关闭"));
+ck("事件侦测·关闭后显示「事件侦测已关闭」提示", h.includes("这一路事件侦测已"));
 ck("事件侦测·关闭后有提示（只录全时不判定）", h.includes("只录全时、不判定"));
 run('draftSet("condenseMode", "follow"); SET.adv=false; SET.outOpen=false; SET.acc="mask"; renderCamTabs();');
 h = body();
@@ -362,9 +361,12 @@ ck("直播·重渲不闪「等待第一帧」：保留并复用上一帧",
    src.includes("st.lastSrc = img.src") && src.includes("if(st.lastSrc && snapImg)"));
 ck("实时流·服务端端点接线", src.includes("/api/live/stream/"));
 ck("实时流·进入实时层默认播放", src.includes("state.liveStream = true"));
-ck("回放·缩时清单通道", src.includes('realSegs(state.camId, curDay(), "clip")') && src.includes("rec.clips"));
+ck("回放·只剩全时/归档两通道（缩时通道下线）",
+   src.includes('realSegs(state.camId, curDay(), "archive")')
+   && !src.includes('realSegs(state.camId, curDay(), "clip")')
+   && !src.includes("rec.clips"));
 ck("回放·录像清单防缓存", src.includes('"/api/recordings?_t=" + Date.now()'));
-ck("设置·缩时存放位置提示", src.includes("_clip/&lt;摄像头&gt;/&lt;日期&gt;/"));
+ck("设置·归档存放位置提示", src.includes("_archive/&lt;摄像头&gt;/&lt;日期&gt;/"));
 
 /* ---- 17. 资源栏随页面滚动 + 齿轮调刷新率 + 配置真的推上去（0.9.11） ---- */
 ck("预览·资源栏与卡片同一滚动容器", src.includes('<div class="livescroll">')
@@ -527,14 +529,15 @@ run('STORAGE.data = { ok:true, at:' + Math.floor(Date.now()/1000) + ','
 const stc = get('cardStorage()');
 ck("存储·总量条无灰色「其余可用」段（容量共享，无意义）", !stc.includes("其余可用")
    && stc.includes('class="stbar-big"') && !/stbar-big[\s\S]{0,220}class="r"/.test(stc));
-ck("存储·总条由全时+归档+缩时三段填满（归档 0 时占 0%）", (()=>{ const m = stc.match(/stbar-big">([\s\S]*?)<\/div>/);
-   return m && (m[1].match(/<i /g) || []).length === 3; })());
-ck("存储·图例给百分比", stc.includes("全时 <b>") && stc.includes("缩时 <b>") && stc.includes("%</b>"));
+ck("存储·总条由全时+归档两段填满（缩时下线）", (()=>{ const m = stc.match(/stbar-big">([\s\S]*?)<\/div>/);
+   return m && (m[1].match(/<i /g) || []).length === 2; })());
+ck("存储·图例只给全时/归档与百分比", stc.includes("全时 <b>") && stc.includes("归档 <b>")
+   && !stc.includes("缩时 <b>") && stc.includes("%</b>"));
 ck("存储·每路按自身总量归满格（行按总量降序）",
    stc.indexOf("后院") < stc.indexOf("车库入口")
    && /class="stbar"><i class="f" style="width:\d+%"><\/i><i class="c" style="width:\d+%">/.test(stc));
-ck("存储·每路显示合计 + 全时/归档/缩时明细", stc.includes("合计 · 全时 / 归档 / 缩时")
-   && stc.includes("3.5 GB") && stc.includes("3.0 GB / 572 MB"));
+ck("存储·每路显示合计 + 全时/归档明细", stc.includes("合计 · 全时 / 归档")
+   && stc.includes("3.5 GB") && stc.includes("3.0 GB / —"));
 ck("存储·标注非实时与统计时刻", stc.includes("非实时") && stc.includes("每 30 分钟最多重算一次")
    && stc.includes("统计于 "));
 ck("存储·无可用容量段时该路显示无录像", (()=>{ run('STORAGE.data.cameras.push({id:"c",name:"空机位",full:0,clip:0,total:0});');
@@ -693,12 +696,13 @@ ck("时间轴·真空档不合并不跨记",
 ck("时间轴·密度分档：密=1/中=0.62/疏=0.34",
    get("tlDens(0.10)") === 1 && get("tlDens(0.03)") === 0.62 && get("tlDens(0.01)") === 0.34);
 
-/* 数据：10:00–12:00 两段全时（连续无缝）+ 两个缩时片（源覆盖各 1 小时，
-   播放时长 20s / 30s）→ 全天视角下全时 7200s 无断录，缩时看完 50s、压缩 144× */
+/* 数据：10:00–12:00 两段全时（连续无缝）+ 两段归档浓缩（源覆盖各 1 小时，
+   播放时长 20s / 30s）→ 全天视角下全时 7200s 无断录，归档看完 50s、压缩 144×。
+   0.9.104：缩时片段（clips）下线，归档浓缩沿用同一套块/密度口径。 */
 run('state.camId="cam-01"; state.dayIdx=0; state.dayList=["2026-10-22"];'
   + 'state.rec={segment_sec:3600,'
   + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1048576},{n:"11-00-00.mp4",b:1048576}]}},'
-  + 'clips:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:4096,d:20},{n:"11-00-00.mp4",b:4096,d:30}]}}};'
+  + 'archive:{"cam-01":{"2026-10-22":[{n:"10-00-00.c1.mp4",b:4096,d:20},{n:"11-00-00.c1.mp4",b:4096,d:30}]}}};'
   + 'state.hourBlock=-1; renderTl();');
 let rc = get('document.getElementById("tlane").innerHTML');
 ck("时间轴·显示", get('document.getElementById("tlane").style.display') === "block");
@@ -722,16 +726,17 @@ ck("联动·放大态提示切回「点色块跳播」", (()=>{
 ck("时间轴·说明行在色条上方（tl-cap 结构，色条独占全宽）",
    rc.includes('<div class="tl-cap"><span class="tl-lbl">')
    && rc.includes('</span></div><span class="tl-track" data-tlkind='));
-ck("时间轴·只剩全时/缩时两行（真实时段行下线）",
-   rc.includes("全时录像") && rc.includes("缩时录像") && !rc.includes("真实时段"));
+ck("时间轴·只剩全时/归档两行（缩时轨下线）",
+   rc.includes("全时录像") && rc.includes("归档浓缩") && !rc.includes("缩时录像")
+   && !rc.includes("真实时段"));
 ck("时间轴·无「回到全天」", !rc.includes("回到全天"));
 ck("时间轴·全时 2 时 0 分 · 无断录", rc.includes("2 时 0 分 · 无断录"));
-ck("时间轴·缩时看完仅需 50 秒", rc.includes("50 秒"));
+ck("时间轴·归档看完仅需 50 秒", rc.includes("50 秒"));
 ck("时间轴·压缩倍率 144×", rc.includes("压缩 ≈144.0×"));
 ck("时间轴·24 小时刻度（00…24）", rc.includes("<span>00</span>") && rc.includes("<span>24</span>"));
-ck("时间轴·全时块绿色 / 缩时块琥珀带密度透明度",
+ck("时间轴·全时块绿色 / 归档块蓝色带密度透明度",
    rc.includes("background:var(--keep)")
-   && rc.includes("background:var(--warn);opacity:0.34"));
+   && rc.includes("background:#378ADD;opacity:0.34"));
 /* 0.9.34：选中热力格（hourBlock=5 → 10:00–12:00）→ 时间轴放大到该窗口，
    块位置按窗口折算，摘要改覆盖率口径 */
 run('state.hourBlock=5; renderTl();');
@@ -745,51 +750,53 @@ ck("时间轴·取消选中回到全天", (()=>{
   run('state.hourBlock=-1; renderTl();');
   return get('document.getElementById("tlane").innerHTML') === rc;
 })());
-ck("时间轴·色条贯穿全宽、加高方便点按",
+ck("时间轴·色条贯穿全宽、两轨后加高到 24px 方便点按",
    src.includes(".p-tl{flex:0 0 auto;margin:2px 0 4px;padding:6px 12px 2px")
-   && src.includes(".p-tl .tl-track{height:20px}")
-   && src.includes(".tl-track{flex:1;height:18px"));
+   && src.includes(".p-tl .tl-track{height:24px}")
+   && src.includes(".tl-track{flex:1;height:20px")
+   && src.includes(".tl-track{flex:1;height:20px;border-radius:5px"));
 /* 密度分档映射到块：疏 0.34 / 中 0.62 / 密 1（d = 播放秒/源秒） */
 run('state.rec={segment_sec:3600,'
   + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1048576}]}},'
-  + 'clips:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:4096,d:100},{n:"11-00-00.mp4",b:4096,d:300}]}}};'
+  + 'archive:{"cam-01":{"2026-10-22":[{n:"10-00-00.c1.mp4",b:4096,d:100},{n:"11-00-00.c1.mp4",b:4096,d:300}]}}};'
   + 'renderTl();');
 rc = get('document.getElementById("tlane").innerHTML');
 ck("时间轴·密度深浅上轴（0.62 与 1 档）",
    rc.includes("opacity:0.62") && rc.includes("opacity:1"));
-ck("时间轴·色块按 track 委托跳播（full/clip 各一条）",
+ck("时间轴·色块按 track 委托跳播（full/archive 各一条）",
    (rc.match(/data-tlkind="full"/g) || []).length === 1
-   && (rc.match(/data-tlkind="clip"/g) || []).length === 1
+   && (rc.match(/data-tlkind="archive"/g) || []).length === 1
+   && !rc.includes('data-tlkind="clip"')
    && src.includes("el.querySelectorAll(\"[data-tlkind]\").forEach(tk=>{"));
 
 /* 断录统计：两段全时（10–11、12–13），中间 11–12 是真空档 */
 run('state.rec={segment_sec:3600,'
   + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1048576},{n:"12-00-00.mp4",b:1048576}]}},'
-  + 'clips:{"cam-01":{}}}; renderTl();');
+  + 'archive:{"cam-01":{}}}; renderTl();');
 rc = get('document.getElementById("tlane").innerHTML');
 ck("时间轴·断录段数进摘要", rc.includes("断录 1 段"));
-ck("时间轴·缺缩时显示「无缩时片段」", rc.includes("无缩时片段"));
+ck("时间轴·缺归档显示「无归档片段」", rc.includes("无归档片段"));
 
-/* 全天视角下的缩时折算：09:30 起源跨 1 小时、播放 60s → 覆盖 3600s、
+/* 全天视角下的归档折算：09:30 起源跨 1 小时、播放 60s → 覆盖 3600s、
    观看 60s、压缩 60×，块从 39.58% 处起画 */
 run('state.rec={segment_sec:3600,'
   + 'cameras:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:1048576}]}},'
-  + 'clips:{"cam-01":{"2026-10-22":[{n:"09-30-00.mp4",b:4096,d:60}]}}};'
+  + 'archive:{"cam-01":{"2026-10-22":[{n:"09-30-00.c1.mp4",b:4096,d:60}]}}};'
   + 'renderTl();');
 rc = get('document.getElementById("tlane").innerHTML');
-ck("时间轴·缩时折算观看 1 分 0 秒 · 压缩 60×", rc.includes("1 分 0 秒") && rc.includes("压缩 ≈60.0×"));
+ck("时间轴·归档折算观看 1 分 0 秒 · 压缩 60×", rc.includes("1 分 0 秒") && rc.includes("压缩 ≈60.0×"));
 ck("时间轴·块按源时刻落位（09:30 → left:39.58%）", rc.includes("left:39.58%"));
 
 /* 缺数据如实显示，不冒充 */
 run('state.rec={segment_sec:3600,'
   + 'cameras:{"cam-01":{}},'
-  + 'clips:{"cam-01":{"2026-10-22":[{n:"10-00-00.mp4",b:4096,d:20}]}}};'
+  + 'archive:{"cam-01":{"2026-10-22":[{n:"10-00-00.c1.mp4",b:4096,d:20}]}}};'
   + 'renderTl();');
 rc = get('document.getElementById("tlane").innerHTML');
-ck("时间轴·缺全时显示「无录像」（有缩时仍显示）", rc.includes("全时录像") && rc.includes("无录像"));
+ck("时间轴·缺全时显示「无录像」（有归档仍显示）", rc.includes("全时录像") && rc.includes("无录像"));
 
 /* 全天无任何录像 → 整块隐藏 */
-run('state.rec={segment_sec:3600, cameras:{"cam-01":{}}, clips:{"cam-01":{}}}; renderTl();');
+run('state.rec={segment_sec:3600, cameras:{"cam-01":{}}, archive:{"cam-01":{}}}; renderTl();');
 ck("时间轴·无任何录像整块隐藏", get('document.getElementById("tlane").style.display') === "none");
 
 /* 0.9.33 位置与形态：常驻播放器画面上方（p-top 之后、stage 之前），黑底适配 */
@@ -811,9 +818,9 @@ ck("排版·CH/文件数并入摄像头名行（HTML）",
    src.includes('<span class="hdr-sub" id="hdrSub">CH01 · 13 个录像文件</span>')
    && !src.includes('<div class="hdr-sub" id="hdrSub">'));
 ck("排版·并入行小字弱化样式", src.includes(".camsel .hdr-sub{font-weight:400"));
-ck("排版·renderOverview 只剩名字 + CH/文件数（按 kind 区分）",
-   src.includes('cam.ch + " · " + state.segs.length + (state.curKind === "full" ? " 个录像文件"')
-   && src.includes('state.curKind === "archive" ? " 个归档片段" : " 个缩时片段"')
+ck("排版·renderOverview 只剩名字 + CH/文件数（两源口径）",
+   src.includes('cam.ch + " · " + state.segs.length + (state.curKind === "archive" ? " 个归档片段" : " 个录像文件")')
+   && !src.includes("个缩时片段")
    && !src.includes("ovKeep") && !src.includes("ovPct")
    && !src.includes("ovCnt") && !src.includes("ovSize"));
 ck("排版·概览四格 HTML/CSS 下线",
@@ -945,15 +952,15 @@ ck("通用·服务端回读对齐（/api/link 与 /api/config 两条路）",
 
 ck("每路·默认 follow（跟随通用）",
    get("defaultCamParams(null,0).clipMode") === "follow");
-ck("每路·编辑态三选 chips",
-   src.includes('[["follow","跟随通用"],["join","整段拼接"],["split","活动切片"]].map')
-   && src.includes("data-clipmode"));
-ck("每路·处理器写草稿", src.includes('draftSet("clipMode", el.dataset.clipmode);'));
+ck("每路·缩时控件已下线（无切分方式 chips / 无 clipMode 草稿写入）",
+   !src.includes("data-clipmode") && !src.includes('draftSet("clipMode"'));
+ck("每路·事件侦测三选仍保留", src.includes('[["follow","跟随全局"],["virtual","开启"],["off","关闭"]].map'));
 ck("每路·推送与服务端回读",
    src.includes("clip_mode: p.clipMode")
    && src.includes('["follow","join","split"].indexOf(src.clip_mode) >= 0 ? src.clip_mode : "follow"'));
-ck("每路·只读摘要显示生效值",
-   src.includes('roRow("切分方式", clipModeLabel(p.clipMode, true))'));
+ck("每路·只读摘要不再显示缩时参数，改为旧配置提示",
+   !src.includes('roRow("切分方式"') && src.includes('roRow("物化切片"')
+   && src.includes("旧配置 · 建议改「开启」"));
 
 run('LK.clipStyle = "join";');
 ck("标签·split/join 文案", get('clipModeLabel("split")') === "活动切片"
@@ -1018,10 +1025,11 @@ ck("归档·候选摘要从 /api/archive 节流拉取",
 ck("三层·保留策略文本含台账永久",
    src.includes('return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 归档 " + (LK.archDays || 7)')
    && src.includes("+ \" 天 / 台账永久\""));
-ck("三层·预算含归档项且按方案分摊",
-   src.includes("else if(eff === \"virtual\")")
+ck("三层·预算只算全时+归档（缩时已下线）",
+   src.includes("if(cmOf(p) === \"virtual\")")
    && src.includes("arch += dayGB * 0.07 * Math.max(0, (LK.archDays || 7) - p.fullDays)")
-   && src.includes("const need = full + clip + arch;"));
+   && src.includes("const need = full + arch;")
+   && !src.includes("const need = full + clip + arch;"));
 ck("存储·占用载荷三类 + 台账单列",
    src.includes("活动台账 <b>") && src.includes("永久保留 · 几乎不占空间"));
 ck("夜间任务·时刻文案说明先归档后清理",

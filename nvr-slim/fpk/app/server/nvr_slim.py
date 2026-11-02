@@ -1184,38 +1184,29 @@ def parts_payload(cam_filter=""):
 def recordings_payload():
     """磁盘上真实存在的录像：每路每天有哪些分片、多大。
 
-    full（全时）、clip（物化切片，_clip/ 下）、archive（虚拟缩时归档浓缩，_archive/ 下）
-    三套清单分开出 —— 回放页/文件页各按 kind 取用。archive 与 clip 同构
-    （<base>.cNN.mp4 + <base>.idx.json），只是目录不同，所以扫描逻辑照搬 clip。
+    full（全时，<摄像头>/<日期>/）与 archive（归档浓缩，_archive/ 下）两套清单
+    分开出 —— 回放页/文件页各按 kind 取用。archive 是 <base>.cNN.mp4 + <base>.idx.json
+    结构，按 idx 侧车补真实源时间窗。
     新目录（摄像头名称）与旧 id 目录都扫，升级前的存量数据不丢。
+
+    0.9.104 起不再扫描 _clip/：缩时片段（物化切片）已从产品下线，界面没有任何
+    消费方。历史 _clip 目录仍由清理任务按保留期删除，不在这里读。
     """
     root = record_dir()
     per = {}
-    clips = {}
     arch = {}
     total = 0
     for c in cameras():
         days = {}
-        cdays = {}
         adays = {}
         for dname in cam_storage_dirs(c):
             for f in _scan_day_dirs(os.path.join(root, dname)).items():
                 merged = {x["n"]: x for x in days.get(f[0], [])}
                 merged.update({x["n"]: x for x in f[1]})
                 days[f[0]] = [merged[k] for k in sorted(merged)]
-            cbase = os.path.join(root, "_clip", dname)
-            for f in _scan_day_dirs(cbase).items():
-                # 活动切片：趁 p 还在，按 idx 侧车补真实源时间窗（w）
-                for x in f[1]:
-                    w = _clip_window(os.path.join(cbase, f[0]), x["n"])
-                    if w:
-                        x["w"] = w
-                merged = {x["n"]: x for x in cdays.get(f[0], [])}
-                merged.update({x["n"]: x for x in f[1]})
-                cdays[f[0]] = [merged[k] for k in sorted(merged)]
             abase = os.path.join(root, "_archive", dname)
             for f in _scan_day_dirs(abase).items():
-                # 归档浓缩与物化切片同构：idx 侧车补真实源时间窗（w）直接复用
+                # 归档浓缩：idx 侧车补真实源时间窗（w）
                 for x in f[1]:
                     w = _clip_window(os.path.join(abase, f[0]), x["n"])
                     if w:
@@ -1223,23 +1214,21 @@ def recordings_payload():
                 merged = {x["n"]: x for x in adays.get(f[0], [])}
                 merged.update({x["n"]: x for x in f[1]})
                 adays[f[0]] = [merged[k] for k in sorted(merged)]
-        # 缩时片段 / 归档浓缩必须是真实时长：拿 segment_sec 冒充会让时间轴显示 2 个半小时，
+        # 归档浓缩必须是真实时长：拿 segment_sec 冒充会让时间轴显示 2 个半小时，
         # 实际 3 秒播完，然后疯狂切文件。
-        _attach_durations(cdays)
         _attach_durations(adays)
         # 内部用的绝对路径不出去（前端只需要 n/b/d，路径由 /api/record/file 拼）
-        for files in list(days.values()) + list(cdays.values()) + list(adays.values()):
+        for files in list(days.values()) + list(adays.values()):
             for x in files:
                 x.pop("p", None)
         per[c["id"]] = days
-        clips[c["id"]] = cdays
         arch[c["id"]] = adays
         total += sum(len(v) for v in days.values())
     # 回放页时间轴要用真实分片长度，不能在前端写死 300 秒
     return {"ok": True, "root": root, "total": total,
             "segment_sec": runtime.segment_sec(runtime.load_config(
                 STATE["var_dir"]).get("record_segment_sec")),
-            "cameras": per, "clips": clips, "archive": arch}
+            "cameras": per, "archive": arch}
 
 
 # ---------------------------------------------------------------- 存储占用统计

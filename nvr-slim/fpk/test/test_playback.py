@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""回放数据通道的行为测试：全时 + 缩时两套清单、新旧目录合并。
+"""回放数据通道的行为测试：全时 + 归档两套清单、新旧目录合并。
 
 重点守三条：
-  - recordings_payload 同时给出 cameras（全时）与 clips（_clip 缩时）
+  - recordings_payload 同时给出 cameras（全时）与 archive（_archive 归档浓缩）
   - 中文名新目录与旧 id 目录都扫，同名文件去重
   - _scan_day_dirs 只认 YYYY-MM-DD 目录与 .mp4 文件
+  - 0.9.104 起缩时片段（_clip）下线：清单里不再有 clips 键
 """
 import os
 import sys
@@ -29,8 +30,8 @@ class PayloadTest(unittest.TestCase):
         root = self.cfg["record_dir"]
         for d, f in [(os.path.join(root, "客厅", "2026-10-21"), "03-00-00.mp4"),
                      (os.path.join(root, "cam-01", "2026-10-20"), "01-32-08.mp4"),
-                     (os.path.join(root, "_clip", "客厅", "2026-10-21"), "03-05-00.mp4"),
-                     (os.path.join(root, "_clip", "cam-01", "2026-10-20"), "01-40-00.mp4")]:
+                     (os.path.join(root, "_archive", "客厅", "2026-10-21"), "03-05-00.c1.mp4"),
+                     (os.path.join(root, "_archive", "cam-01", "2026-10-20"), "01-40-00.c1.mp4")]:
             os.makedirs(d, exist_ok=True)
             with open(os.path.join(d, f), "wb") as fh:
                 fh.write(b"x" * 100)
@@ -44,16 +45,17 @@ class PayloadTest(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_payload_lists_full_and_clips(self):
+    def test_payload_lists_full_and_archive(self):
         pl = ns.recordings_payload()
         self.assertTrue(pl["ok"])
         per = pl["cameras"]["cam-01"]
         self.assertIn("2026-10-21", per)       # 新名称目录
         self.assertIn("2026-10-20", per)       # 旧 id 目录
-        clips = pl["clips"]["cam-01"]
-        self.assertIn("2026-10-21", clips)     # 缩时也扫两个目录
-        self.assertIn("2026-10-20", clips)
+        arch = pl["archive"]["cam-01"]
+        self.assertIn("2026-10-21", arch)      # 归档也扫两个目录
+        self.assertIn("2026-10-20", arch)
         self.assertEqual(pl["total"], 2)       # 全时两个文件
+        self.assertNotIn("clips", pl)          # 缩时片段已下线
 
     def test_scan_ignores_non_day_and_non_mp4(self):
         days = ns._scan_day_dirs(os.path.join(self.cfg["record_dir"], "客厅"))
