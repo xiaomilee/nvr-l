@@ -1350,6 +1350,14 @@ def archive_state_path():
     return os.path.join(STATE["var_dir"], "archive-state.json")
 
 
+# 归档运行进度（纯内存态）。点「立即归档」是一个同步长任务：几十秒到几十分钟，
+# 期间界面只能看到按钮转圈，用户会以为没跑。这里把「正在裁哪一路、第几片、
+# 已出多少 MB」逐片暴露到 /api/archive.running，前端据此显示进度。
+# _ARCH_LOCK 同时是防重入闸：两个人/两个标签页一起点不会把同一天裁两遍。
+_ARCH_PROG = {"running": False}
+_ARCH_LOCK = threading.Lock()
+
+
 def load_state_file(path):
     if os.path.isfile(path):
         try:
@@ -1409,6 +1417,7 @@ def archive_payload():
         "cleanup_at": at,
         "next_run": retention.next_run(at).strftime("%Y-%m-%d %H:%M"),
         "last": load_state_file(archive_state_path()),
+        "running": dict(_ARCH_PROG) if _ARCH_PROG.get("running") else None,
         "todo_count": len(p["todo"]),
         "todo": p["todo"][:30],
         "no_ledger_count": len(p["no_ledger"]),
@@ -1435,10 +1444,25 @@ def run_archive(dry_run=False, trigger="manual"):
                 "est_bytes": p["est_bytes"], "policy": p["policy"],
                 "batch": batch}
     logs = []
-    res = archive.run(record_dir(), cams, cam_cfg,
-                      archive_modes(cams, cfg),
-                      STATE.get("ffmpeg_bin"), seg_sec=seg,
-                      batch=batch, on_log=logs.append)
+    if not _ARCH_LOCK.acquire(blocking=False):
+        return {"ok": False, "running": dict(_ARCH_PROG),
+                "error": "已有归档任务在跑，等这一轮结束再点"}
+    _ARCH_PROG.clear()
+    _ARCH_PROG.update({"running": True,
+                       "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                       "trigger": trigger, "cam": "", "name": "", "date": "",
+                       "done": 0, "total": 0, "used": 0, "batch": batch,
+                       "files": 0, "bytes": 0,
+                       "days_done": 0, "days_total": 0})
+    try:
+        res = archive.run(record_dir(), cams, cam_cfg,
+                          archive_modes(cams, cfg),
+                          STATE.get("ffmpeg_bin"), seg_sec=seg,
+                          batch=batch, on_log=logs.append,
+                          on_step=_ARCH_PROG.update)
+    finally:
+        _ARCH_PROG["running"] = False
+        _ARCH_LOCK.release()
     res["trigger"] = trigger
     res["at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     if res["days"] or res["failed"] or trigger == "schedule":

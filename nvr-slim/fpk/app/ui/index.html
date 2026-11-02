@@ -185,6 +185,13 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .listhead{display:flex;align-items:center;padding:13px 16px 7px;font-size:12.5px;color:var(--muted)}
 .listhead b{color:var(--text);font-weight:600;font-size:13px}
 .listhead .sp{margin-left:auto;font-size:12px}
+/* 同一天同时有全时原画和归档浓缩时，这里出切换：默认全时优先，但不能
+   让归档片段被完全藏起来（真机反馈：「点了归档，什么文件都没多出来」）。 */
+.kinds{display:flex;gap:5px;margin-left:9px}
+.kchip{height:23px;padding:0 9px;border-radius:7px;border:1px solid var(--line);
+  background:var(--surface);color:var(--muted);font-size:11.5px;font-family:inherit;
+  line-height:21px;cursor:pointer}
+.kchip.on{background:var(--primary-soft);border-color:var(--primary-line);color:var(--primary);font-weight:600}
 .clips{flex:1;overflow-y:auto;padding:0 16px 16px;-webkit-overflow-scrolling:touch}
 .card{display:flex;gap:11px;align-items:center;background:var(--surface);border-radius:14px;
   padding:9px;margin-bottom:9px;box-shadow:0 1px 2px rgba(20,26,40,.045)}
@@ -1480,6 +1487,7 @@ body.rot .vtlscroll{touch-action:none}
 
       <div class="listhead">
         <b id="listTitle">全部片段</b>
+        <span class="kinds" id="kindChips"></span>
         <span class="sp" id="listCount">14 段</span>
       </div>
       <div class="clips" id="clips"></div>
@@ -1869,7 +1877,8 @@ const state = {
   land:false,
   rot:false,        /* 方向锁不住时，画面转了 90° 兜底 */
   maskTool:"ignore",
-  pmode:"full",     // full = 全时录像 | clip = 精简片段
+  pmode:"full",     // full = 全时录像 | archive = 归档浓缩 | clip = 精简片段
+  kindPick:null,    // 用户手动选的维度 {day, kind}：当天同时有全时和归档时才给选
   rec:null,         // /api/recordings 的结果：真实落盘的录像清单
   dayList:[],       // 当前摄像头真正有文件的日子（旧→新升序，全量；顺序只有 recalcDayList 一处）
   liveView:"snap",  // snap | single | grid
@@ -7108,9 +7117,23 @@ function bindSettings(body){
       return;
     }
     bArch.disabled = true;
-    if(ao) ao.textContent = "归档中，视分片数量可能需要几分钟…";
+    if(ao) ao.textContent = "归档中，正在准备…";
+    /* 归档是同步长任务（一批 120 片，每片几秒到几十秒），不能只留一行静态
+       文字让人干等：每 1.5 秒问一次服务端「裁到第几片了」，进度就看得见。 */
+    const tick = setInterval(()=>{
+      apiGet("/api/archive").then(a=>{
+        const run = a && a.running;
+        if(!run || !ao) return;
+        ao.innerHTML = "归档中：" + esc(run.name || run.cam || "…") + " "
+          + esc(run.date || "") + " 第 <b>" + (run.done || 0) + "/" + (run.total || 0)
+          + "</b> 片"
+          + (run.used ? "，本轮已裁 " + run.used + "/" + run.batch + " 片" : "")
+          + (run.files ? "，产出 " + run.files + " 段 / " + fmtBytes(run.bytes || 0) : "");
+      }).catch(()=>{});
+    }, 1500);
     try{
       const r = await apiPost("/api/archive/run", {dry_run:false});
+      clearInterval(tick);
       ARCH.arm = null;
       ARCH.out = r.ok
         ? ("归档完成：<b>" + (r.days||[]).length + " 天</b> / " + (r.files||0)
@@ -7118,10 +7141,13 @@ function bindSettings(body){
            + (r.remaining ? "，剩余 " + r.remaining + " 天跨夜继续" : "")
            + ((r.no_ledger||[]).length ? "；无台账跳过 " + r.no_ledger.length + " 天" : ""))
         : ("部分失败：完成 " + (r.days||[]).length + " 天，失败 "
-           + (r.failed||[]).length + " 片（下次自动重试）");
+           + ((r.failed||[]).length) + " 片（下次自动重试）");
       STORAGE.data = null; STORAGE.at = 0;   /* 占用变了，存储卡强制重拉 */
+      if(r && r.error) ARCH.out = esc(r.error);
+      fetchRecordings();                     /* 归档产物立刻出现在文件页的日期条里 */
       renderCamTabs();
     }catch(e){
+      clearInterval(tick);
       ARCH.arm = null;
       if(ao) ao.textContent = "归档失败：" + esc(String(e));
       renderCamTabs();
@@ -7568,13 +7594,48 @@ function recalcDayList(){
    否则有物化切片 → clip。文件页不再按全局 pmode 单选，而是跟着当天磁盘上实际
    有什么文件走 —— 否则第 4~7 天的归档片段会因为没有 full 而被整个跳过。 */
 function dayKind(day){
+  const hv = dayHas(day);
+  /* 用户手动选过的维度优先（同一天既可能看全时原画、也可能看归档浓缩），
+     但只在那一源当天真有文件时才生效，避免选了归档、切到没有归档的日子后空白。 */
+  const kp = state.kindPick;
+  if(kp && kp.day === day && hv[kp.kind]) return kp.kind;
+  if(hv.full) return "full";
+  if(hv.archive) return "archive";
+  if(hv.clip) return "clip";
+  return "full";
+}
+
+/* 某天三种源各有没有文件。文件页的维度切换、dayKind 的默认顺序都用它，
+   口径必须与 /api/recordings 的 cameras / archive / clips 三个键一致。 */
+function dayHas(day){
   const rec = state.rec || {};
   const cam = state.camId;
   const has = k=>{ const d = (rec[k] && rec[k][cam]) || {}; return !!(d[day] && d[day].length); };
-  if(has("cameras")) return "full";
-  if(has("archive")) return "archive";
-  if(has("clips")) return "clip";
-  return "full";
+  return {full:has("cameras"), archive:has("archive"), clip:has("clips")};
+}
+
+/* 列表头维度切换：当天有 2 个以上源才出现。
+   以前只有一个 dayKind 自动判定（全时优先），于是「全时还没过期」的那些天里
+   归档片段一个都看不到 —— 用户点了立即归档、产物也写盘了，界面却毫无变化。 */
+function renderKindChips(day){
+  const el = document.getElementById("kindChips");
+  if(!el) return;
+  const hv = day ? dayHas(day) : {full:false,archive:false,clip:false};
+  const opts = [];
+  if(hv.full) opts.push(["full", "全时录像"]);
+  if(hv.archive) opts.push(["archive", "归档浓缩"]);
+  if(hv.clip) opts.push(["clip", "缩时片段"]);
+  if(opts.length < 2){ el.innerHTML = ""; return; }
+  el.innerHTML = opts.map(o=>
+    '<button class="kchip' + (state.curKind === o[0] ? " on" : "") +
+    '" data-kind="' + o[0] + '">' + o[1] + '</button>').join("");
+  el.querySelectorAll("[data-kind]").forEach(b=>{
+    b.onclick = ()=>{
+      state.kindPick = {day: day, kind: b.dataset.kind};
+      state.pmode = b.dataset.kind;
+      loadDay();
+    };
+  });
 }
 let recRetry = 0;
 function fetchRecordings(done){
@@ -7586,6 +7647,7 @@ function fetchRecordings(done){
     recRetry = 0;
     recalcDayList();
     renderDates(); renderOverview(); renderHeat(); renderClips();
+    renderKindChips(curDay());
     applyPlaybackVisibility();
     try{ renderPlay(); }catch(e){}   /* 回放页若开着，吃到新清单后重绘日期条 */
     if(done) done();
@@ -8996,6 +9058,7 @@ function loadDay(){
   if(!state.camId || !camParams[state.camId]){
     state.curKind = "full"; state.activity = []; state.segs = [];
     renderDates(); renderOverview(); renderHeat(); renderClips();
+    renderKindChips(null);
     applyPlaybackVisibility();
     return;
   }
@@ -9006,17 +9069,22 @@ function loadDay(){
      文件页没有模式切换按钮，统一按当天磁盘上实际有什么文件走 dayKind ——
      否则第 4~7 天的归档浓缩因没有 full 会被跳过，在文件页彻底消失。 */
   const onPlay = document.getElementById("page-play").classList.contains("on");
-  if(onPlay && (state.pmode === "full" || state.pmode === "clip")){
-    if(state.pmode === "full" && ((state.rec.cameras||{})[state.camId]||{})[day])
-      kind = "full";
-    else if(state.pmode === "clip" && ((state.rec.clips||{})[state.camId]||{})[day])
-      kind = "clip";
+  if(onPlay && (state.pmode === "full" || state.pmode === "clip"
+                || state.pmode === "archive")){
+    /* 回放页用户主动切维度时，若该天确有该源则尊重其选择。归档也要走这一支：
+       以前只有 full/clip，点时间轴上的归档块会把 pmode 设成 archive，但这里
+       不认，又回落 dayKind → 当天有全时就是 full，于是「点归档块播的却是全时」。 */
+    const srcKey = state.pmode === "full" ? "cameras"
+      : (state.pmode === "archive" ? "archive" : "clips");
+    if((((state.rec || {})[srcKey] || {})[state.camId] || {})[day])
+      kind = state.pmode;
   }
   state.curKind = kind;
   const segs = realSegs(state.camId, day, kind) || [];
   state.activity = segs;   // 磁盘上没有就是没有，绝不拿演示数据充数
   state.segs = segs;
   renderDates(); renderOverview(); renderHeat(); renderClips();
+  renderKindChips(day);
   applyPlaybackVisibility();
 }
 

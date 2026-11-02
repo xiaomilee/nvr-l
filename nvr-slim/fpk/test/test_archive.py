@@ -191,6 +191,64 @@ class TestRun(_Env):
             archive.archive_dir(self.root, "cam1", "2026-10-18")))
         self.assertTrue(any(x.get("empty") for x in r["days"]))
 
+    def test_exists_does_not_eat_batch(self):
+        """幂等跳过的分片不能占 batch 预算。
+
+        0.9.102 及以前 `used += 1` 在 _split 之前，于是「已归档过的那片」也
+        算一片：batch=120 时重跑，前 120 个全是 exists → 本轮一片新的都没裁，
+        界面转完却什么都没多出来。真机表现就是「点了归档，还是没产生文件」。
+        """
+        real_split = archive._split
+
+        def fake_split(ffmpeg, src, out_base, wins, arc_dir):
+            if os.path.isfile(out_base + ".idx.json"):
+                return {"ok": True, "reason": "exists", "parts": 0, "files": []}
+            out = out_base + ".c01.mp4"
+            touch(out, 4096)
+            return {"ok": True, "reason": "split", "files": [out]}
+        # 10-18 已经有 idx（上一轮裁好了），但没有 .done
+        touch(os.path.join(archive.archive_dir(self.root, "cam1", "2026-10-18"),
+                           "10-00-00.idx.json"), 64)
+        archive._split = fake_split
+        try:
+            r = archive.run(self.root, self.cams(), {"cam1": {"full_days": 7}},
+                            self.modes(), None, today=TODAY, batch=1)
+        finally:
+            archive._split = real_split
+        # 只花掉 1 个预算（10-12 那片），不是 2
+        self.assertEqual(r["segments_used"], 1)
+        # 10-12 真的被裁到了 —— 修复前这里仍是 False
+        self.assertTrue(archive.is_done(
+            archive.archive_dir(self.root, "cam1", "2026-10-12")))
+        # 10-18 全部 exists → 也算整日裁完，收尾
+        self.assertTrue(archive.is_done(
+            archive.archive_dir(self.root, "cam1", "2026-10-18")))
+
+    def test_step_progress_callback(self):
+        steps = []
+        real_split = archive._split
+
+        def fake_split(ffmpeg, src, out_base, wins, arc_dir):
+            out = out_base + ".c01.mp4"
+            touch(out, 4096)
+            return {"ok": True, "reason": "split", "files": [out]}
+        archive._split = fake_split
+        try:
+            archive.run(self.root, self.cams(), {"cam1": {"full_days": 7}},
+                        self.modes(), None, today=TODAY, batch=10,
+                        on_step=steps.append)
+        finally:
+            archive._split = real_split
+        self.assertTrue(steps)
+        last = steps[-1]
+        # 进度字段齐全，且最后一片时 done == total（界面靠这个显示 X/Y 片）
+        for k in ("cam", "date", "done", "total", "used", "batch",
+                  "files", "bytes", "days_done", "days_total"):
+            self.assertIn(k, last)
+        self.assertEqual(last["done"], last["total"])
+        self.assertGreaterEqual(last["days_done"], 1)
+        self.assertLessEqual(last["used"], last["batch"])
+
 
 class TestLedgerRead(unittest.TestCase):
     """0.9.101 回归守卫：归档必须能读懂台账 v1（窗口嵌在 sources 下）。"""

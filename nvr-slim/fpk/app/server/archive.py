@@ -419,16 +419,24 @@ def _purge_empty_parts(arc_dir):
 # ---------------------------------------------------------------- 执行
 
 def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
-        batch=120, scan_fn=None, on_log=None):
+        batch=120, scan_fn=None, on_log=None, on_step=None):
     """执行归档裁剪。返回结果摘要（与 retention.execute 风格一致）。
 
     单分片失败只记日志跳过（不写 idx，下次重试），不阻塞同日其它分片、
     不阻塞后续日期。分片总数到 batch 就停 —— 跨夜慢慢消化。
+
+    on_step(step)：每处理完一个分片回调一次，供上层把进度暴露给界面。
+    step = {cam,name,date,done,total,used,batch,files,bytes,days_done,days_total}
+
+    幂等跳过的分片（idx 已在）**不消耗 batch 预算**：它只花一次 stat 的时间。
+    0.9.102 及以前把它也算一片，于是「点第二次」时预算全被已归档分片吃光，
+    真正往前推进的只剩个位数 —— 表现就是点了归档、界面转很久、却几乎没新文件。
     """
     today = today or date.today()
     p = plan(root, cams, cam_cfg, modes, today=today, seg_sec=seg_sec,
              scan_fn=scan_fn)
     log = on_log or (lambda msg: None)
+    step_cb = on_step or (lambda step: None)
     archived_days, files, out_bytes = [], 0, 0
     failed, used = [], 0
     for item in p["todo"]:
@@ -468,11 +476,22 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
         for fname, wins in cuts.items():
             if used >= batch:
                 break
-            used += 1
-            processed += 1
             src = os.path.join(day_base, fname)
             out_base = os.path.join(arc, fname[:-4])
             r = _split(ffmpeg, src, out_base, wins, arc)
+            if r.get("reason") == "exists":
+                # 上一轮已经裁好（idx 在）：不再花预算，也不再算产出
+                processed += 1
+                step_cb({"cam": item["cam"], "name": item.get("name"),
+                         "date": d, "done": processed, "total": planned,
+                         "used": used, "batch": batch,
+                         "files": files + n_files,
+                         "bytes": out_bytes + day_bytes,
+                         "days_done": len(archived_days),
+                         "days_total": len(p["todo"])})
+                continue
+            used += 1
+            processed += 1
             if r["ok"]:
                 n_files += len(r.get("files") or [])
                 for q in (r.get("files") or []):
@@ -483,6 +502,13 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
                                "file": fname, "error": r.get("error")})
                 log("archive: 裁剪失败 %s/%s/%s: %s"
                     % (item["cam"], d, fname, r.get("error")))
+            step_cb({"cam": item["cam"], "name": item.get("name"),
+                     "date": d, "done": processed, "total": planned,
+                     "used": used, "batch": batch,
+                     "files": files + n_files,
+                     "bytes": out_bytes + day_bytes,
+                     "days_done": len(archived_days),
+                     "days_total": len(p["todo"])})
         if not day_fail and processed >= planned:
             write_done(arc, n_files)       # 整日裁完且无失败才收尾
             archived_days.append({**item, "files": n_files,
