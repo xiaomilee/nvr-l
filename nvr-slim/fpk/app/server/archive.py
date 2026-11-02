@@ -38,6 +38,19 @@ LIMITS = {"archive_days": (1, 3650), "archive_batch": (10, 2000)}
 
 DONE_NAME = ".done"
 
+# 0 帧片段的体积上限。ffmpeg 裁一个「起止都落在源文件之外」的区间时不会报错，
+# 它会写出一个只有 ftyp+moov、没有 mdat 的空 mp4（真机实测 262 字节）。
+# 这类空壳既不占空间也不算失败，但会让整日的 .done 记为"已完成"，
+# 且在回放页变成一串 0.2 秒的黑块 —— 一律当失败处理并清理。
+EMPTY_PART_BYTES = 1024
+
+
+def _unlink(p):
+    try:
+        os.remove(p)
+    except OSError:
+        pass
+
 
 def clamp(key, value):
     lo, hi = LIMITS.get(key, (1, 3650))
@@ -146,6 +159,8 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
             full_days = int(full_days)
         except (TypeError, ValueError):
             full_days = 3
+        # 分片长度按路取（每路可单独覆盖），别拿全局值套所有通道
+        cam_seg = _cam_seg_sec(cc, seg_sec)
         mode = modes.get(cid) or "virtual"
         pol = {"cam": cid, "name": cam.get("name", cid), "mode": mode,
                "full_days": full_days,
@@ -173,6 +188,7 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
             for d in sel["todo"]:
                 item = {"cam": cid, "name": cam.get("name", cid),
                         "dir": dname, "date": d,
+                        "seg_sec": cam_seg,
                         "segments": 0, "bytes": 0, "est_bytes": 0}
                 day_base = os.path.join(base, d)
                 ev = _ledger_events(led_root, d)
@@ -184,7 +200,7 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
                     item["bytes"] += _fsize(os.path.join(day_base, f))
                 if ev:
                     covered = sum(e - s for s, e in
-                                  _day_cover(item, day_base, seg_sec))
+                                  _day_cover(item, day_base, cam_seg, d))
                     if covered > 0:
                         active = sum(e - s for s, e in ev)
                         item["est_bytes"] = int(item["bytes"] *
@@ -198,12 +214,13 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
     return out
 
 
-def _day_cover(item, day_base, seg_sec):
+def _day_cover(item, day_base, seg_sec, day=None):
     cov = []
     for f in _day_files(day_base):
         st = _src_start(f)
         if st is not None:
-            cov.append((st, min(86400.0, st + seg_sec)))
+            cov.append((st, _seg_end(os.path.join(day_base, f),
+                                     day or item.get("date"), st, seg_sec)))
     return cov
 
 
@@ -237,6 +254,10 @@ def _done_days(root, dname, led_root=None):
     for n in os.listdir(arc):
         d = os.path.join(arc, n)
         if not is_done(d):
+            continue
+        # 产物里还有 0 帧空壳 → 这日并没真正裁完（窗口与分片错配），放回去重做。
+        # run() 会先清掉空壳再重切，所以这里只判断、不动文件。
+        if _has_empty_parts(d):
             continue
         if led_root and _done_files(d) == 0 and _ledger_events(led_root, n):
             continue                      # 误标：台账有活动，重新归档
@@ -318,6 +339,83 @@ def _fsize(p):
         return 0
 
 
+def _cam_seg_sec(cc, default):
+    """这一路的分片长度。每路可以单独覆盖 record_segment_sec。
+
+    0.9.101 及以前 plan/run 只吃全局 seg_sec，把「配 60 秒」的通道当成 300 秒算：
+    一个 18:40:22 的分片被估算成覆盖到 18:45:22，于是 18:45:00 的活动窗口被
+    派给该片去裁——那片其实 18:41:22 就结束了，裁出来全是空壳。
+    """
+    try:
+        v = float((cc or {}).get("segment_sec"))
+        if v >= 5:
+            return v
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return float(default or 300.0)
+
+
+def _seg_end(path, day, st, seg_sec):
+    """分片真实结束时刻（当天钟点秒）。
+
+    用 seg_sec 估算是必要条件但不充分：ffmpeg 的 segment muxer 只在切到下一片时
+    才关闭上一片，配置片长与实际片长会差（真机见过「配 120 实际 84」）。mtime
+    就是最后一帧写下去的时刻，用它把上界收敛回来；只有 mtime 落在同一天且确实
+    早于估算值时才采信，避免复制/备份把 mtime 刷成未来导致区间被放大。
+    """
+    en = min(86400.0, st + seg_sec)
+    try:
+        tm = time.localtime(os.path.getmtime(path))
+        if time.strftime("%Y-%m-%d", tm) == day:
+            mt = tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec
+            if st < mt < en:
+                en = float(mt)
+    except OSError:
+        pass
+    return en
+
+
+def _has_empty_parts(arc_dir):
+    """该日产物里是否还有 0 帧空壳（只读，不动文件）。"""
+    try:
+        names = os.listdir(arc_dir)
+    except OSError:
+        return False
+    for n in names:
+        if n.lower().endswith(".mp4") and \
+                _fsize(os.path.join(arc_dir, n)) < EMPTY_PART_BYTES:
+            return True
+    return False
+
+
+def _purge_empty_parts(arc_dir):
+    """清掉历史空壳（0 帧片段）及其 idx 侧车，返回是否清过。
+
+    空壳是「窗口与分片错配」的痕迹：留着既占回放页的黑块，又让 write_split
+    因为 idx 已存在而一直跳过重切。清过就必须让该日重做（调用方负责失效 .done）。
+    """
+    if not os.path.isdir(arc_dir):
+        return False
+    dropped = 0
+    try:
+        names = os.listdir(arc_dir)
+    except OSError:
+        return False
+    for n in names:
+        if not n.lower().endswith(".mp4"):
+            continue
+        p = os.path.join(arc_dir, n)
+        if _fsize(p) < EMPTY_PART_BYTES:
+            _unlink(p)
+            dropped += 1
+    if not dropped:
+        return False
+    for n in names:
+        if n.lower().endswith(".idx.json"):
+            _unlink(os.path.join(arc_dir, n))
+    return True
+
+
 # ---------------------------------------------------------------- 执行
 
 def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
@@ -339,12 +437,19 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
         dn, d = item["dir"], item["date"]
         day_base = os.path.join(root, dn, d)
         arc = archive_dir(root, dn, d)
+        # 分片长度按这一路来（每路可单独覆盖），别用全局值套所有通道
+        cam_seg = float(item.get("seg_sec") or seg_sec)
+        # 先清历史空壳：它们让 write_split 因为 idx 已存在而重切不了，
+        # 也让 .done 把这一日当成已完成。清过就把 .done 作废，整日重做。
+        if _purge_empty_parts(arc):
+            _unlink(done_path(arc))
+            log("archive: %s/%s 清理空壳片段后重做" % (item["cam"], d))
         ev = _ledger_events(os.path.join(root, "_ledger", dn), d)
         segs = {}
         for f in _day_files(day_base):
             st = _src_start(f)
             if st is not None:
-                segs[f] = (st, min(86400.0, st + seg_sec))
+                segs[f] = (st, _seg_end(os.path.join(day_base, f), d, st, cam_seg))
         cuts = slice_windows(ev, segs)
         if not cuts:
             if ev:

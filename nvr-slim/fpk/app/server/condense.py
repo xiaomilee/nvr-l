@@ -27,6 +27,10 @@ import time
 import ffmpeg_cmd
 import pixdiff
 
+# 小于这个体积的 mp4 一定是 0 帧空壳（只有容器头、没有 mdat，实测 262 字节）。
+# 正常片段哪怕只有 1 秒也有几 KB，不用担心误杀。
+EMPTY_PART_BYTES = 1024
+
 
 # ---------------------------------------------------------------- 读曲线
 
@@ -410,8 +414,13 @@ def _export_copy(ffmpeg, src, out, ss, to, speed, timeout, err, force=False):
         r = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, str(e)
-    if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+    if r.returncode == 0 and os.path.isfile(out) and \
+            os.path.getsize(out) >= EMPTY_PART_BYTES:
         return True, ""
+    if r.returncode == 0 and os.path.isfile(out):
+        # 同样拒收 0 帧空壳（区间落在源文件之外）
+        _unlink(out)
+        return False, "empty-part: 区间不在源文件时间范围内"
     return False, ((r.stderr or b"").decode("utf-8", "replace").strip()[-300:]
                    or err)
 
@@ -533,8 +542,16 @@ def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
         except (OSError, subprocess.TimeoutExpired) as e:
             err = str(e)
             continue
-        if r.returncode == 0 and os.path.isfile(out) and os.path.getsize(out) > 0:
+        if r.returncode == 0 and os.path.isfile(out) and \
+                os.path.getsize(out) >= EMPTY_PART_BYTES:
             return True, "", codec
+        if r.returncode == 0 and os.path.isfile(out):
+            # 0 帧空壳：区间起止落在源文件时间范围之外时 ffmpeg 仍返回 0，
+            # 只写出 ftyp+moov、没有 mdat（实测 262 字节）。绝不能当成功——
+            # 一旦冒充成功，整日 .done 会被记成已完成，回放页多出一串黑块。
+            err = "empty-part (%d bytes, 区间不在源文件范围内)" % os.path.getsize(out)
+            _unlink(out)
+            continue
         err = (r.stderr or b"").decode("utf-8", "replace").strip()[-300:]
         if use_hw:
             _hw_fail(ffmpeg)          # 记下失败，本进程内一段时间不再试硬编

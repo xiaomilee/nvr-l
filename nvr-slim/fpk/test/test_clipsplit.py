@@ -33,6 +33,11 @@ CAMS = [{"id": "cam-01", "name": "车库入口", "url": "rtsp://x/1",
          "condense": True, "clip_mode": "join"}]
 
 
+# 假 ffmpeg 写出的"片段"必须够大：condense.EMPTY_PART_BYTES(1024) 会把
+# 几十字节的产物判成 0 帧空壳并拒收，夹具用 4 字节就会假失败。
+FAKE_PART = b"x" * 2048
+
+
 def touch(path, size=16, age=0):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
@@ -120,7 +125,7 @@ class TestExportPrecise(unittest.TestCase):
                 returncode = 0
                 stderr = b""
             with open(cmd[-1], "wb") as f:
-                f.write(b"data")
+                f.write(FAKE_PART)
             return R()
         with mock.patch.object(condense.subprocess, "run", fake_run):
             ok, err, codec = condense._export_precise("ff", "s.mp4", self.out,
@@ -142,7 +147,7 @@ class TestExportPrecise(unittest.TestCase):
                 returncode = 0
                 stderr = b""
             with open(cmd[-1], "wb") as f:
-                f.write(b"data")
+                f.write(FAKE_PART)
             return R()
 
         with mock.patch.object(condense.subprocess, "run", fake_run):
@@ -202,7 +207,7 @@ class TestExportPrecise(unittest.TestCase):
                 returncode = 0
                 stderr = b""
             with open(cmd[-1], "wb") as f:
-                f.write(b"data")
+                f.write(FAKE_PART)
             return R2()
 
         with mock.patch.object(condense.subprocess, "run", fake_run):
@@ -226,7 +231,7 @@ class TestWriteSplit(unittest.TestCase):
         def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
             if ok:
                 with open(out, "wb") as f:
-                    f.write(b"clip")
+                    f.write(FAKE_PART)
             return ok, "" if ok else "boom", codec
         return fake
 
@@ -268,7 +273,7 @@ class TestWriteSplit(unittest.TestCase):
             state["n"] += 1
             if state["n"] == 1:
                 with open(out, "wb") as f:
-                    f.write(b"clip")
+                    f.write(FAKE_PART)
                 return True, "", "qsv"
             return False, "boom", "copy"
 
