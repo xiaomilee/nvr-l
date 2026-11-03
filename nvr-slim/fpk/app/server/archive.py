@@ -130,16 +130,31 @@ def is_done(arc_dir):
     return os.path.isfile(done_path(arc_dir))
 
 
-def write_done(arc_dir, n_files):
+def write_done(arc_dir, n_files, dead=0):
+    """收尾标记。dead = 因「源区间已断流」被跳过的窗口数。
+
+    必须记下来：`_done_days` 的自愈逻辑会把 `files == 0` 的 .done 当成
+    「上次读到空台账、误判收尾」放回去重做。整天的窗口全是死区间时
+    files 正好是 0，没有这个字段就会每轮重做、永远追不平。
+    """
     try:
         os.makedirs(arc_dir, exist_ok=True)
         tmp = done_path(arc_dir) + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"files": n_files,
+            json.dump({"files": n_files, "dead": int(dead or 0),
                        "at": time.strftime("%Y-%m-%d %H:%M:%S")}, f)
         os.replace(tmp, done_path(arc_dir))
     except OSError:
         pass
+
+
+def _done_dead(arc_dir):
+    """`.done` 里记的被跳过死区间数；读不出来返回 0。"""
+    try:
+        with open(done_path(arc_dir), "r", encoding="utf-8") as f:
+            return int((json.load(f) or {}).get("dead", 0) or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return 0
 
 
 # ---------------------------------------------------------------- 计划
@@ -237,11 +252,9 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
 
 def _day_cover(item, day_base, seg_sec, day=None):
     cov = []
-    for f in _day_files(day_base):
-        st = _src_start(f)
-        if st is not None:
-            cov.append((st, _seg_end(os.path.join(day_base, f),
-                                     day or item.get("date"), st, seg_sec)))
+    day = day or item.get("date")
+    for f, st, nxt in _seg_seq(day_base):
+        cov.append((st, _seg_end(os.path.join(day_base, f), day, st, seg_sec, nxt)))
     return cov
 
 
@@ -280,7 +293,8 @@ def _done_days(root, dname, led_root=None):
         # run() 会先清掉空壳再重切，所以这里只判断、不动文件。
         if _has_empty_parts(d):
             continue
-        if led_root and _done_files(d) == 0 and _ledger_events(led_root, n):
+        if led_root and _done_files(d) == 0 and not _done_dead(d) \
+                and _ledger_events(led_root, n):
             continue                      # 误标：台账有活动，重新归档
         out.add(n)
     return out
@@ -376,24 +390,50 @@ def _cam_seg_sec(cc, default):
     return float(default or 300.0)
 
 
-def _seg_end(path, day, st, seg_sec):
+def _seg_end(path, day, st, seg_sec, next_st=None):
     """分片真实结束时刻（当天钟点秒）。
 
-    用 seg_sec 估算是必要条件但不充分：ffmpeg 的 segment muxer 只在切到下一片时
-    才关闭上一片，配置片长与实际片长会差（真机见过「配 120 实际 84」）。mtime
-    就是最后一帧写下去的时刻，用它把上界收敛回来；只有 mtime 落在同一天且确实
-    早于估算值时才采信，避免复制/备份把 mtime 刷成未来导致区间被放大。
+    优先级：mtime（写完这一片的时刻）→ 下一片起点 → 名义片长。
+
+    mtime 是主口径：ffmpeg 的 segment muxer 只在切到下一片时才关闭上一片，
+    配置片长与实际片长会差（真机见过「配 120 实际 84」），只有写完时刻能
+    看出断录。但它是秒级精度 —— 内容不足 1 秒的退化分片，mtime 会落回起点
+    那一秒里。老实现要求 `st < mt` 才采信，条件不成立就整片退回
+    `st + seg_sec`，把后面 5 分钟全派给这一片：真机 `15-57-19.mp4` 只有
+    4.6 秒内容却占着 300 秒窗口，那一族 14 个废片就是这么来的（0.9.107 及
+    以前）。现在 mtime 落回起点时改看下一片起点（实测下一片名字就是上一片
+    的收笔时刻，两者在正常分片上完全吻合）。
+
+    下一片起点**只作 mtime 不可用时的兜底**，绝不优先：真机车库断录过 19.2
+    分钟，下一片起点距上一片 220~250 秒，若以它为界会把整段断录都当成有
+    画面，窗口派过去同样裁不出东西。
     """
-    en = min(86400.0, st + seg_sec)
+    en = min(86400.0, st + max(1.0, float(seg_sec or 300.0)))
     try:
         tm = time.localtime(os.path.getmtime(path))
         if time.strftime("%Y-%m-%d", tm) == day:
             mt = tm.tm_hour * 3600 + tm.tm_min * 60 + tm.tm_sec
             if st < mt < en:
-                en = float(mt)
+                return float(mt)           # 最可信：最后一帧写下去的时刻
     except OSError:
         pass
+    if next_st is not None and st < next_st < en:
+        return float(next_st)              # 下一片紧跟着来 → 这一片录到了这里
     return en
+
+
+def _seg_seq(day_base):
+    """[(分片名, 起点秒, 下一片起点秒 or None)]，按文件名（=时间）升序。"""
+    out = []
+    for f in _day_files(day_base):
+        st = _src_start(f)
+        if st is not None:
+            out.append([f, st, None])
+    for i in range(len(out) - 1):
+        nxt = out[i + 1][1]
+        if nxt > out[i][1]:                # 起点重复（异常命名）时不当作上界
+            out[i][2] = nxt
+    return [tuple(x) for x in out]
 
 
 def _has_empty_parts(arc_dir):
@@ -490,10 +530,8 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
             log("archive: %s/%s 清理空壳片段后重做" % (item["cam"], d))
         ev = _ledger_events(os.path.join(root, "_ledger", dn), d)
         segs = {}
-        for f in _day_files(day_base):
-            st = _src_start(f)
-            if st is not None:
-                segs[f] = (st, _seg_end(os.path.join(day_base, f), d, st, cam_seg))
+        for f, st, nxt in _seg_seq(day_base):
+            segs[f] = (st, _seg_end(os.path.join(day_base, f), d, st, cam_seg, nxt))
         cuts = slice_windows(ev, segs)
         if not cuts:
             if ev:
@@ -506,7 +544,7 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
             write_done(arc, 0)
             archived_days.append({**item, "files": 0, "empty": True})
             continue
-        n_files, day_bytes, day_fail = 0, 0, 0
+        n_files, day_bytes, day_fail, day_dead = 0, 0, 0, 0
         planned = len(cuts)
         processed = 0
         for fname, wins in cuts.items():
@@ -530,6 +568,7 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
             processed += 1
             if r["ok"]:
                 n_files += len(r.get("files") or [])
+                day_dead += int(r.get("dead") or 0)
                 for q in (r.get("files") or []):
                     day_bytes += _fsize(q)
             else:
@@ -546,12 +585,14 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
                      "days_done": len(archived_days),
                      "days_total": len(p["todo"])})
         if not day_fail and processed >= planned:
-            write_done(arc, n_files)       # 整日裁完且无失败才收尾
+            write_done(arc, n_files, day_dead)   # 整日裁完且无失败才收尾
             archived_days.append({**item, "files": n_files,
-                                  "bytes_out": day_bytes})
+                                  "bytes_out": day_bytes, "dead": day_dead})
             files += n_files
             out_bytes += day_bytes
-            log("archive: %s %s/%s 归档 %d 段" % (d, item["cam"], dn, n_files))
+            log("archive: %s %s/%s 归档 %d 段%s"
+                % (d, item["cam"], dn, n_files,
+                   "（跳过 %d 个源已断流的窗口）" % day_dead if day_dead else ""))
     return {"ok": not failed, "dry_run": False,
             "days": archived_days, "failed": failed,
             "segments_used": used, "batch": batch,

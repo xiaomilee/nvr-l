@@ -425,5 +425,104 @@ class TestEmptyPartSelfHeal(unittest.TestCase):
         self.assertEqual(archive._part_base("weird.mp4"), "weird")
 
 
+class TestSegEnd(unittest.TestCase):
+    """分片结束时刻的三种口径（0.9.108）。
+
+    真机废片的根因就在这里：mtime 只到秒，内容不足 1 秒的退化分片 mtime
+    会落回起点那一秒，老实现要求 `st < mt` 就直接放弃 mtime、退回
+    `st + seg_sec`，把后面整整 5 分钟的窗口全派给一片只有 2~4 秒的残片。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="nvrse")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _mk(self, stamp):
+        p = os.path.join(self.tmp, "10-00-00.mp4")
+        with open(p, "wb") as f:
+            f.write(b"0" * 64)
+        os.utime(p, (stamp, stamp))
+        return p
+
+    def test_mtime_wins_when_between_start_and_nominal(self):
+        """mtime 落在 (st, st+seg) → 用它：这是唯一能看出断录的口径。"""
+        p = self._mk(_ts("2026-11-02", 10, 1, 24))
+        self.assertEqual(
+            archive._seg_end(p, "2026-11-02", 36000.0, 300.0, next_st=36300.0),
+            36084.0)
+
+    def test_mtime_at_start_falls_back_to_next_start(self):
+        """退化分片：mtime 与文件名同秒 → 改看下一片起点，别退回 300 秒。
+
+        真机 `15-57-19.mp4` 只有 4.6 秒内容、下一片是 15-57-24，老实现派给它
+        300 秒窗口，三个相隔 150 秒的窗口裁出三个字节数完全一样的残片。
+        """
+        p = self._mk(_ts("2026-11-02", 10, 0, 0))
+        self.assertEqual(archive._seg_end(p, "2026-11-02", 36000.0, 300.0,
+                                          next_st=36005.0), 36005.0)
+
+    def test_no_mtime_no_next_uses_nominal(self):
+        """两者都不可用 → 名义片长兜底（旧行为）。"""
+        p = self._mk(_ts("2026-10-01", 10, 0, 0))     # 跨天 mtime，不可信
+        self.assertEqual(archive._seg_end(p, "2026-11-02", 36000.0, 300.0), 36300.0)
+
+    def test_next_start_only_inside_window(self):
+        """下一片起点超出名义窗口时不采信（断了 19 分钟那种，别吞成连续）。"""
+        p = self._mk(_ts("2026-10-01", 10, 0, 0))
+        self.assertEqual(archive._seg_end(p, "2026-11-02", 36000.0, 300.0,
+                                          next_st=37200.0), 36300.0)
+
+    def test_seg_seq_carries_next_start(self):
+        base = os.path.join(self.tmp, "cam", "2026-11-02")
+        os.makedirs(base)
+        for n in ("10-00-00.mp4", "10-05-00.mp4", "10-05-20.mp4"):
+            with open(os.path.join(base, n), "wb") as f:
+                f.write(b"0" * 8)
+        seq = archive._seg_seq(base)
+        self.assertEqual(seq, [("10-00-00.mp4", 36000.0, 36300.0),
+                               ("10-05-00.mp4", 36300.0, 36320.0),
+                               ("10-05-20.mp4", 36320.0, None)])
+
+
+class TestDoneDead(unittest.TestCase):
+    """被跳过的死区间要落进 .done，否则整日 files=0 会被当成误标反复重做。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="nvrdead")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_write_and_read(self):
+        archive.write_done(self.tmp, 0, 7)
+        self.assertEqual(archive._done_files(self.tmp), 0)
+        self.assertEqual(archive._done_dead(self.tmp), 7)
+
+    def test_missing_field_defaults_zero(self):
+        archive.write_done(self.tmp, 3)
+        self.assertEqual(archive._done_dead(self.tmp), 0)
+
+    def test_done_days_does_not_revive_dead_only_day(self):
+        """files=0 + dead>0 = 这天确实裁不出东西，不是「读错台账」的误标。"""
+        arc = os.path.join(self.tmp, "_archive", "cam1", "2026-10-18")
+        archive.write_done(arc, 0, 9)
+        led = os.path.join(self.tmp, "_ledger", "cam1")
+        os.makedirs(led, exist_ok=True)
+        with open(os.path.join(led, "2026-10-18.json"), "w", encoding="utf-8") as f:
+            json.dump({"sources": {"10-00-00.mp4": {"windows": [[10, 20]]}}}, f)
+        self.assertEqual(archive._done_days(self.tmp, "cam1", led), {"2026-10-18"})
+        # 对照：files=0 且没有 dead（典型的误标）必须放回去重做
+        archive.write_done(arc, 0, 0)
+        self.assertEqual(archive._done_days(self.tmp, "cam1", led), set())
+
+
+def _ts(day, h, m, s):
+    import time as _t
+    return _t.mktime(_t.strptime("%s %02d:%02d:%02d" % (day, h, m, s),
+                                 "%Y-%m-%d %H:%M:%S"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

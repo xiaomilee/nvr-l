@@ -38,6 +38,24 @@ CAMS = [{"id": "cam-01", "name": "车库入口", "url": "rtsp://x/1",
 FAKE_PART = b"x" * 2048
 
 
+def fake_mp4(path, dur, ts=1000, pad=2048, moov_at_tail=False):
+    """造一个只带 mvhd 的最小 mp4，喂给时长闸门（`condense._mp4_duration`）。
+
+    布局与 ffmpeg `-movflags +faststart` 的输出同形：`ftyp + moov + mdat`；
+    moov_at_tail=True 时换成 `ftyp + mdat + moov`（转封装兜底的形态），
+    两种都得认，否则每次都要多解析一遍才敢判。
+    """
+    payload = (b"\x00\x00\x00\x00" + b"\x00" * 8            # version/flags + 两个时间戳
+               + int(ts).to_bytes(4, "big")                  # timescale
+               + int(round(dur * ts)).to_bytes(4, "big"))    # duration
+    mvhd = (len(payload) + 8).to_bytes(4, "big") + b"mvhd" + payload
+    moov = (len(mvhd) + 8).to_bytes(4, "big") + b"moov" + mvhd
+    ftyp = (16).to_bytes(4, "big") + b"ftyp" + b"isom" + b"\x00\x00\x02\x00"
+    mdat = pad.to_bytes(4, "big") + b"mdat" + b"\x00" * (pad - 8)
+    with open(path, "wb") as f:
+        f.write(ftyp + (mdat + moov if moov_at_tail else moov + mdat))
+
+
 def touch(path, size=16, age=0):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
@@ -87,6 +105,26 @@ class TestPreciseCmd(unittest.TestCase):
         s = " ".join(c)
         self.assertIn("setpts=PTS/2", s)
         self.assertIn("fps=", s)
+
+    def test_gop_capped_for_seek(self):
+        """0.9.108：GOP 固定 2 秒。
+
+        此前完全不管 GOP，x264/QSV 默认按帧数切（keyint=250）：真机 12fps 的
+        源就是 20.8 秒一个关键帧，300 秒的片段只有 15 个，拖动进度条要解最多
+        250 帧 1080p —— 「卡顿严重」的主因。keyint_min 只给 libx264，
+        h264_qsv 没这个私有选项，传了整条命令直接报错退出。
+        """
+        for hw, has_keyint_min in (("qsv", False), ("none", True)):
+            s = " ".join(ffmpeg_cmd.precise_cmd("ffmpeg", "in.mp4", "o.mp4",
+                                                0, 5, hw=hw))
+            self.assertIn("-g 30", s)          # fps_cap 默认 15 → 2 秒一个关键帧
+            self.assertEqual("-keyint_min" in s, has_keyint_min)
+
+    def test_vfr_flattened(self):
+        """强制 CFR：摄像头 80ms/120ms 混帧原样透传会让播放器每秒顿一次。"""
+        s = " ".join(ffmpeg_cmd.precise_cmd("ffmpeg", "in.mp4", "o.mp4",
+                                            0, 5, hw="none"))
+        self.assertIn("-vsync cfr", s)
 
     def test_hwaccel_precedes_input(self):
         """0.9.39 回归：-hwaccel 是输入选项，放 -i 之后 ffmpeg 直接报错。
@@ -216,6 +254,93 @@ class TestExportPrecise(unittest.TestCase):
         self.assertTrue(ok)
 
 
+class TestDurationGate(unittest.TestCase):
+    """0.9.108：裁剪产物的时长闸门。
+
+    0.9.107 及以前只认「>= 1KB」，一个 3 帧 43KB 的残片稳过，于是写了 idx、
+    记进 .done，永不重做。真机全库 3078 片里 17 片 < 0.7 秒，回放页上就是
+    「点了播不出」的黑块。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="nvrdur")
+        self.out = os.path.join(self.tmp, "o.mp4")
+        condense._HW_FAIL.clear()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_reads_mvhd(self):
+        fake_mp4(self.out, 12.5)
+        self.assertAlmostEqual(condense._mp4_duration(self.out), 12.5, places=2)
+
+    def test_moov_at_tail_also_read(self):
+        """转封装兜底可能把 moov 放在尾部，两种布局都得认。"""
+        fake_mp4(self.out, 8.0, moov_at_tail=True)
+        self.assertAlmostEqual(condense._mp4_duration(self.out), 8.0, places=2)
+
+    def test_unparsable_returns_none(self):
+        with open(self.out, "wb") as f:
+            f.write(FAKE_PART)                 # 不是 mp4
+        self.assertIsNone(condense._mp4_duration(self.out))
+
+    def test_short_part_rejected(self):
+        """22 秒窗口只裁出 0.16 秒 → 拒收（真机 15-00-00.c02 就是这么来的）。"""
+        fake_mp4(self.out, 0.16)
+        self.assertTrue(condense.short_part_reason(self.out, 191, 213)
+                        .startswith("short-part:"))
+
+    def test_short_window_tolerated(self):
+        """2 秒的碎片窗口裁出 1.5 秒是对的，不能按 60% 一刀切死。"""
+        fake_mp4(self.out, 1.5)
+        self.assertEqual(condense.short_part_reason(self.out, 100, 102), "")
+
+    def test_tiny_window_itself_is_normal(self):
+        """窗口本来就只有 0.5 秒：0.5 秒产物是完整内容，不算废片。"""
+        fake_mp4(self.out, 0.5)
+        self.assertEqual(condense.short_part_reason(self.out, 100, 100.5), "")
+
+    def test_partial_loss_kept(self):
+        """窗口 60 秒裁出 11.5 秒：后半段断流，但前 11 秒画面能看，不能丢。
+
+        只按「不到窗口一半」判会把这些全杀掉。时间轴的宽度交给前端
+        srcEnd = min(窗口, 起点+实物时长) 去收敛，不靠拒收解决。
+        """
+        fake_mp4(self.out, 11.55)
+        self.assertEqual(condense.short_part_reason(self.out, 0, 60), "")
+
+    def test_speed_adjusts_expectation(self):
+        fake_mp4(self.out, 5.0)                # 10 秒窗口 × 2 倍速 = 5 秒输出
+        self.assertEqual(condense.short_part_reason(self.out, 0, 10, speed=2.0), "")
+
+    def test_unknown_duration_passes(self):
+        with open(self.out, "wb") as f:
+            f.write(FAKE_PART)
+        self.assertEqual(condense.short_part_reason(self.out, 0, 20), "")
+
+    def test_export_precise_rejects_without_falling_back(self):
+        """判到时长不足就立刻收手：换编码器变不出画面，回落只是白烧一次编码。"""
+        calls = []
+
+        def fake_run(cmd, capture_output=True, timeout=None):
+            calls.append(" ".join(cmd))
+            fake_mp4(cmd[-1], 0.2)
+
+            class R:
+                returncode = 0
+                stderr = b""
+            return R()
+
+        with mock.patch.object(condense.subprocess, "run", fake_run):
+            ok, err, codec = condense._export_precise("ff", "s.mp4", self.out,
+                                                      190, 212, "qsv")
+        self.assertFalse(ok)
+        self.assertIn("short-part", err)
+        self.assertEqual(len(calls), 1)        # 没落到 x264 / 转封装
+        self.assertFalse(os.path.exists(self.out))   # 残片不留
+
+
 class TestWriteSplit(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="nvrsplit")
@@ -291,6 +416,46 @@ class TestWriteSplit(unittest.TestCase):
                                  os.path.join(self.tmp, "t"))
         self.assertFalse(r["ok"])
         self.assertEqual(r["reason"], "no-window")
+
+    def test_dead_range_skipped_not_failed(self):
+        """源区间已断流：跳过它、继续切后面的，且不留编号空洞（0.9.108）。
+
+        记成失败的话整天写不下 .done（run 要求零失败才收尾），真机 24.4% 的
+        分片实际内容远短于标称，一旦走成失败就是每轮重试、永远追不平。
+        """
+        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
+            if float(ss) == 6.0:
+                return False, "short-part: 窗口 22.0s 只裁出 0.16s", "qsv"
+            with open(out, "wb") as f:
+                f.write(FAKE_PART)
+            return True, "", "qsv"
+
+        with mock.patch.object(condense, "_export_precise", fake):
+            r = condense.write_split("ff", self.src, self.base,
+                                     [(0.0, 5.0), (6.0, 28.0), (30.0, 35.0)],
+                                     os.path.join(self.tmp, "t"))
+        self.assertTrue(r["ok"])              # 不是故障：这天必须能收尾
+        self.assertEqual(r["parts"], 2)
+        self.assertEqual(r["dead"], 1)
+        self.assertEqual([os.path.basename(q) for q in r["files"]],
+                         ["10-00-00.c01.mp4", "10-00-00.c02.mp4"])
+        with open(self.base + ".idx.json", encoding="utf-8") as f:
+            meta = json.load(f)
+        self.assertEqual(meta["dead"], 1)
+        self.assertEqual([w["ss"] for w in meta["windows"]], [0.0, 30.0])
+
+    def test_all_dead_still_writes_index(self):
+        """整天都是死区间：留一个空 idx 当幂等标记，别让下一轮再来一遍。"""
+        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
+            return False, "short-part: 无画面", "qsv"
+
+        with mock.patch.object(condense, "_export_precise", fake):
+            r = condense.write_split("ff", self.src, self.base, [(0, 5)],
+                                     os.path.join(self.tmp, "t"))
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["parts"], 0)
+        self.assertEqual(r["dead"], 1)
+        self.assertTrue(os.path.isfile(self.base + ".idx.json"))
 
 
 class TestClipWindow(unittest.TestCase):

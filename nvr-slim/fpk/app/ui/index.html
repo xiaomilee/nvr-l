@@ -7594,13 +7594,26 @@ function realSegs(camId, day, kind){
 
   if(isComp){
     let acc = 0;
-    return files.map((f,i)=>{
+    const out = [];
+    files.forEach((f,i)=>{
       const dur = Math.max(0.2, +f.d || 0);
+      const realD = +f.d || 0;             /* 服务端 ffprobe 的真实时长，缺省 0 = 未知 */
+      /* 归档片段可能「文件在、画面几乎没有」：源分片在那段时间已经断流，
+         ffmpeg 只交出尾巴几帧。真机全库体检 3078 片里有 15 片不到 1 秒，
+         画在 24 小时轴上是一个几乎不可见的点，点进去闪一下 —— 直接不画，
+         免得回放页多出一串假黑块。d 未知（老数据）时一律保留。
+         阈值与后端 condense.TINY_PART_SEC 对齐。 */
+      if(realD > 0 && realD < 1.0) return;
       /* 覆盖窗：活动切片（.cNN，同一源分片可能出好几个片段）用服务端从
          .idx.json 解出的真实源时间窗；整段拼接才按「下一个文件起点」推。 */
       let st, en;
       if(Array.isArray(f.w) && f.w.length === 2){
-        st = +f.w[0]; en = Math.max(st + 1, +f.w[1]);
+        st = +f.w[0];
+        en = Math.max(st + 1, +f.w[1]);
+        /* 台账窗口是「这段该有多长」，d 是「文件里实际有多长」。取短的那个：
+           真机 148 个片段文件比标记窗短 ≥1 秒（最狠一条标记 237 秒、实物
+           152 秒），照标称画就是一个 237 秒的宽块，播到 152 秒就断。 */
+        if(realD > 0 && st + realD < en) en = Math.max(st + 0.2, st + realD);
       }else{
         st = toS(f.n);                        // 源时刻：分片文件名就是起点钟点
         const next = i+1 < files.length ? toS(files[i+1].n) : Math.min(86400, st + segLen);
@@ -7608,12 +7621,13 @@ function realSegs(camId, day, kind){
       }
       /* clip:true 只表示「这是压缩/裁剪产物，播放时长 ≠ 源覆盖时长」，
          时间轴与 OSD 靠它切换坐标口径，与已下线的缩时片段无关。 */
-      const seg = { s: acc, e: acc + dur, src: st, srcEnd: en, dur,
-                    level:.5, reason:"归档浓缩", hits:0,
-                    bytes:f.b || 0, file:url(f.n), clip:true, arch:true, name:f.n };
+      out.push({ s: acc, e: acc + dur, src: st, srcEnd: en, dur,
+                 level:.5, reason:"归档浓缩", hits:0,
+                 bytes:f.b || 0, file:url(f.n), clip:true, arch:true, name:f.n });
       acc += dur;
-      return seg;
     });
+    /* 全都被判成废片 → 这天没有可播的归档内容，按「无数据」处理 */
+    return out.length ? out : null;
   }
   return files.map((f,i)=>{
     const s = toS(f.n);

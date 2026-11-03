@@ -522,6 +522,112 @@ def _hw_fail(ffmpeg):
     _HW_FAIL[ffmpeg] = time.time()
 
 
+def _mp4_duration(path):
+    """读 mp4 的 mvhd 时长（秒）；结构不认识就返回 None（调用方放行）。
+
+    只按 box 结构走几十字节 seek + read，不调 ffprobe：裁剪完立刻要判断
+    「这一片到底有没有画面」，为此外起一个进程再解一遍容器，代价比裁剪
+    本身还大（真机每片 5 秒里有 1 秒花在启动 ffprobe 上）。
+
+    moov 的位置两种都认：faststart 输出的在文件头，转封装兜底可能落在尾部。
+    mvhd 按 ISO 规范是 moov 的第一个子 box，读 64 字节足够。
+    """
+    try:
+        size = os.path.getsize(path)
+        if size < 32:
+            return None
+        with open(path, "rb") as f:
+            off, moov = 0, None
+            for _ in range(64):            # 顶层 box 不多，同时防死循环
+                if off + 8 > size:
+                    break
+                f.seek(off)
+                hdr = f.read(8)
+                if len(hdr) < 8:
+                    break
+                bsize = int.from_bytes(hdr[:4], "big")
+                hlen = 8
+                if bsize == 1:             # largesize：再跟 8 字节真实长度
+                    ext = f.read(8)
+                    if len(ext) < 8:
+                        break
+                    bsize = int.from_bytes(ext, "big")
+                    hlen = 16
+                if hdr[4:8] == b"moov":
+                    moov = off + hlen
+                    break
+                if bsize < hlen or off + bsize > size:   # 0 = 到文件尾，也算出界
+                    break
+                off += bsize
+            if moov is None:
+                return None
+            f.seek(moov)
+            buf = f.read(64)
+    except OSError:
+        return None
+    if len(buf) < 16 or buf[4:8] != b"mvhd":
+        return None                        # 结构不符：宁可放行，不误杀好片
+    if buf[8] == 1:                        # version 1：64 位时长
+        if len(buf) < 40:
+            return None
+        ts = int.from_bytes(buf[28:32], "big")
+        dur = int.from_bytes(buf[32:40], "big")
+    else:
+        if len(buf) < 28:
+            return None
+        ts = int.from_bytes(buf[20:24], "big")
+        dur = int.from_bytes(buf[24:28], "big")
+    if ts <= 0 or dur <= 0:
+        return None
+    return float(dur) / float(ts)
+
+
+# 裁剪产物被判「拿不到画面」的门槛：**同时**满足两条才拒收 ——
+#   绝对时长 < 1 秒，且不到窗口的 60%。
+#
+# 只按比例判会误杀：真机有一批「窗口 60 秒、实物 11.55 秒」的片段，那是
+# 后半段断流，前半段 11 秒画面完全能看，丢掉它等于把有效内容一起扔了。
+# 只按绝对时长判又会把「窗口本来就 0.5 秒」的碎片窗口全判死（两边都合法）。
+# 两个条件取交集，命中率 0.5%（全库 3078 片里 15 片），且全是
+# 0.04~0.8 秒那种「时间轴上一闪而过、点进去闪一下」的黑块。
+# 帧上的损失由时间轴侧补齐：前端 srcEnd 取 min(台账窗口, 起点+实物时长)，
+# 11 秒的片段就画 11 秒宽，不再冒充 60 秒。
+TINY_PART_SEC = 1.0
+TINY_PART_RATIO = 0.6
+
+
+def short_part_reason(out, ss, to, speed=1.0):
+    """产物时长校验：返回失败原因，正常返回空串。
+
+    真机实测（2026-11-02 全库 3078 片体检）：源头是源分片自身断流 ——
+    `06-50-01.mp4` 标称 142 秒、真实画面只到 +25 秒，台账却把后面 117 秒的
+    窗口全派给它。ffmpeg 交出的尾巴只有 3 帧 43KB，却因为过了
+    EMPTY_PART_BYTES(1KB) 那道线被当成功，写了 idx、记进 .done，从此永不
+    重做。回放页上就是一个 22 秒宽、点进去闪一下的黑块。
+
+    这里按「输出时长」判，不看体积：体积随码率浮动，时长才是「有没有画面」
+    的直接量。解析不出时长（结构不认识）一律放行，宁可漏判也不误杀。
+    """
+    try:
+        want = float(to) - float(ss)
+    except (TypeError, ValueError):
+        return ""
+    try:
+        sp = float(speed or 1.0)
+    except (TypeError, ValueError):
+        sp = 1.0
+    if sp > 1.0:
+        want /= sp                        # 倍速后输出时间轴被压短
+    if want <= 0:
+        return ""
+    dur = _mp4_duration(out)
+    if dur is None:
+        return ""
+    if dur < TINY_PART_SEC and dur < TINY_PART_RATIO * want:
+        return "short-part: 窗口 %.1fs 只裁出 %.2fs（源分片在该时段已断流）" % (want, dur)
+    return ""
+
+
 def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
     """单区间精确导出：QSV → libx264 → 转封装 三级回落。
 
@@ -544,6 +650,13 @@ def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
             continue
         if r.returncode == 0 and os.path.isfile(out) and \
                 os.path.getsize(out) >= EMPTY_PART_BYTES:
+            # 时长闸门：0.9.107 及以前只看「>= 1KB」，3 帧 43KB 的废片稳过。
+            # 判到不足就**不再往下一级回落**：编码器换了也变不出画面，
+            # 源区间本来就没内容，继续试只是白烧一次编码。
+            short = short_part_reason(out, ss, to, speed)
+            if short:
+                _unlink(out)
+                return False, short, codec
             return True, "", codec
         if r.returncode == 0 and os.path.isfile(out):
             # 0 帧空壳：区间起止落在源文件时间范围之外时 ffmpeg 仍返回 0，
@@ -558,6 +671,11 @@ def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
     # 终极兜底：转封装 + 时间戳缩放（无编码器依赖，任何 ffmpeg 都能跑）
     ok, err2 = _export_copy(ffmpeg, src, out, ss, to, speed, timeout, err,
                             force=True)
+    if ok:
+        short = short_part_reason(out, ss, to, speed)
+        if short:
+            _unlink(out)
+            return False, short, "copy"
     return ok, err2, "copy"
 
 
@@ -583,25 +701,38 @@ def write_split(ffmpeg, src, out_base, windows, tmpdir,
         return {"ok": True, "reason": "exists", "parts": 0, "files": []}
 
     speed = max(1.0, float(speed or 1.0))
-    files, entries = [], []
+    files, entries, dead = [], [], 0
     for i, (ss, to) in enumerate(windows):
-        out = "%s.c%02d.mp4" % (out_base, i + 1)
+        # 编号跟着**已成功**的片段走：中途有死区间被跳过时，后面的片段不能
+        # 在序号上留洞（.c03 缺失会让回放页的排序/计数看着像丢文件）。
+        out = "%s.c%02d.mp4" % (out_base, len(files) + 1)
         ok, err, codec = _export_precise(ffmpeg, src, out, ss, to, hw,
                                          speed=speed, timeout=timeout)
         if not ok:
-            # 半途失败：已写出的片段一并清掉，别留半套产物让回放页猜
+            if str(err).startswith("short-part:"):
+                # 源分片在这个时段已经断流：裁不出画面是**正常结果**，不是故障。
+                # 记成失败会让整天写不下 .done（run 要求零失败才收尾），
+                # 于是每轮都重试、永远追不平 —— 真机 24.4% 的分片实际内容
+                # 远短于标称，这条一旦走成失败就是死循环。跳过它，
+                # 前面已切好的片段也保留（清掉只会让下次白重裁一遍）。
+                dead += 1
+                continue
+            # 真故障（编码器崩、盘满、区间越界）：已写出的片段一并清掉，
+            # 别留半套产物让回放页猜
             for q in files:
                 _unlink(q)
             _unlink(idx_path)
             return {"ok": False, "reason": "part-failed", "error": err, "index": i}
         files.append(out)
-        entries.append({"i": i + 1, "file": os.path.basename(out),
+        entries.append({"i": len(files), "file": os.path.basename(out),
                         "ss": round(float(ss), 3), "to": round(float(to), 3),
                         "codec": codec})
     meta = {"src": os.path.basename(src),
             "speed": speed,
             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "windows": entries}
+    if dead:
+        meta["dead"] = dead                # 被跳过的死区间个数，事后可查
     try:
         tmp = idx_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -612,7 +743,8 @@ def write_split(ffmpeg, src, out_base, windows, tmpdir,
             _unlink(q)
         return {"ok": False, "reason": "idx", "error": str(e)}
     return {"ok": True, "reason": "split", "parts": len(files),
-            "files": files, "codecs": [e["codec"] for e in entries]}
+            "files": files, "codecs": [e["codec"] for e in entries],
+            "dead": dead}
 
 
 # ---------------------------------------------------------------- 编排

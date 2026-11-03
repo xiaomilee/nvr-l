@@ -975,7 +975,16 @@ run('LK.clipStyle = "join";');
 /* ===== 31. 0.9.39：切片真实覆盖窗 + 红色定位样式 ===== */
 ck("覆盖窗·活动切片优先用 idx 侧车",
    src.includes("if(Array.isArray(f.w) && f.w.length === 2)")
-   && src.includes("st = +f.w[0]; en = Math.max(st + 1, +f.w[1]);"));
+   && src.includes("st = +f.w[0];")
+   && src.includes("en = Math.max(st + 1, +f.w[1]);"));
+/* 0.9.108：标记窗 vs 实物时长取短。真机 148 个片段文件比标记窗短 ≥1 秒
+   （最狠一条标记 237 秒、实物 152 秒），照标称画就是一个播到一半就断的宽块。 */
+ck("覆盖窗·实物比标记窗短时以实物为准",
+   src.includes("const realD = +f.d || 0;")
+   && src.includes("if(realD > 0 && st + realD < en) en = Math.max(st + 0.2, st + realD);"));
+ck("覆盖窗·废片（<1s）不画块，整天全废按无数据处理",
+   src.includes("if(realD > 0 && realD < 1.0) return;")
+   && src.includes("return out.length ? out : null;"));
 ck("覆盖窗·整段拼接保留旧算法兜底",
    src.includes("const next = i+1 < files.length ? toS(files[i+1].n) : Math.min(86400, st + segLen);"));
 ck("竖线·红色光晕",

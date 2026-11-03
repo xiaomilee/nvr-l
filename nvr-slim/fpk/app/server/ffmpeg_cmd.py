@@ -315,13 +315,28 @@ def precise_cmd(ffmpeg, src, out, ss, to, hw="qsv", speed=1.0,
         filt = "setpts=PTS/%s,fps=%d" % (_num(speed), cap)
     else:
         filt = "null"
+    # GOP 固定 2 秒（0.9.108 起）。
+    # 此前完全不管 GOP，x264/QSV 默认按**帧数**切（keyint=250）：真机 12fps 的
+    # 源就是 20.8 秒一个关键帧 —— 实测 300 秒的片段只有 15 个关键帧，拖动
+    # 进度条或起播时浏览器要解最多 250 帧 1080p，「卡顿严重」的主因就是它。
+    # 2 秒（cap 帧率下 gop = 2×fps）把最坏解码量压到 1/10，代价只有 3~5% 体积。
+    # keyint_min 只给 libx264：h264_qsv 没这个私有选项，传了会直接报错退出。
+    gop = max(8, int(round(cap * 2)))
     if hw == "qsv":
         cmd += ["-vf", filt,
                 "-c:v", "h264_qsv", "-global_quality", str(int(quality)),
-                "-preset", "medium"]
+                "-preset", "medium", "-g", str(gop)]
     else:
         cmd += ["-vf", filt,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", str(int(quality))]
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", str(int(quality)),
+                "-g", str(gop), "-keyint_min", str(max(1, gop // 2))]
+    # 强制 CFR：摄像头的变帧率（真机 cam-mvi60dte 是 80ms×11 + 120ms×1 循环，
+    # 即每秒 12 帧里有一帧多停 40ms）原样透传后，播放器每秒顿一次；而且 VFR
+    # 上 seek 的落点与画面不同步，观感就是「一顿一顿」。0.9.107 及以前是
+    # `-vf null` 全盘继承。用 -vsync（而不用 -fps_mode）是因为后者 ffmpeg 5.1
+    # 才有，飞牛上的 4.x 会直接报「未知选项」退出。
+    if speed <= 1.0:
+        cmd += ["-vsync", "cfr"]
     cmd += ["-movflags", "+faststart", "-y", out]
     return cmd
 
