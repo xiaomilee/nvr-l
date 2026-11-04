@@ -25,3 +25,8 @@ nvr-slim/fpk/app/vendor/
 
 # 时间轴视觉校验的生成物（由 tools/preview_vtl.js 产出）
 nvr-slim/vtl_preview.html
+
+# 运行与测试产生的日志：log/ 目录由代码 os.makedirs 自建，无需入库
+# （此前 fpk/log/nvr.log 被误跟踪，导致每次跑起来 git status 都是脏的）
+nvr-slim/fpk/log/
+nvr-slim/fpk/test/log/
