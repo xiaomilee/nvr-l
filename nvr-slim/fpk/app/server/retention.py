@@ -124,13 +124,20 @@ def _dir_stats(path):
 
 
 def plan(root, cameras, cam_cfg=None, today=None,
-         kinds=("full", "archive", "clip")):
+         kinds=("full", "archive", "clip"), archived=None, force_after=7):
     """算一遍要删什么，不真删。返回的结构直接给 UI 预览用。
 
-    三条硬保护：
+    四条硬保护：
       - 今天与未来的目录永不进删除列表
       - 名字不是 YYYY-MM-DD 的目录一律跳过
       - 目录里有 .part / .pending（正在写或待压缩）就跳过并报出来
+      - 该日归档还没收尾就跳过（扔了源就再也裁不出来）
+
+    archived(cid, dname, day) -> True / False / None
+      True  = 已归档，可以删
+      False = 还没收尾，先留着
+      None  = 这一路不需要归档（没开归档 / 非虚拟缩时），照常删
+    force_after：归档连续失败超过这么多天就放行删除，避免源永远删不掉把盘吃满。
     """
     today = today or date.today()
     cam_cfg = cam_cfg or {}
@@ -180,6 +187,21 @@ def plan(root, cameras, cam_cfg=None, today=None,
                         item["reason"] = "%d 个文件正在写或待处理" % len(prot)
                         out["protected"].append(item)
                         continue
+                    # 归档闸门：全时是归档的唯一源，删早了这一天的浓缩就永远没了。
+                    # 只在「这一路确实要归档」时把关，物化切片/未开归档照常删。
+                    if kind == "full" and archived is not None:
+                        try:
+                            state = archived(cid, dname, d)
+                        except Exception:
+                            state = None           # 钩子出错按「不需要归档」处理
+                        if state is False:
+                            limit = int(days) + int(force_after or 0)
+                            if (today - d).days <= limit:
+                                item["reason"] = ("归档还没收尾，暂不删源"
+                                                  "（超 %d 天仍未完成则自动放行）" % limit)
+                                out["protected"].append(item)
+                                continue
+                            item["forced"] = "归档超过 %d 天未完成，强制删除" % limit
                     out["delete"].append(item)
                     out["freed_bytes"] += size
                     out["files"] += files

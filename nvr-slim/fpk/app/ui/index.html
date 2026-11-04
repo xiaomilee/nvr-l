@@ -1971,6 +1971,10 @@ const LK = {
   archEnable:true,     // 维度③ 归档裁剪开关（仅台账/virtual 下才裁 _archive）
   archDays:7,         // 归档片段保留天数（= 总回溯天数）
   archBatch:120,       // 单晚最多裁多少个分片（跨夜分批）
+  /* 提前归档：false（默认）= 只裁「今天就删源」的那天，同一天不会同时存在
+     全时与归档；true = 全时最后一天当晚就裁，产物与原画并存约一天，换来
+     一整天的补救缓冲。 */
+  archPrefetch:false,
   /* ---- AI 检测（0.9.60）：全局默认，每路可覆盖。全部进 pushCfg body ——
      只改内存不推送就是「假设置」，这个坑本项目踩过不止一次。 ---- */
   detEnable:false,     // 总闸：关时每路开了也不检
@@ -3991,6 +3995,7 @@ function pushCfg(){
                  archive_enable: LK.archEnable,
                  archive_days: LK.archDays,
                  archive_batch: LK.archBatch,
+                 archive_prefetch: !!LK.archPrefetch,
                  link_interval_h: LK.intervalH,
                  concurrency: GS.conc,
                  /* AI 检测 / 通知两块（0.9.60）：嵌套结构，服务端 norm_detect/
@@ -4037,6 +4042,7 @@ function applyServerCfg(c){
   if(typeof c.archive_enable === "boolean") LK.archEnable = c.archive_enable;
   if(c.archive_days){ const v = +c.archive_days; if(v >= 1) LK.archDays = v; }
   if(c.archive_batch){ const v = +c.archive_batch; if(v >= 10) LK.archBatch = v; }
+  if(typeof c.archive_prefetch === "boolean") LK.archPrefetch = c.archive_prefetch;
   /* AI 检测 / 通知回读（0.9.60）：服务端是强校后的真相，本地以它为准 */
   if(c.detect && typeof c.detect === "object"){
     const d = c.detect;
@@ -5016,11 +5022,22 @@ function cardLink(){
              + '<button class="chip" data-archinc="1" aria-label="增加一天">＋</button>'
              + '<span style="align-self:center;color:var(--muted);font-size:12px">天 · 自定义 1–3650</span>'
              + '</div>'
+             + '<div class="swrow" style="border:none;padding:10px 0 0">'
+               + '<span>提前一天归档（当天会同时存在两份）</span>'
+               + '<div class="sw ' + (LK.archPrefetch?"on":"") + '" data-archpre="1"></div>'
+             + '</div>'
+             + '<div class="h" style="margin-top:6px;line-height:1.55">'
+               + (LK.archPrefetch
+                   ? '开：全时到期<b>前一晚</b>就把活动窗口裁进 _archive，次日才删全时——那段时间同一天既有全时又有归档（两份占空间），换来一整天的补救缓冲，裁失败还能重来。'
+                   : '关（默认）：等到全时<b>到期那一刻</b>才裁，裁完紧接着删源——正常只会在裁的那几十分钟里短暂重叠，不再整天并存。代价是归档片段要晚一天才出现。')
+               + '</div>'
              + '<div class="h" style="margin-top:8px;line-height:1.55">'
                + '<b>总回溯 ' + (LK.archDays || 7) + ' 天 = 归档保留天数</b>：'
                + '最前面 ' + FULL_DAYS_DEFAULT + ' 天是<b>全时原画</b>（在「摄像头 → 保留与分片」可逐路改），'
                + '之后 ' + Math.max(0, (LK.archDays || 7) - FULL_DAYS_DEFAULT) + ' 天是<b>归档浓缩片段</b>（_archive）；台账永久。'
-               + '全时到期前夜自动把活动窗口裁进 _archive，全时目录次日即删——<b>不重复占用空间</b>。'
+               + (LK.archPrefetch
+                   ? '全时到期前夜裁、次日删。'
+                   : '裁完即删源，<b>不重复占用空间</b>。')
                + '单晚最多裁 ' + (LK.archBatch || 120) + ' 个分片，裁不完的跨夜继续。</div>'
              + '<div class="h" id="archStatus" style="color:var(--muted)">' + (ARCH.sum || "候选情况加载中…") + '</div>'
              + '<button class="btnline" id="btnArchNow" style="margin-top:9px">' + (ARCH.arm ? "确认执行归档" : "立即归档（先预览）") + '</button>'
@@ -6724,6 +6741,7 @@ function renderCamTabs(){
       ARCH.sum = "待归档 <b>" + d.todo_count + " 天</b> / " + d.segments
         + " 片 · 预估 " + fmtBytes(d.est_bytes || 0)
         + (d.no_ledger_count ? " · 无台账跳过 " + d.no_ledger_count + " 天" : "")
+        + (d.prefetch ? "" : " · 只算今天要删的（未提前）")
         + " · 下次 " + (d.next_run || "—").slice(5);
       const el = document.getElementById("archStatus");
       if(el) el.innerHTML = ARCH.sum;
@@ -6883,6 +6901,17 @@ function bindSettings(body){
       toast("toast2", LK.archEnable
         ? "夜间归档已开启 · 夜间任务时刻先归档后清理"
         : "夜间归档已关闭 · 临期全时将直接被清理删除");
+    };
+  });
+  /* 提前归档：决定「全时最后一天」是当晚就裁（并存一天）还是删前才裁（不并存） */
+  body.querySelectorAll("[data-archpre]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.archPrefetch = !LK.archPrefetch;
+      ARCH.at = 0;                     /* 候选日期集合会变，摘要重拉 */
+      renderCamTabs(); saveCfgSoon();
+      toast("toast2", LK.archPrefetch
+        ? "已开启提前归档 · 全时到期前一晚就裁，当天会有两份"
+        : "已关闭提前归档 · 到删源那一刻才裁，只重叠几十分钟");
     };
   });
   /* 归档保留天数：−/＋ 步进 + 数字直填，范围与服务端 LIMITS 一致（1–3650） */

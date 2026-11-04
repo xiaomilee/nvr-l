@@ -209,6 +209,18 @@ def main():
         check("/api/archive 默认开启且保留 7 天",
               d.get("enable") is True and d.get("archive_days") == 7,
               (d.get("enable"), d.get("archive_days")))
+        # 0.9.109：提前归档默认关（同一天不同时存在全时与归档）
+        check("/api/archive 提前归档默认关闭", d.get("prefetch") is False,
+              d.get("prefetch"))
+        s, b = req("/api/config", "POST", {"archive_prefetch": True})
+        s2, b2 = req("/api/config")
+        check("archive_prefetch 可写入并回读（不是假设置）",
+              s == 200 and json.loads(b2).get("config", {}).get("archive_prefetch") is True,
+              (s, b[:100], b2[:160]))
+        s, b = req("/api/archive")
+        check("/api/archive 同步反映 prefetch 开关",
+              json.loads(b).get("prefetch") is True, b[:120])
+        req("/api/config", "POST", {"archive_prefetch": False})
         # 真跑必须异步：同步等结果在真机上跑 84 分钟才返回，链路早断了
         s, b = req("/api/archive/run", "POST", {"dry_run": False})
         ar = json.loads(b)

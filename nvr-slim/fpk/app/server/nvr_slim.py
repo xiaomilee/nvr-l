@@ -1401,7 +1401,28 @@ def _archive_plan():
     cfg, cams, cam_cfg = camera_cfg()
     seg = runtime.segment_sec(cfg.get("record_segment_sec"))
     return archive.plan(record_dir(), cams, cam_cfg,
-                        archive_modes(cams, cfg), seg_sec=seg)
+                        archive_modes(cams, cfg), seg_sec=seg,
+                        prefetch=bool(cfg.get("archive_prefetch", False)))
+
+
+def _archive_gate(cfg, cams):
+    """清理闸门：这一路这一天的归档收尾了吗？None = 这一路不需要归档。
+
+    只有「开了归档 + 这一路走虚拟缩时」才把关：物化切片有自己的 _clip 产物、
+    off 根本没有归档，都不该被这条拦住。返回 None 时 retention 照常删。
+    """
+    if not cfg.get("archive_enable", True):
+        return None
+    modes = archive_modes(cams, cfg)
+    if "virtual" not in modes.values():
+        return None
+    root = record_dir()
+
+    def gate(cid, dname, day):
+        if modes.get(cid) != "virtual":
+            return None
+        return archive.is_done(archive.archive_dir(root, dname, day.isoformat()))
+    return gate
 
 
 def archive_payload():
@@ -1411,6 +1432,7 @@ def archive_payload():
     return {
         "ok": True,
         "enable": bool(cfg.get("archive_enable", True)),
+        "prefetch": bool(cfg.get("archive_prefetch", False)),
         "archive_days": retention.clamp_days(
             "archive_days", cfg.get("archive_days", retention.DEFAULTS["archive_days"])),
         "batch": archive.clamp("archive_batch", cfg.get("archive_batch", archive.DEFAULTS["archive_batch"])),
@@ -1441,7 +1463,8 @@ def run_archive(dry_run=False, trigger="manual", round_no=0, lock_held=False):
                                                    archive.DEFAULTS["archive_batch"]))
     if dry_run:
         p = archive.plan(record_dir(), cams, cam_cfg,
-                         archive_modes(cams, cfg), seg_sec=seg)
+                         archive_modes(cams, cfg), seg_sec=seg,
+                         prefetch=bool(cfg.get("archive_prefetch", False)))
         return {"ok": True, "dry_run": True, "trigger": trigger,
                 "todo": p["todo"], "no_ledger": p["no_ledger"],
                 "segments": p["segments"], "bytes": p["bytes"],
@@ -1464,7 +1487,8 @@ def run_archive(dry_run=False, trigger="manual", round_no=0, lock_held=False):
                           archive_modes(cams, cfg),
                           STATE.get("ffmpeg_bin"), seg_sec=seg,
                           batch=batch, on_log=logs.append,
-                          on_step=_ARCH_PROG.update)
+                          on_step=_ARCH_PROG.update,
+                          prefetch=bool(cfg.get("archive_prefetch", False)))
     finally:
         _ARCH_PROG["running"] = False
         if not lock_held:
@@ -1631,7 +1655,8 @@ def archive_sweep(trigger="schedule", max_rounds=ARCH_SWEEP_ROUNDS,
 def retention_payload():
     cfg, cams, _ = camera_cfg()
     at = retention.parse_hhmm(cfg.get("cleanup_at"))
-    p = retention.plan(record_dir(), cams, {c["id"]: c for c in cams})
+    p = retention.plan(record_dir(), cams, {c["id"]: c for c in cams},
+                       archived=_archive_gate(cfg, cams))
     return {
         "ok": True,
         "cleanup_at": at,
@@ -1653,7 +1678,8 @@ def retention_payload():
 
 def run_cleanup(dry_run=False, trigger="manual", only=None):
     cfg, cams, cam_cfg = camera_cfg()
-    p = retention.plan(record_dir(), cams, cam_cfg)
+    p = retention.plan(record_dir(), cams, cam_cfg,
+                       archived=_archive_gate(cfg, cams))
     if only is not None:
         # only 来自前端，必须挡住目录穿越：只认 record_dir 之下、且确实出现在
         # 本次计划里的路径。否则一个伪造的 path 就能让它 rmtree 任意目录。

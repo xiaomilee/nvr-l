@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.108"
+VERSION = "0.9.109"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -36,6 +36,11 @@ DEFAULTS = {
     "archive_enable": True,           # 夜间任务是否做归档裁剪
     "archive_days": 7,                # 归档片段保留天数（_archive）= 总回溯天数（全时嵌套在前 full_days 天）
     "archive_batch": 120,             # 单次归档最多裁多少个分片（跨夜分批消化）
+    # 提前归档：True 时在全时「最后一天」当晚就裁（d == cut），产物与原画
+    # 同一天共存约一天，换来的是一整天的补救缓冲（裁失败还有机会重试）。
+    # 默认 False：只在「今天就删源」的那天裁，同一天不会同时存在全时与归档，
+    # 代价是归档产物晚一天才出现。清理侧另有「归档未收尾不删源」的硬闸门兜底。
+    "archive_prefetch": False,
     # ---- 录制（由本应用拉主码流落盘，不再依赖飞牛 NVR 的目录） ----
     "record_enable": True,
     "record_segment_sec": 300,        # 分片时长 60~900 秒

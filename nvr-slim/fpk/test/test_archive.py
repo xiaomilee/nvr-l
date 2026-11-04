@@ -6,7 +6,7 @@ import shutil
 import sys
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "server"))
 import archive  # noqa: E402
@@ -48,6 +48,29 @@ class TestSelectDays(unittest.TestCase):
                                 {"2026-10-22"})
         self.assertEqual(r["todo"], [])
         self.assertEqual(r["no_ledger"], [])
+
+    def test_prefetch_off_skips_last_day(self):
+        # full_days=2 → cut = 昨天。不提前：昨天今天不裁（明天删源前才裁，
+        # 这样同一天不会同时存在全时与归档），前天（今天就要删）照常回填。
+        y = (TODAY - timedelta(days=1)).isoformat()
+        b = (TODAY - timedelta(days=2)).isoformat()
+        r = archive.select_days([y, b], 2, TODAY, set(), {y, b}, prefetch=False)
+        self.assertEqual(r["todo"], [b])
+
+    def test_prefetch_on_includes_last_day(self):
+        # 默认开启提前量时保持旧行为：昨天最优先、前天回填。
+        y = (TODAY - timedelta(days=1)).isoformat()
+        b = (TODAY - timedelta(days=2)).isoformat()
+        r = archive.select_days([y, b], 2, TODAY, set(), {y, b}, prefetch=True)
+        self.assertEqual(r["todo"], [y, b])
+
+    def test_prefetch_off_still_backfills_overdue(self):
+        # 不提前也不能丢掉回填：更早的过期日期仍要裁（上次失败/停机错过）。
+        names = [(TODAY - timedelta(days=n)).isoformat() for n in (1, 2, 3)]
+        r = archive.select_days(names, 2, TODAY, set(), set(names),
+                                prefetch=False)
+        # 回填组按日期升序（既有的「最早的先补」口径）
+        self.assertEqual(r["todo"], sorted(names[1:]))
 
 
 class TestSliceWindows(unittest.TestCase):

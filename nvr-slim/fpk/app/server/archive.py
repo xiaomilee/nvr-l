@@ -68,13 +68,18 @@ def clamp(key, value):
 
 # ---------------------------------------------------------------- 选日
 
-def select_days(day_names, full_days, today, done_names, ledger_names):
+def select_days(day_names, full_days, today, done_names, ledger_names,
+                prefetch=True):
     """一天该不该归档、什么顺序归档。
 
     day_names     该路全时目录下真实存在的日期目录名
     full_days     这一路全时保留天数（保留 N 天 = 今天 + 前 N-1 天）
     done_names    _archive 下已有 .done 的日期集合
     ledger_names  _ledger 下有台账的日期集合
+    prefetch      提前量（archive_prefetch）：
+                  True  还早一天就裁（d == cut）—— 裁完全时还在，同一天会
+                        短暂共存两份，代价换的是一整天的补救缓冲；
+                  False 只在「今天就删源」的那天裁（d < cut），不共存。
     返回 {"todo": [date...], "no_ledger": [...]}，todo 按临期程度升序
     （最先过期、最急的排最前）。
     """
@@ -89,6 +94,10 @@ def select_days(day_names, full_days, today, done_names, ledger_names):
             continue                       # 未来日期 / 已归档
         if d > cut:
             continue                       # 还在保留期内（今天不会删），不用急
+        if not prefetch and d == cut:
+            # 不提前：今天不删它（明天才进删除清单），等明天裁完立刻删，
+            # 这样同一天不会同时存在全时与归档两份。
+            continue
         if name not in ledger_names:
             no_ledger.append(name)         # 无台账，宁缺勿滥，明确跳过
             continue
@@ -160,8 +169,12 @@ def _done_dead(arc_dir):
 # ---------------------------------------------------------------- 计划
 
 def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
-         ledger_dirs=None, scan_fn=None):
-    """算一遍要归档什么，不真裁。预览结构与 retention.plan 对齐（UI 同款交互）。"""
+         ledger_dirs=None, scan_fn=None, prefetch=True):
+    """算一遍要归档什么，不真裁。预览结构与 retention.plan 对齐（UI 同款交互）。
+
+    prefetch 透传给 select_days：False（默认）只算「今天就删源」的日期，
+    True 才把「明天才过期」的那天也提前裁出来。
+    """
     today = today or date.today()
     ledger_dirs = ledger_dirs or (lambda dn: os.path.join(root, "_ledger", dn))
     scan_fn = scan_fn or (lambda base: _scan_days(base))
@@ -204,7 +217,8 @@ def plan(root, cams, cam_cfg, modes, today=None, seg_sec=300.0,
                 led_names = {n[:-5] for n in os.listdir(led_root)
                              if len(n) == 15 and n.endswith(".json")}
             sel = select_days(scan_fn(base), full_days, today,
-                              _done_days(root, dname, led_root), led_names)
+                              _done_days(root, dname, led_root), led_names,
+                              prefetch=prefetch)
             for d in sel["no_ledger"]:
                 out["no_ledger"].append({"cam": cid, "name": cam.get("name", cid),
                                          "dir": dname, "date": d})
@@ -495,7 +509,7 @@ def _purge_empty_parts(arc_dir):
 # ---------------------------------------------------------------- 执行
 
 def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
-        batch=120, scan_fn=None, on_log=None, on_step=None):
+        batch=120, scan_fn=None, on_log=None, on_step=None, prefetch=True):
     """执行归档裁剪。返回结果摘要（与 retention.execute 风格一致）。
 
     单分片失败只记日志跳过（不写 idx，下次重试），不阻塞同日其它分片、
@@ -510,7 +524,7 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
     """
     today = today or date.today()
     p = plan(root, cams, cam_cfg, modes, today=today, seg_sec=seg_sec,
-             scan_fn=scan_fn)
+             scan_fn=scan_fn, prefetch=prefetch)
     log = on_log or (lambda msg: None)
     step_cb = on_step or (lambda step: None)
     archived_days, files, out_bytes = [], 0, 0

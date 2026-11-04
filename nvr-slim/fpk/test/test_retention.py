@@ -162,5 +162,73 @@ class TestPlan(unittest.TestCase):
         os.rmdir(empty)
 
 
+class TestArchiveGate(unittest.TestCase):
+    """清理闸门：全时是归档的唯一源，没归档完不许删。
+
+    TODAY=10-20、full_days=3 → cut=10-18，10-17 及更早都进删除候选。
+    """
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="nvrgate")
+        for day in ("2026-10-17", "2026-10-05"):
+            mk(os.path.join(self.root, "cam-01"), day)
+        mk(os.path.join(self.root, "_clip", "cam-01"), "2026-07-01")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _plan(self, state):
+        return rt.plan(self.root, CAMS[:1], {}, today=TODAY,
+                       archived=lambda cid, dname, d: state)
+
+    def _paths(self, p, key="delete"):
+        return [i["path"] for i in p[key]]
+
+    def test_undone_kept(self):
+        p = self._plan(False)
+        self.assertNotIn(os.path.join(self.root, "cam-01", "2026-10-17"),
+                         self._paths(p))
+        prot = {i["path"]: i for i in p["protected"]}
+        item = prot[os.path.join(self.root, "cam-01", "2026-10-17")]
+        self.assertIn("归档", item["reason"])
+
+    def test_done_deleted(self):
+        p = self._plan(True)
+        self.assertIn(os.path.join(self.root, "cam-01", "2026-10-17"),
+                      self._paths(p))
+        self.assertFalse(any("归档" in (i.get("reason") or "")
+                             for i in p["protected"]))
+
+    def test_not_needed_deleted(self):
+        # None = 这一路不归档（没开/物化切片），照常删
+        p = self._plan(None)
+        self.assertIn(os.path.join(self.root, "cam-01", "2026-10-17"),
+                      self._paths(p))
+
+    def test_only_full_kind_gated(self):
+        # 归档片段自己（kind=archive）不受闸门影响，否则永远删不掉
+        p = rt.plan(self.root, CAMS[:1], {}, today=TODAY, kinds=("clip",),
+                    archived=lambda cid, dname, d: False)
+        self.assertIn(os.path.join(self.root, "_clip", "cam-01", "2026-07-01"),
+                      self._paths(p))
+
+    def test_overdue_forced_release(self):
+        # 10-05 已逾期 15 天 > 3+7：归档一直没成功也不能把源永久钉在盘上
+        p = self._plan(False)
+        self.assertIn(os.path.join(self.root, "cam-01", "2026-10-05"),
+                      self._paths(p))
+        forced = [i for i in p["delete"] if i.get("forced")]
+        self.assertEqual(len(forced), 1)
+        self.assertIn("强制", forced[0]["forced"])
+
+    def test_hook_error_does_not_block(self):
+        def boom(cid, dname, d):
+            raise RuntimeError("boom")
+        p = rt.plan(self.root, CAMS[:1], {}, today=TODAY, archived=boom)
+        self.assertIn(os.path.join(self.root, "cam-01", "2026-10-17"),
+                      self._paths(p))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1023,6 +1023,25 @@ ck("归档·步进/直填写回并钳到 1–3650，重拉候选摘要",
    && src.includes("ARCH.at = 0;"));
 ck("归档·开关切换有后果提示",
    src.includes("临期全时将直接被清理删除"));
+
+/* ===== 0.9.109：提前归档开关（默认关，同一天不再同时存在全时与归档） ===== */
+ck("归档·提前归档开关存在于归档回溯卡，且默认关闭",
+   src.includes('data-archpre="1"') && get("LK.archPrefetch") === false);
+ck("归档·提前归档随配置推送与回读（不是假设置）",
+   src.includes("archive_prefetch: !!LK.archPrefetch")
+   && src.includes('if(typeof c.archive_prefetch === "boolean") LK.archPrefetch = c.archive_prefetch;'));
+ck("归档·开关切换后重拉候选摘要并给后果提示",
+   src.includes('querySelectorAll("[data-archpre]")')
+   && src.includes("当天会有两份")
+   && src.includes("只重叠几十分钟"));
+ck("归档·关闭态文案明确「不重复占用空间 / 归档晚一天出现」",
+   src.includes("不再整天并存")
+   && src.includes("归档片段要晚一天才出现"));
+ck("归档·开启态文案明确并存代价与补救缓冲",
+   src.includes("既有全时又有归档（两份占空间）")
+   && src.includes("补救缓冲"));
+ck("归档·摘要标注未提前时的候选口径",
+   src.includes("只算今天要删的（未提前）"));
 ck("归档·立即归档两段式（预览→确认执行）",
    src.includes('await apiPost("/api/archive/run", {dry_run:true})')
    && src.includes('await apiPost("/api/archive/run", {dry_run:false})')
