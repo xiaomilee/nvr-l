@@ -158,8 +158,11 @@ ck("时段块用三格窄道，不再是单色铺满（evDom 已退役）",
    && src.includes(".vtl .vevspan i.mot{left:0}")
    && src.includes(".vtl .vevspan i.per{left:20px}")
    && src.includes(".vtl .vevspan i.veh{left:40px}"));
-ck("可用性蓝轨退成 30% 背景（满饱和蓝 = 人员蓝，蓝尾巴压在蓝底上等于没画）",
-   src.includes("background:var(--primary);opacity:.3}") && src.includes(".vtl .vavail.arch{opacity:.14}"));
+/* 0.9.111：全时仍用淡蓝打底（满饱和蓝会压住人员蓝），
+   归档改用独立紫色 —— 以前两轨都是蓝、只靠 .3/.14 透明度区分，基本看不出来。 */
+ck("可用性轨：全时淡蓝打底、归档独立紫（不再同色靠透明度区分）",
+   src.includes("background:var(--primary);opacity:.3}")
+   && src.includes(".vtl .vavail.arch{background:var(--arch);opacity:.22}"));
 
 /* 类别筛选：三类互不重叠
    - 移动侦测 = 没有任何 AI 类别的纯帧差事件

@@ -24,6 +24,11 @@ if(d)document.documentElement.dataset.theme="dark";}catch(e){}})();</script>
   /* 事件类别色（0.9.62，0.9.67 定版）：橙=移动侦测 蓝=人员 绿=车辆（含两轮车）。
      车辆原来用紫，3px 细线上和蓝分不出来，换成绿后三者色相拉开 40°/220°/145° */
   --ev-veh:#0f9d58;
+  /* 归档浓缩的固定色（0.9.111）。以前存储条里全时用 --primary(#2f6bff)、
+     归档写死 #5c8fd6，两个都是蓝的 —— 浅色下难分，深色下 --primary 变成
+     #5c8dff 后几乎一模一样，图例完全失效。改用紫色，与全时的蓝拉开 60° 以上，
+     浅色/深色两套主题都成立。时间轴归档块同步用这个色。 */
+  --arch:#8b5cf6;
   --pw:390px; --ph:844px;
 }
 /* 深色：跟随系统（html[data-theme=dark]，由 head 内联脚本与下方 THEME 引擎控制） */
@@ -39,6 +44,7 @@ html[data-theme="dark"]{
   --primary-soft2:#263352; --primary-line:#35476e; --warn-fg:#e6c07c;
   --stage:#0a0c10; --dot:#8fa0bd; --live:#2fd08b;
   --ev-veh:#34d399;
+  --arch:#a78bfa;   /* 归档色（深色下提亮，仍与 --primary:#5c8dff 区分得开） */
 }
 html[data-theme="dark"] .card{box-shadow:0 1px 2px rgba(0,0,0,.45)}
 html[data-theme="dark"] .toast{background:rgba(8,10,14,.94)}
@@ -89,6 +95,13 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .campick .cp .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .campick .cempty{padding:16px 10px;text-align:center;font-size:12px;color:var(--faint)}
 .hdr-sub{font-size:12.5px;color:var(--faint);margin-top:1px}
+/* 版本徽标（0.9.111）：从「诊断与日志 · 环境自检」提到页面顶部。
+   原来要展开两层折叠才看得到版本，反馈问题时报版本号很费劲。
+   等宽数字 + 弱底，不抢标题。 */
+.verbadge{display:inline-block;margin-left:7px;padding:1px 6px;border-radius:6px;
+  background:var(--fill);color:var(--muted);font-size:10.5px;font-weight:500;
+  font-variant-numeric:tabular-nums;letter-spacing:.2px;vertical-align:2px;cursor:pointer}
+.verbadge.bad{background:var(--warn-soft);color:var(--warn-fg)}
 /* 0.9.33 CH/文件数并入摄像头名行：小字弱化，压住大字号基线 */
 .camsel .hdr-sub{font-weight:400;margin-top:3px;white-space:nowrap}
 .iconbtn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:var(--text2);flex:0 0 auto}
@@ -930,6 +943,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .dcard .dh .tg{font-size:10px;color:var(--faint);font-weight:400}
 .dcard .dh .rt{margin-left:auto;font-size:10px;color:var(--faint);font-weight:400;
   font-variant-numeric:tabular-nums}
+/* 可折叠卡的标题行（0.9.111 录像残片）：整行可点，右侧给展开/收起 */
+.dcard .dh.partshead{cursor:pointer;user-select:none;-webkit-user-select:none}
+.dcard .dh.partshead:active{opacity:.6}
 .sthead{display:flex;align-items:baseline;gap:6px;margin-bottom:8px}
 .sthead .big{font-size:21px;font-weight:700;letter-spacing:-.4px}
 .sthead .unit{font-size:11px;color:var(--muted)}
@@ -937,7 +953,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .stbar-big{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--track)}
 .stbar-big i{display:block;height:100%}
 .stbar-big .f{background:var(--primary)}
-.stbar-big .c{background:#5c8fd6}   /* 归档（比全时深一档） */
+.stbar-big .c{background:var(--arch)}   /* 归档：紫，与全时的蓝拉开色相 */
 .stbar-big .k{background:#9dbaff}   /* 第三代色位：缩时产物已下线，保留占位不参与绘制 */
 .legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:7px;font-size:10.5px;color:var(--muted)}
 .legend span{display:flex;align-items:center;gap:5px}
@@ -948,7 +964,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .strow .stbar{flex:1;display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--track)}
 .strow .stbar i{display:block;height:100%}
 .strow .stbar .f{background:var(--primary)}
-.strow .stbar .c{background:#5c8fd6}
+.strow .stbar .c{background:var(--arch)}
 .strow .stbar .k{background:#9dbaff}
 .strow .vv{flex:0 0 auto;min-width:78px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text2)}
 .strow .vv em{display:block;font-style:normal;font-size:9px;color:var(--faint)}
@@ -984,7 +1000,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
    整段深蓝尾巴压在深蓝底色上等于没画（用户 0.9.67 反馈「颜色区别不明显」
    的同一个根因）。现在底色退成背景，橙/蓝/绿三色才是前景。 */
 .vtl .vavail{position:absolute;left:46px;width:60px;border-radius:3px;background:var(--primary);opacity:.3}
-.vtl .vavail.arch{opacity:.14}
+.vtl .vavail.arch{background:var(--arch);opacity:.22}
 /* ---------- 事件类别色（0.9.62，0.9.67 三色定版）----------
    时间轴「一眼分型」的公共口径：
      橙 = 移动侦测（帧差，台账无 cls） · 蓝 = 人员 · 绿 = 车辆（含两轮车）
@@ -1499,7 +1515,7 @@ body.rot .vtlscroll{touch-action:none}
       <div class="hdr">
         <div class="hdr-row">
           <div>
-            <div class="camsel" style="font-size:17px">设置</div>
+            <div class="camsel" style="font-size:17px">设置<span class="verbadge" id="verTop">v—</span></div>
             <div class="hdr-sub">通用设置 · 摄像头 · 诊断与日志</div>
           </div>
         </div>
@@ -1639,7 +1655,9 @@ const REC = {
   segSec:300,             // 段落时长（秒）
   port:18080,             // Web 服务端口（安装时选，应用设置里改）
   cleanupAt:"03:00",      // 每天定点清理过期录像
-  lastClean:{ at:"2026-10-20 03:00", freed:41.2, dirs:6, files:1247 },
+  /* 0.9.111：原来是演示值（41.2GB / 6 目录 / 1247 文件），以前靠清理按钮
+     跑完覆盖掉；清理按钮删除后它就是永久可见的假数据，改成空值 + 真实回填。 */
+  lastClean:{ at:"", freed:0, dirs:0, files:0 },
   /* 容量不在前端写死：等 /api/status 的 disk_free_gb / disk_total_gb 回来再显示，
      没拿到就显示 "—"（以前这里写死 473.9 / 336.0，换台机器照样报旧数字） */
   diskTotalGB:null,
@@ -1952,18 +1970,18 @@ const GS = {
   nightOnly:false,   // 只在夜间重编码
   lowPrio:true,      // nice / ionice / 磁盘空闲才写
 };
-/* 录制与压制衔接。
-   live      = 分片一封口就压，数据还热着
-   scheduled = 攒够 N 小时批量压，白天磁盘不动
-   两者共用同一套判定与导出，只有入队节奏不同 —— 不会出现切模式导致画质不一样 */
+/* 录制与判定衔接。
+   0.9.111 起两项都固定，界面上不再暴露：
+     mode —— 只有 live（分片封口即判定）。scheduled（攒 N 小时批量）那条路已下线，
+             字段仍随 /api/config 往返，只为兼容旧配置与后端解析；
+     frag —— 恒为分片 MP4。整片 moov 被强杀就整段打不开，没有需要回退的场景。 */
 const LK = {
-  mode:"live",
-  intervalH:6,        // 1~24
+  mode:"live",        // 固定 live，见上
+  intervalH:6,        // 旧字段，服务于兼容，不再有界面
   segSec:300,         // 分片长度
-  /* 分片 MP4（0.9.71 默认开）：moov 写在文件头、每个关键帧一个 moof，
-     进程被硬杀/断电后已写的部分仍能播，损失上限是一个 GOP 而不是整片。
-     关掉退回整片 moov（必须正常收尾才完整，硬杀即残片）。 */
-  frag:true,
+  /* 分片 MP4：moov 写在文件头、每个关键帧一个 moof，进程被硬杀/断电后
+     已写的部分仍能播，损失上限是一个 GOP 而不是整片。 */
+  frag:true,          // 固定 true，见上
   clipStyle:"join",   // 通用切分方式：join=整段拼接 | split=活动切片（每路可用 clipMode 覆盖）
   condenseMode:"virtual", // 事件侦测方案：ledger 开→virtual(仅台账) / 关→off；clipOut(物化切片)为配置项 UI 不暴露
   ledger:true,       // 维度① 活动判读/台账开关：开=写台账、回放有标记、可归档
@@ -2028,15 +2046,12 @@ function syncLink(){
   fetch("/api/link?_t=" + Date.now(), { cache:"no-store", mode:"same-origin" })
     .then(r=>r.json()).then(d=>{ if(d && d.ok) applyLink(d); }).catch(()=>{});
 }
+/* 0.9.111：判定时机固定为「即刻判定」（定时压制那条路已随选项一起下线），
+   所以这里不再有分支。原「攒够 N 小时批量处理」的文案一并删掉，
+   免得界面上留着一段解释一个不存在的选项。 */
 function linkHint(){
-  if(LK.mode === "live")
-    return "分片一写完就判定并记台账。数据还在内存里，几乎不额外读盘、也不跟录像抢磁头；镜头刚发生的事，一分钟内就能在回放页时间轴上看到活动标记。";
-  return "攒够 " + LK.intervalH + " 小时再批量处理一次。白天磁盘和 CPU 完全不动，代价是数据已经凉了，处理时要真读一遍盘。";
-}
-function nextLinkAt(){
-  const now = new Date(), t = new Date(now.getTime() + LK.intervalH * 3600e3);
-  const sameDay = t.getDate() === now.getDate();
-  return (sameDay ? "今天 " : "明天 ") + String(t.getHours()).padStart(2,"0") + ":00";
+  return "分片一写完就判定并记台账。数据还在内存里，几乎不额外读盘、也不跟录像抢磁头；"
+    + "镜头刚发生的事，一分钟内就能在回放页时间轴上看到活动标记。";
 }
 const SCAN_LABEL = { now:"立即", m15:"每 15 分钟", h1:"每小时", d1:"每天 03:00" };
 /* 分片长度的统一描述：60 秒以下按秒说，整分钟按分钟说 —— 免得出现 "0.5 分钟" */
@@ -2923,7 +2938,7 @@ function renderTl(){
     + ' style="left:' + ((x[0]-a)/real*100).toFixed(2) + '%;width:'
     + Math.max(0.5, (x[1]-x[0])/real*100).toFixed(2) + '%'
     + (kind === "full" ? ';background:var(--keep)'
-       : ';background:#378ADD;opacity:' + tlDens(x.d))
+       : ';background:var(--arch);opacity:' + tlDens(x.d))
     + '"></span>').join("");
   /* 0.9.34 行结构：说明行（名称左 · 摘要右）在上，色条独占一整行贯穿全宽，
      高度 20px 方便手指点按跳播 */
@@ -4032,7 +4047,10 @@ function applyServerCfg(c){
     const s = +c.record_segment_sec;
     if(s && s !== LK.segSec) LK.segSec = s;
   }
-  if(c.link_mode && c.link_mode !== LK.mode) LK.mode = c.link_mode;
+  /* 0.9.111：旧配置里可能存着 scheduled / record_frag=false，
+     现在界面已无对应开关，若照搬会让「界面说即刻判定、实际按定时跑」。
+     一律按固定值生效，下次保存即把服务端也纠正过来。 */
+  LK.mode = "live";
   if(c.clip_style && c.clip_style !== LK.clipStyle) LK.clipStyle = c.clip_style;
   if(c.condense_mode && ["virtual","materialize","off"].indexOf(c.condense_mode) >= 0
      && c.condense_mode !== LK.condenseMode) LK.condenseMode = c.condense_mode;
@@ -4070,7 +4088,7 @@ function applyServerCfg(c){
   if(typeof c.record_enable === "boolean") REC.enabled = c.record_enable;
   /* 录像封装：服务端是权威（recorder 真正读的这份）。老配置里没有这个键，
      缺键时保持默认开 —— 不能因为读不到就当作用户关掉了。 */
-  if(typeof c.record_frag === "boolean") LK.frag = c.record_frag;
+  LK.frag = true;   /* 同上：封装固定分片 MP4，不采纳旧值 */
   if(c.cleanup_at) REC.cleanupAt = c.cleanup_at;
   /* 判读条件回读：服务端 profiles 才是判定真正用的那份参数。
      正在编辑这一路时跳过，否则会把用户的草稿来源改掉。 */
@@ -4855,6 +4873,7 @@ function drawLiveScene(cv, idx){
    adv / outOpen 是事件侦测里的两个小节（进阶判读 / 输出画质）。 */
 const SET = { open:null, editing:false, draft:null, adv:false, armed:null,
               genOpen:false, diagOpen:false, addArmed:false,
+              partsOpen:false,   /* 录像残片：默认收起，展开才去扫盘检查 */
               acc:"base", outOpen:false };
 
 function esc(s){
@@ -4990,10 +5009,12 @@ function cardRec(){
       + '</div>'
     + '</div>'
     + '<div class="hint" style="margin-top:8px">按<b>日期整目录删</b>，不在录像时倒数计时。含 <code style="font-size:10.5px">.part</code> 或待压缩文件的目录会跳过并告警。</div>'
-    + '<button class="btnline" id="btnCleanNow" style="margin-top:10px">立即预览清理（不删除）</button>'
-    + '<div class="hint" id="cleanPreview" style="margin-top:8px;display:none"></div>'
-    + '<div class="cleanline" style="margin-top:9px"><i class="dot"></i><span>上次 ' + REC.lastClean.at.slice(5)
-      + ' 删除 <b>' + REC.lastClean.dirs + ' 个日期目录 / ' + REC.lastClean.files + ' 个文件</b>，释放 ' + REC.lastClean.freed + ' GB</span></div>'
+    + '<div class="cleanline" style="margin-top:9px"><i class="dot"></i><span>'
+      + (REC.lastClean.at
+          ? ('上次 ' + REC.lastClean.at.slice(5)
+             + ' 删除 <b>' + REC.lastClean.dirs + ' 个日期目录 / ' + REC.lastClean.files + ' 个文件</b>，释放 ' + REC.lastClean.freed + ' GB')
+          : '还没有清理记录（每天 ' + REC.cleanupAt + ' 自动执行）')
+      + '</span></div>'
   + '</div>';
 }
 
@@ -5043,18 +5064,13 @@ function cardLink(){
              + '<button class="btnline" id="btnArchNow" style="margin-top:9px">' + (ARCH.arm ? "确认执行归档" : "立即归档（先预览）") + '</button>'
              + '<div class="hint" id="archOut" style="margin-top:6px">' + (ARCH.out || "") + '</div>'))
     + '</div>'
+    /* 0.9.111：去掉「定时判定」与其「每隔多久压一次」步进器。
+       判定时机现在只有一种（分片封口即判定），做成可选项只会让人以为
+       换成定时能省资源 —— 台账本来就只写几 KB，等几小时再判反而让回放页
+       的活动标记迟到。 */
     + (LK.condenseMode!=="off" ? '<div class="srow">'
-      + '<div class="n">' + "判定什么时候跑" + '</div>'
-      + '<div class="chips">'
-        + '<button class="chip ' + (LK.mode==="live"?"on":"") + '" data-link="live">' + "即刻判定" + '</button>'
-        + '<button class="chip ' + (LK.mode==="scheduled"?"on":"") + '" data-link="scheduled">' + "定时判定" + '</button>'
-      + '</div>'
-      + '<div class="h" style="margin-top:8px;line-height:1.55">' + linkHint() + '</div>'
-    + '</div>' : '')
-    + (LK.mode==="scheduled" ? '<div class="srow">'
-      + '<div class="top"><span class="n">每隔多久压一次</span><span class="v">' + LK.intervalH + ' 小时</span></div>'
-      + '<div class="stepper"><button data-linkh="-1">−</button><span class="val">' + LK.intervalH + ' 小时</span><button data-linkh="1">+</button></div>'
-      + '<div class="h">1~24 小时；设 24 就是每天同一时刻批量做一次。首次启动会先处理积压，不会干等满一个周期。</div>'
+      + '<div class="top"><span class="n">判定时机</span><span class="v">即刻判定</span></div>'
+      + '<div class="h" style="margin-top:4px;line-height:1.55">' + linkHint() + '</div>'
     + '</div>' : '')
     + '<div class="srow">'
       + '<div class="top"><span class="n">录制分片长度</span><span class="v">' + Math.round(LK.segSec/60) + ' 分钟</span></div>'
@@ -5064,15 +5080,14 @@ function cardLink(){
       + '</div>'
       + '<div class="h">分片越短，"录完"到"开压"的间隔越短；太碎又会让静止判定的上下文不够。5 分钟是平衡点。</div>'
     + '</div>'
+    /* 0.9.111：去掉「整片 MP4」选项，固定分片 MP4。
+       整片 moov 必须正常收尾，被强杀就整段打不开（就是用户看到的「残片」）；
+       分片 MP4 断电最多丢 1~2 秒，没有需要回退的场景，留着开关只会误选。 */
     + '<div class="srow">'
-      + '<div class="top"><span class="n">录像封装</span><span class="v" style="color:'
-        + (LK.frag ? "var(--primary)" : "var(--keep)") + '">'
-        + (LK.frag ? "分片 MP4" : "整片 MP4") + '</span></div>'
-      + '<div class="chips">'
-        + '<button class="chip ' + (LK.frag?"on":"") + '" data-linkfrag="1">分片 MP4 · 断电也能播</button>'
-        + '<button class="chip ' + (!LK.frag?"on":"") + '" data-linkfrag="0">整片 MP4 · 兼容优先</button>'
-      + '</div>'
-      + '<div class="h">分片 MP4 让每个关键帧自带索引，进程被强杀或断电时已经写下的部分仍能播放，最多丢 1~2 秒；整片 MP4 必须正常收尾，被强杀就整段打不开（残片）。只有在老播放器播不动时才需要切回。</div>'
+      + '<div class="top"><span class="n">录像封装</span>'
+        + '<span class="v" style="color:var(--primary)">分片 MP4 · 断电也能播</span></div>'
+      + '<div class="h">每个关键帧自带索引，进程被强杀或断电时已经写下的部分仍能播放，最多丢 1~2 秒。'
+        + '整片封装的 moov 必须正常收尾，一旦被强杀就整段打不开（就是「录像残片」里那些待重建的文件），所以这里不再提供切换。</div>'
     + '</div>'
     + (LK.clipOut ? ('<div class="srow">'
       + '<div class="top"><span class="n">同时处理</span><span class="v">' + GS.conc + ' 路</span></div>'
@@ -5202,14 +5217,11 @@ function cardDetect(){
       + '</div>'
       + '<div class="h">高=多报（阈值 人.45/两轮.28/车.35），低=少报（.55/.38/.45）。漏检比误检好——误检会污染台账和事件判定。</div>'
     + '</div>'
-      /* P1 项：模式（置灰 + 说明，不装可用） */
+      /* 0.9.111：删掉「实时检测（下个版本）」这个永远点不动的按钮。
+         留一个灰着的未来选项没有信息量，反而让人反复去点、怀疑自己没配对。 */
     + '<div class="srow">'
-      + '<div class="top"><span class="n">检测模式</span><span class="v">快照检测</span></div>'
-      + '<div class="chips">'
-        + '<button class="chip on">快照检测（每 5 秒/路）</button>'
-        + '<button class="chip" disabled style="opacity:.45">实时检测（下个版本）</button>'
-      + '</div>'
-      + '<div class="h">实时模式（子码流 5fps + 核显推理）在下个版本提供；快照模式对「有人 / 有车经过」的台账事件已经够用，成本差一个数量级。</div>'
+      + '<div class="top"><span class="n">检测模式</span><span class="v">快照检测 · 每 5 秒 / 路</span></div>'
+      + '<div class="h">按固定间隔抓一帧做判读，对「有人 / 有车经过」的台账事件已经够用，且几乎不占 CPU。</div>'
     + '</div>'
     ) : '')
     /* 组 3：触发与通知。刻意放在 AI 总闸之外——移动侦测的通知不需要 AI，
@@ -5255,6 +5267,27 @@ function cardLook(){
 }
 
 /* ---------------- 诊断日志：直接看 / 复制 / 清除 ---------------- */
+/* 顶部版本徽标（0.9.111）：进设置页就能看到版本，不用展开「诊断与日志 → 环境自检」。
+   拉不到就保持 v—（服务刚重启/离线属于正常瞬间，别用 toast 打扰用户）；
+   服务端没回 version 说明后台还是旧进程，用告警色标出来。 */
+async function loadTopVersion(){
+  const el = document.getElementById("verTop");
+  if(!el) return;
+  try{
+    const r = await fetch("/api/health?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" });
+    const d = await r.json();
+    if(!d || typeof d.version !== "string" || !d.version){
+      el.textContent = "v未知";
+      el.classList.add("bad");
+      el.title = "旧版服务进程仍在运行 · 展开「诊断与日志」看排查步骤";
+      return;
+    }
+    el.textContent = "v" + d.version;
+    el.classList.remove("bad");
+    el.title = "服务端版本 v" + d.version;
+  }catch(e){ /* 保持 v— */ }
+}
+
 async function loadDiagEnv(){
   const el = document.getElementById("diagEnv");
   const warn = document.getElementById("diagWarn");
@@ -5367,91 +5400,6 @@ async function clearDiagLog(){
   try{ await apiPost("/api/log/clear", {}); }catch(e){}
   await loadDiagLog();
   toast("toast2", "日志已清除");
-}
-
-/* ---------------- 清理：预览 → 二次确认 → 真删 ---------------- */
-/* 以前这个按钮只弹一句写死的"释放 41.2 GB"，什么都没发生。
-   现在真的走 /api/retention/cleanup：先 dry_run 出计划，用户看清要删什么，
-   再点一次"确认删除"才执行 —— 涉及 rmtree，必须两段。 */
-let cleanArm = 0;
-let cleanPlan = null;   /* 预览时拿到的 [{path, fp}]，确认删除时原样带回服务端 */
-async function previewCleanup(btn){
-  const box = document.getElementById("cleanPreview");
-  if(cleanArm && Date.now() - cleanArm < 15000){
-    cleanArm = 0;
-    if(btn){ btn.disabled = true; btn.textContent = "正在删除…"; }
-    try{
-      /* 只删刚才预览里列出来的那些目录（带指纹）。中间要是又录出新的一天，
-         不会被顺手删掉 —— 用户确认的是他看过的那份清单。 */
-      const plan = cleanPlan || [];
-      const d = await apiPost("/api/retention/cleanup",
-                              { dry_run: false, paths: plan });
-      cleanPlan = null; cleanArm = 0;
-      if(!d){ toast("toast2", "删除失败：服务端无响应"); return; }
-      if(d.ok === false && d.error){ toast("toast2", "删除失败：" + d.error); return; }
-      const nd = (d.deleted||[]).length, nf = (d.failed||[]).length;
-      const ns = (d.skipped||[]).length;
-      const mb = d.freed_mb != null ? d.freed_mb : Math.round((d.freed_bytes||0)/1048576*10)/10;
-      toast("toast2", "已删除 " + nd + " 个目录 / " + (d.files||0)
-            + " 个文件，释放 " + mb + " MB"
-            + (ns ? "；" + ns + " 个因内容已变化被跳过" : "")
-            + (nf ? "；" + nf + " 个失败（见日志）" : ""));
-      if(box){
-        box.style.display = "block";
-        box.innerHTML = nd
-          ? "已删除 <b>" + nd + " 个目录 / " + (d.files||0) + " 个文件</b>，释放 <b>"
-            + mb + " MB</b>　（" + esc(d.at || "") + "）"
-          : "<b>本次没有删除任何目录</b>"
-            + (ns ? "；" + ns + " 个目录在预览后内容有变化，已跳过 —— 请重新预览"
-                  + "　<b>再点一次按钮重新预览</b>" : "");
-      }
-      await loadRetention();
-      loadDiagLog();
-    }catch(e){
-      toast("toast2", "删除失败：" + e);
-    }finally{
-      if(btn){ btn.disabled = false; btn.textContent = "立即预览清理（不删除）"; }
-    }
-    return;
-  }
-  if(btn){ btn.disabled = true; btn.textContent = "正在统计…"; }
-  try{
-    const d = await apiPost("/api/retention/cleanup", { dry_run: true });
-    const p = (d && d.preview) || {};
-    /* 记住这份清单，第二次点击时原样带回服务端 */
-    cleanPlan = (d && Array.isArray(d.items) ? d.items : [])
-      .map(it => ({ path: it.path, fp: it.fp }))
-      .filter(it => it.path && it.fp);
-    if(box){
-      box.style.display = "block";
-      box.innerHTML = "将删除 <b>" + (p.delete_count||0) + " 个日期目录 / "
-        + (p.files||0) + " 个文件</b>，释放 <b>" + (p.freed_mb||0) + " MB</b>"
-        + (p.protected_count ? "；<b style='color:var(--warn)'>" + p.protected_count
-            + " 个目录因正在写入/待压缩被跳过</b>" : "")
-        + "<br>目录：" + esc((d && d.record_dir) || REC.dir)
-        + (cleanPlan.length ? "　<b>再点一次按钮确认删除</b>" : "　（没有可删的目录）");
-    }
-    if(cleanPlan.length){
-      cleanArm = Date.now();
-      if(btn) btn.textContent = "确认删除这 " + cleanPlan.length + " 个目录";
-      toast("toast2", "预览完成 · 再点一次才真正删除");
-      setTimeout(()=>{
-        if(cleanArm && Date.now() - cleanArm >= 14900){
-          cleanArm = 0; cleanPlan = null;
-          if(document.getElementById("btnCleanNow")){
-            document.getElementById("btnCleanNow").textContent = "立即预览清理（不删除）";
-          }
-        }
-      }, 15200);
-    }else{
-      toast("toast2", "预览完成：没有过期目录需要删除");
-    }
-  }catch(e){
-    toast("toast2", "预览失败：" + e);
-  }finally{
-    if(btn) btn.disabled = false;
-    if(btn && !cleanArm) btn.textContent = "立即预览清理（不删除）";
-  }
 }
 
 async function loadRetention(){
@@ -6248,7 +6196,7 @@ function renderEditMode(){
 function genSummary(){
   return (REC.enabled ? "录制已启用" : "录制已停用")
     + " · 目录 " + REC.dir
-    + " · " + (LK.mode === "live" ? "即刻压制" : "每 " + LK.intervalH + " 小时压制")
+    + " · 即刻判定"
     + " · 分片 " + Math.round(LK.segSec/60) + " 分钟"
     + " · " + GS.conc + " 路"
     + " · 每天 " + REC.cleanupAt + " 清理";
@@ -6369,7 +6317,7 @@ function cardStorage(){
       + '<div class="stbar-big"><i class="f" style="width:' + fp + '%"></i><i class="c" style="width:' + ap + '%"></i></div>'
       + '<div class="legend">'
         + '<span><i style="background:var(--primary)"></i>全时 <b>' + fmtBytes(full) + ' · ' + fp + '%</b></span>'
-        + '<span><i style="background:#5c8fd6"></i>归档 <b>' + fmtBytes(arch) + ' · ' + ap + '%</b></span>'
+        + '<span><i style="background:var(--arch)"></i>归档 <b>' + fmtBytes(arch) + ' · ' + ap + '%</b></span>'
       + '</div>'
       + '<div class="dline" style="margin-top:9px">活动台账 <b>' + fmtBytes(ledger)
         + '</b>（永久保留 · 几乎不占空间）</div>'
@@ -6563,10 +6511,19 @@ function cardEnv(){
    .part、各自多大、放了多久、能不能直接封口。残片在此之前是"看不见的死账"——
    /api/record/file 的白名单只放行 HH-MM-SS.mp4，所以既不能回放、也下载不到，
    用户唯一的办法是挨个数，而且数完也不知道该删还是能救。 */
+/* 0.9.111：改成折叠。残片在正常情况下本来就是“没有”，
+   却占着诊断区一整块高度、每次进设置都要扫一遍目录。
+   收起后默认只剩一行标题，展开才发请求（见 bindSettings 里的触发）。 */
 function cardParts(){
+  const open = !!SET.partsOpen;
   return '<div class="dcard">'
-    + '<div class="dh">录像残片<span class="tg">未封口的 .part</span></div>'
-    + '<div class="diagenv" id="diagParts" style="margin-top:0"><span class="empty">检查中…</span></div>'
+    + '<div class="dh partshead" data-partstoggle="1">录像残片'
+      + '<span class="tg">未封口的 .part</span>'
+      + '<span class="rt">' + (open ? "收起 ⌃" : "展开 ⌄") + '</span></div>'
+    + (open
+        ? '<div class="diagenv" id="diagParts" style="margin-top:0"><span class="empty">检查中…</span></div>'
+        : '<div class="dline" style="margin-top:0;font-size:10.5px;color:var(--faint)">'
+          + '分片没封口就会在这里出现（静置超过一段时间会自动重建索引）。点开才检查。</div>')
     + '</div>';
 }
 
@@ -6838,8 +6795,6 @@ function bindSettings(body){
       ds.disabled = false; ds.textContent = "检测并保存";
     }
   };
-  const cn = body.querySelector("#btnCleanNow");
-  if(cn) cn.onclick = ()=> previewCleanup(cn);
   // 每路「诊断」：真跑一次 ffprobe + 8 秒试录，把"是摄像头的问题还是
   // ffmpeg 的问题"当场定死。之前只显示一行 ffmpeg 英文原文，用户没法判断。
   body.querySelectorAll("[data-probe]").forEach(el=>{
@@ -6858,24 +6813,13 @@ function bindSettings(body){
   const rs = body.querySelector("#btnRestart");
   if(rs) rs.onclick = restartDiag;
   if(body.querySelector("#diagEnv")) loadDiagEnv();
+  /* 残片：点开才去扫目录（本地快，但没必要每次进设置都扫） */
+  body.querySelectorAll("[data-partstoggle]").forEach(el=>{
+    el.onclick = ()=>{ SET.partsOpen = !SET.partsOpen; renderCamTabs(); };
+  });
   if(body.querySelector("#diagParts")) loadDiagParts();
   if(body.querySelector("#diagLogText")) loadDiagLog();
 
-  /* 公共：压制衔接 */
-  body.querySelectorAll("[data-link]").forEach(el=>{
-    el.onclick = ()=>{
-      LK.mode = el.dataset.link;
-      if(LK.mode === "live"){ LK.nextBatch = "—"; toast("toast2", "改为即刻压制 · 分片写完就处理"); }
-      else { LK.nextBatch = nextLinkAt(); toast("toast2", "改为定时压制 · 每 " + LK.intervalH + " 小时一次"); }
-      renderCamTabs(); saveCfgSoon();
-    };
-  });
-  body.querySelectorAll("[data-linkh]").forEach(el=>{
-    el.onclick = ()=>{
-      LK.intervalH = Math.max(1, Math.min(24, LK.intervalH + (+el.dataset.linkh)));
-      LK.nextBatch = nextLinkAt(); renderCamTabs(); saveCfgSoon();
-    };
-  });
   /* ① 事件侦测总闸：开/关 */
   body.querySelectorAll("[data-ledger]").forEach(el=>{
     el.onclick = ()=>{
@@ -7121,16 +7065,6 @@ function bindSettings(body){
       LK.segSec = +el.dataset.linkseg; renderCamTabs();
       saveCfgSoon();            /* 落盘 + 推服务端：分片长度立即热生效 */
       toast("toast2", "分片改为 " + Math.round(LK.segSec/60) + " 分钟，正在按新参数重启录制");
-    };
-  });
-  body.querySelectorAll("[data-linkfrag]").forEach(el=>{
-    el.onclick = ()=>{
-      LK.frag = el.dataset.linkfrag === "1";
-      renderCamTabs();
-      saveCfgSoon();            /* 进 pushCfg body：ffmpeg 的 -movflags 是物理参数 */
-      toast("toast2", LK.frag
-        ? "已改为分片 MP4：写入即可播，强杀/断电最多丢 1~2 秒"
-        : "已改为整片 MP4：必须正常收尾，被强杀的分片会打不开");
     };
   });
   const lkRun = body.querySelector("#btnLinkRun");
@@ -9071,6 +9005,9 @@ function loadDay(){
 }
 
 loadCfg();          /* 先把上次保存的摄像头与参数读回来，再渲染 */
+/* 清理记录：原来只在「立即预览清理」跑完后刷新，入口删掉后没人调了，
+   启动就拉一次，否则卡片上永远是空的。失败不影响渲染。 */
+Promise.resolve(loadRetention()).catch(()=>{});
 /* 启动顺序：localStorage 只是缓存，服务端的通道列表才是权威。
    必须先 syncFromServer 再渲染，否则会先闪一帧演示数据、并且可能把它推上去。 */
 Promise.resolve(syncFromServer()).catch(()=>{}).then(()=>{
@@ -9080,6 +9017,7 @@ Promise.resolve(syncFromServer()).catch(()=>{}).then(()=>{
   loadDay();
   layout();
   syncLink();         /* 处理队列的真实 pending/done/failed 以服务端为准 */
+  loadTopVersion();   /* 设置页顶部的版本徽标（0.9.111） */
   fetchRecordings();  /* 回放页只要磁盘上真实存在的录像，有就点亮 */
   pollLive();         /* 立刻同步一次服务端快照状态（否则 localStorage 里的旧 online 会压住真实状态） */
   refreshRes();       /* CPU / 内存 / 核显的真实值，来自 /api/status */

@@ -71,7 +71,7 @@ ck("公共区无滑杆", !h.includes('type="range"'));
 ck("通用·展开态有保存键", h.includes('data-gensave="1"'));
 run('SET.genOpen=false; renderCamTabs();');
 h = body();
-ck("通用·折叠后显示摘要", h.includes("录制已启用") && h.includes("即刻压制"));
+ck("通用·折叠后显示摘要", h.includes("录制已启用") && h.includes("即刻判定"));
 ck("通用·折叠后无保存键", !h.includes('data-gensave="1"'));
 ck("通用·折叠后有展开入口", h.includes("data-gentoggle"));
 ck("通用·折叠后摄像头区不受影响", h.includes("data-camrow") && h.includes("data-addcam"));
@@ -385,14 +385,16 @@ ck("配置·分片长度随 pushCfg 上送", src.includes("record_segment_sec: L
 ck("配置·改分片立即保存并推送", /data-linkseg[\s\S]{0,320}saveCfgSoon\(\)/.test(src));
 ck("配置·启动时以服务端为准", typeof get('syncFromServer') === "function"
    && /syncFromServer\(\)/.test(src) && src.includes('apiGet("/api/config")'));
-/* ---- 0.9.71 录像封装（分片 MP4）----
-   两个都不能少：开关要推上去（否则 ffmpeg 的 -movflags 永远不生效），
-   回读要以服务端为准（否则刷新页面就变回默认，用户以为设置丢了）。 */
-ck("录影·封装开关随 pushCfg 上送", src.includes("record_frag: !!LK.frag"));
-ck("录影·封装状态以服务端为准回读", src.includes('if(typeof c.record_frag === "boolean") LK.frag = c.record_frag;'));
-ck("录影·切换封装立即保存并提示重启",
-   /data-linkfrag[\s\S]{0,420}saveCfgSoon\(\)/.test(src)
-   && src.includes('data-linkfrag="1"') && src.includes('data-linkfrag="0"'));
+/* ---- 分片 MP4 封装（0.9.111 起固定）----
+   0.9.71 开始是个开关，0.9.111 把“整片 MP4”选项下线：被强杀就整段打不开，
+   没有需要回退的场景，留着只会误选。但字段仍需上送（ffmpeg 的 -movflags 靠它），
+   且必须锁死为 true：旧配置里可能存着 false，照搬就会「界面没开关、实际跑整片」。 */
+ck("录影·封装字段仍随 pushCfg 上送", src.includes("record_frag: !!LK.frag"));
+ck("录影·封装锁死为分片 MP4（不采纳旧配置的 false）",
+   src.includes("LK.frag = true;   /* 同上：封装固定分片 MP4") && !src.includes("LK.frag = c.record_frag"));
+ck("录影·整片 MP4 选项已下线", !src.includes("data-linkfrag")
+   && !src.includes("整片 MP4 · 兼容优先")
+   && !src.includes("只有在老播放器播不动时才需要切回"));
 ck("诊断·残片清单卡就绪（0.9.71）", typeof get('cardParts') === "function"
    && typeof get('loadDiagParts') === "function"
    && src.includes('fetch("/api/record/parts?_t=" + Date.now()'));
@@ -736,7 +738,7 @@ ck("时间轴·压缩倍率 144×", rc.includes("压缩 ≈144.0×"));
 ck("时间轴·24 小时刻度（00…24）", rc.includes("<span>00</span>") && rc.includes("<span>24</span>"));
 ck("时间轴·全时块绿色 / 归档块蓝色带密度透明度",
    rc.includes("background:var(--keep)")
-   && rc.includes("background:#378ADD;opacity:0.34"));
+   && rc.includes("background:var(--arch);opacity:0.34"));
 /* 0.9.34：选中热力格（hourBlock=5 → 10:00–12:00）→ 时间轴放大到该窗口，
    块位置按窗口折算，摘要改覆盖率口径 */
 run('state.hourBlock=5; renderTl();');
@@ -1386,6 +1388,55 @@ ck("回放·视口高度变化（全屏/转屏/切页）自动重算并锚住线
    src.includes("Math.abs(sc.clientHeight - vtlScH) > 2")
    && src.includes("renderVtl(vtlData, vtlDay, t, lineY);")
    && src.includes("setTimeout(syncVnowline, 30);"));
+
+/* ================= 0.9.111 设置页整理 =================
+   七项改动各自钉一条断言：版本上顶、三个选项下线、
+   存储图例取色、残片折叠、以及删掉的预览清理。 */
+ck("版本·顶部徽标在页面标题里", src.includes('<span class="verbadge" id="verTop">'));
+ck("版本·进页就拉一次 /api/health", typeof get('loadTopVersion') === "function"
+   && /loadTopVersion\(\);/.test(src)
+   && /function loadTopVersion\(\)[\s\S]{0,400}fetch\("\/api\/health/.test(src));
+ck("版本·拿不到时标警告色而不弹 toast",
+   /el\.classList\.add\("bad"\)/.test(src) && !/loadTopVersion[\s\S]{0,600}toast\(/.test(src));
+
+ck("清理·预览清理按钮与函数已删", !src.includes('id="btnCleanNow"')
+   && !src.includes("function previewCleanup") && !src.includes("cleanArm")
+   && !src.includes("cleanPreview"));
+ck("清理·「上次删除」摘要保留，且无记录时不显示假数据", src.includes('class="cleanline"')
+   && src.includes("还没有清理记录") && !src.includes("freed:41.2"));
+
+/* 注意：源码里保留了「去掉定时判定」的注释，
+   所以断言钉的是“没有可点的控件”，而不是字面不出现。 */
+ck("判定·定时判定选项与步进器已删", !src.includes('data-link="scheduled"')
+   && !src.includes('data-link="live"') && !src.includes('data-linkh')
+   && !src.includes("nextLinkAt") && !src.includes("LK.mode =="));
+ck("判定·只留即刻判定且模式锁死 live", src.includes('>判定时机</span><span class="v">即刻判定')
+   && src.includes('LK.mode = "live";') && !src.includes("LK.mode = c.link_mode"));
+
+ck("检测·实时检测（下个版本）已删", !src.includes('opacity:.45">实时检测')
+   && !src.includes('快照检测（每 5 秒/路）'));
+ck("检测·快照检测改为静态描述", src.includes('快照检测 · 每 5 秒 / 路'));
+
+ck("图例·归档用独立色变量 --arch", /--arch:#8b5cf6/.test(src)
+   && /html\[data-theme="dark"\][\s\S]{0,900}--arch:#a78bfa/.test(src));
+ck("图例·存储条与图例都用 var(--arch)，不再写死蓝色",
+   !/background:#5c8fd6/.test(src) && src.includes(".stbar-big .c{background:var(--arch)}")
+   && src.includes('<i style="background:var(--arch)"></i>归档')
+   && src.includes(".strow .stbar .c{background:var(--arch)}"));
+/* 浅色主色 #2f6bff、深色主色 #5c8dff；归档各自取 #8b5cf6 / #a78bfa，
+   两套主题下都不可能与主色撞色（旧值 #5c8fd6 在深色下几乎等于主色）。 */
+ck("图例·归档色在两套主题下都与主色分开",
+   /--arch:#8b5cf6/.test(src) && /--arch:#a78bfa/.test(src)
+   && !/--arch:#2f6bff/.test(src) && !/--arch:#5c8dff/.test(src));
+ck("图例·回放时间轴归档块同色口", src.includes(".vtl .vavail.arch{background:var(--arch)"));
+
+ck("残片·默认折叠（不展开就不发请求）",
+   src.includes('partsOpen:false') && /function cardParts\(\)\{[\s\S]{0,300}SET\.partsOpen/.test(src)
+   && /if\(body\.querySelector\("#diagParts"\)\) loadDiagParts\(\);/.test(src));
+ck("残片·标题行可点并给展开/收起", src.includes('data-partstoggle="1"')
+   && src.includes("展开 ⌄") && src.includes("收起 ⌃"));
+ck("残片·收起态仍告知“什么时候会出现”",
+   src.includes("分片没封口就会在这里出现"));
 
 /* 服务端字段与前端消费对齐（防止改一边忘一边） */
 ck("对齐·台账事件带 cls（后端 ledger.events_of 输出）",
