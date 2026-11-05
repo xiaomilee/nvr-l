@@ -3190,6 +3190,9 @@ function visibleSegs(){
   return state.segs.map((s,i)=>({s,i})).filter(o=>segA(o.s) < b && segB(o.s) > a);
 }
 
+/* 列表分批渲染的批次号：每次重绘自增，旧批次发现号变了就停手 */
+let clipSeq = 0;
+
 function renderClips(){
   const box = document.getElementById("clips");
   const list = visibleSegs();
@@ -3209,33 +3212,46 @@ function renderClips(){
     return;
   }
 
-  list.forEach(({s,i})=>{
-    const size = s.bytes ? s.bytes/1048576
-      : fullDayMbps(cam)*(s.e-s.s)/8/1000;
-    const cov = Math.max(1, segB(s) - segA(s));
-    const d = document.createElement("div");
-    d.className = "card";
-    d.innerHTML =
-      '<canvas class="thumb"></canvas>' +
-      '<div class="cbody">' +
-        '<div class="ct mono">' + hms(segA(s)) + ' – ' + hms(segB(s)) + '</div>' +
-        '<div class="cm"><span>' + (full ? durText(s.e-s.s)
-            : "播放 " + durText(s.e-s.s) + " · 覆盖源 " + durText(cov)) + '</span><span>' + size.toFixed(1) + ' MB</span></div>' +
-        '<div style="margin-top:5px;display:flex;gap:5px">' +
-          (full
-            ? '<span class="tag">' + (s.hits ? "含活动 " + s.hits + " 段" : (s.file ? "连续录像" : "无活动")) + '</span>'
-            : '<span class="tag g">' + (s.src != null ? "归档 · " + hms(s.src) : s.reason) + '</span>') +
+  /* 一天 288 个分片、归档日更多：一次建完 288 个卡片 + 288 张 canvas 缩略图
+     会把手机主线程占住近一秒（用户感受就是「点了没反应」）。按每帧 30 条铺，
+     首屏立刻有内容，滚动与点按也还能响应。
+     seq 用来作废上一批：期间切了日期/机位，旧批不能再往新列表里塞。 */
+  const seq = ++clipSeq;
+  let i = 0;
+  (function step(){
+    if(seq !== clipSeq) return;
+    const end = Math.min(i + 30, list.length);
+    for(; i < end; i++){
+      const s = list[i].s;
+      const idx = list[i].i;
+      const size = s.bytes ? s.bytes/1048576
+        : fullDayMbps(cam)*(s.e-s.s)/8/1000;
+      const cov = Math.max(1, segB(s) - segA(s));
+      const d = document.createElement("div");
+      d.className = "card";
+      d.innerHTML =
+        '<canvas class="thumb"></canvas>' +
+        '<div class="cbody">' +
+          '<div class="ct mono">' + hms(segA(s)) + ' – ' + hms(segB(s)) + '</div>' +
+          '<div class="cm"><span>' + (full ? durText(s.e-s.s)
+              : "播放 " + durText(s.e-s.s) + " · 覆盖源 " + durText(cov)) + '</span><span>' + size.toFixed(1) + ' MB</span></div>' +
+          '<div style="margin-top:5px;display:flex;gap:5px">' +
+            (full
+              ? '<span class="tag">' + (s.hits ? "含活动 " + s.hits + " 段" : (s.file ? "连续录像" : "无活动")) + '</span>'
+              : '<span class="tag g">' + (s.src != null ? "归档 · " + hms(s.src) : s.reason) + '</span>') +
+          '</div>' +
         '</div>' +
-      '</div>' +
-      '<svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
-    box.appendChild(d);
-    if(s.file){
-      drawThumbReal(d.querySelector(".thumb"), s);   // 真分片：时间+体积，不画假画面
-    }else{
-      drawThumb(d.querySelector(".thumb"), s.level);
+        '<svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
+      box.appendChild(d);
+      if(s.file){
+        drawThumbReal(d.querySelector(".thumb"), s);   // 真分片：时间+体积，不画假画面
+      }else{
+        drawThumb(d.querySelector(".thumb"), s.level);
+      }
+      d.onclick = ()=> openPlayer(idx);
     }
-    d.onclick = ()=> openPlayer(i);
-  });
+    if(i < list.length) requestAnimationFrame(step);
+  })();
 }
 
 /* 真实分片的缩略图：只标时间和体积，不伪造画面 */
@@ -7116,7 +7132,7 @@ function bindSettings(body){
            + (r.failed||0) + " 片（下次自动重试）"
            + (r.error ? "：" + esc(String(r.error)) : ""));
       STORAGE.data = null; STORAGE.at = 0;   /* 占用变了，存储卡强制重拉 */
-      fetchRecordings();                     /* 归档产物立刻出现在文件页的日期条里 */
+      fetchRecordings(null, true);           /* 归档产物立刻出现在文件页的日期条里（绕过 3 秒缓存） */
       renderCamTabs();
     }catch(e){
       if(poll) clearInterval(poll);
@@ -7589,10 +7605,20 @@ function renderKindChips(day){
   });
 }
 let recRetry = 0;
-function fetchRecordings(done){
+function fetchRecordings(done, force){
   if(typeof fetch !== "function"){ if(done) done(); return; }
-  /* ?_t + no-store 双保险：WebView 曾把空录像清单缓存住，导致回放页永远「无视频文件」 */
-  fetch("/api/recordings?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" }).then(r=>r.json()).then(d=>{
+  /* 首屏还没有任何清单时先亮一句「正在读取」：后端要扫磁盘上两万多个分片，
+     机器慢/盘冷时真会等几秒。不给反馈的话用户看到的是「还没有任何录像文件」，
+     会以为没录上。已有清单时（切页刷新）不打扰，免得闪一下。 */
+  if(!state.rec){
+    state.recLoading = true;
+    try{ applyPlaybackVisibility(); }catch(e){}
+  }
+  /* ?_t + no-store 双保险：WebView 曾把空录像清单缓存住，导致回放页永远「无视频文件」。
+     force=1 绕过服务端 3 秒短缓存：归档刚跑完这类「必须立刻看见」的场合用。 */
+  fetch("/api/recordings?_t=" + Date.now() + (force ? "&force=1" : ""),
+        { mode:"same-origin", cache:"no-store" }).then(r=>r.json()).then(d=>{
+    state.recLoading = false;
     if(!d || !d.ok){ if(done) done(); return; }
     state.rec = d;
     recRetry = 0;
@@ -7603,8 +7629,11 @@ function fetchRecordings(done){
     try{ renderPlay(); }catch(e){}   /* 回放页若开着，吃到新清单后重绘日期条 */
     if(done) done();
   }).catch(()=>{
-    if(recRetry++ < 3) setTimeout(function(){ fetchRecordings(done); }, 2500);   // 服务刚重启时给几次机会
-    else if(done) done();
+    if(recRetry++ < 3){ setTimeout(function(){ fetchRecordings(done); }, 2500); return; }   // 服务刚重启时给几次机会
+    /* 重试都失败：收掉「正在读取」，退回原来的空态文案，别让转圈文案永远挂着 */
+    state.recLoading = false;
+    try{ applyPlaybackVisibility(); }catch(e){}
+    if(done) done();
   });
 }
 
@@ -7698,7 +7727,10 @@ function applyPlaybackVisibility(){
   if(!empty) return;
   empty.style.display = show ? "none" : "block";
   if(!rec || !rec.total){
-    empty.innerHTML = "还没有任何录像文件<br><span style=\"font-size:11.5px;color:var(--faint2)\">填好 RTSP 地址并启用后，录像会按「摄像头 / 日期 / 时段」存进保存目录；出现文件后这里会自动点亮</span>";
+    /* 首屏在等清单时不要说「还没有任何录像」——那句话是结论，不是过程 */
+    empty.innerHTML = state.recLoading
+      ? "正在读取录像清单…<br><span style=\"font-size:11.5px;color:var(--faint2)\">正在扫描磁盘上的分片；分片多的通道第一次会慢一点，之后走缓存</span>"
+      : "还没有任何录像文件<br><span style=\"font-size:11.5px;color:var(--faint2)\">填好 RTSP 地址并启用后，录像会按「摄像头 / 日期 / 时段」存进保存目录；出现文件后这里会自动点亮</span>";
   }else{
     const cam = curCam();
     const what = state.curKind === "archive"

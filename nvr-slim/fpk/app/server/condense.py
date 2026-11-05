@@ -522,7 +522,7 @@ def _hw_fail(ffmpeg):
     _HW_FAIL[ffmpeg] = time.time()
 
 
-def _mp4_duration(path):
+def mp4_duration(path):
     """读 mp4 的 mvhd 时长（秒）；结构不认识就返回 None（调用方放行）。
 
     只按 box 结构走几十字节 seek + read，不调 ffprobe：裁剪完立刻要判断
@@ -582,6 +582,10 @@ def _mp4_duration(path):
     return float(dur) / float(ts)
 
 
+# 兼容旧名（0.9.114 起公开给 nvr_slim 复用：读录像片段时长不必再起 ffprobe）
+_mp4_duration = mp4_duration
+
+
 # 裁剪产物被判「拿不到画面」的门槛：**同时**满足两条才拒收 ——
 #   绝对时长 < 1 秒，且不到窗口的 60%。
 #
@@ -620,7 +624,7 @@ def short_part_reason(out, ss, to, speed=1.0):
         want /= sp                        # 倍速后输出时间轴被压短
     if want <= 0:
         return ""
-    dur = _mp4_duration(out)
+    dur = mp4_duration(out)
     if dur is None:
         return ""
     if dur < TINY_PART_SEC and dur < TINY_PART_RATIO * want:

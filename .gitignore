@@ -30,3 +30,6 @@ nvr-slim/vtl_preview.html
 # （此前 fpk/log/nvr.log 被误跟踪，导致每次跑起来 git status 都是脏的）
 nvr-slim/fpk/log/
 nvr-slim/fpk/test/log/
+
+# 时长缓存（0.9.114）：运行期写在 var/ 下，测试直跑时可能落在 fpk/ 根
+durations.json

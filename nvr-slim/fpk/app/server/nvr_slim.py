@@ -951,6 +951,67 @@ def _scan_day_dirs(base):
 _DUR_CACHE = {}
 _DUR_LOCK = threading.Lock()
 
+# 0.9.114：缓存再落一层盘。归档片段写完就永不变化，可服务一重启内存缓存就空了，
+# 首屏又要对几千个片段逐个读盘（真机实测 2.3 毫秒/片，3000 片 ≈ 7 秒）。
+# 落盘后第二次启动直接命中，文件页秒开；文件被重裁时 size/mtime 变了自然失效。
+_DUR_LOADED = False
+_DUR_DIRTY = 0
+
+
+def _dur_disk_path():
+    return os.path.join(STATE["var_dir"], "durations.json")
+
+
+def _dur_load():
+    """把上次落盘的时长读回内存（惰性、只做一次、失败当没有）。"""
+    global _DUR_LOADED
+    with _DUR_LOCK:
+        if _DUR_LOADED:
+            return
+        _DUR_LOADED = True
+    try:
+        with open(_dur_disk_path(), "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return
+    if not isinstance(raw, dict):
+        return
+    with _DUR_LOCK:
+        for k, v in raw.items():
+            if isinstance(v, list) and len(v) == 3:
+                _DUR_CACHE[k] = ((v[0], v[1]), v[2])
+
+
+def _dur_save(force=False):
+    """把新读到的时长落盘。攒够 100 条或 force 时写一次，别每个文件都写盘。"""
+    global _DUR_DIRTY
+    with _DUR_LOCK:
+        if not _DUR_DIRTY and not force:
+            return
+        if _DUR_CACHE and len(_DUR_CACHE) > 20000:
+            for k in list(_DUR_CACHE)[:10000]:
+                _DUR_CACHE.pop(k, None)
+        _DUR_DIRTY = 0
+        snap = dict((k, [v[0][0], v[0][1], v[1]]) for k, v in _DUR_CACHE.items())
+    try:
+        p = _dur_disk_path()
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snap, f)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def _dur_put(path, key, d):
+    global _DUR_DIRTY
+    with _DUR_LOCK:
+        _DUR_CACHE[path] = (key, d)
+        _DUR_DIRTY += 1
+        hit = _DUR_DIRTY >= 200
+    if hit:
+        _dur_save()
+
 
 def file_duration(path, stat=None):
     """文件的真实播放时长（秒），读不到返回 None。
@@ -963,17 +1024,18 @@ def file_duration(path, stat=None):
         key = (st.st_size, st.st_mtime_ns)
     except OSError:
         return None
+    _dur_load()
     with _DUR_LOCK:
         hit = _DUR_CACHE.get(path)
     if hit and hit[0] == key:
         return hit[1]
-    d = condense.probe_duration(STATE.get("ffprobe_bin"), path)
-    with _DUR_LOCK:
-        # 缓存别无限长：超过 2 万条就清掉一半（老录像淘汰，代价只是重读一次）
-        if len(_DUR_CACHE) > 20000:
-            for k in list(_DUR_CACHE)[:10000]:
-                _DUR_CACHE.pop(k, None)
-        _DUR_CACHE[path] = (key, d)
+    # 先读 mp4 自己的 mvhd（几十字节 seek + read）；读不出才回落 ffprobe。
+    # 0.9.114：以前这里一律起 ffprobe 子进程，冷启动要逐个 probe 几千个归档片段，
+    # 单次几十毫秒，累计就是几分钟 —— 文件页「很久才出来」的主因。
+    d = condense.mp4_duration(path)
+    if not d or d <= 0:
+        d = condense.probe_duration(STATE.get("ffprobe_bin"), path)
+    _dur_put(path, key, d)
     return d
 
 
@@ -1181,7 +1243,22 @@ def parts_payload(cam_filter=""):
             "items": items}
 
 
-def recordings_payload():
+# 录像清单的短缓存（0.9.114）：文件页每次进入/切机位/切日期都会打这个接口，
+# 而它每次都全量 listdir+stat（真机两万多文件）。3 秒足够吸收连点，又不至于
+# 让刚落盘的分片看不见。
+REC_TTL = 3.0
+_REC_CACHE = {"at": 0.0, "key": None, "data": None}
+_REC_LOCK = threading.Lock()
+
+
+def _rec_key():
+    """缓存键：录像根 + 每路「id / 名称 / 实际扫描的目录名」。换盘或改配置自然失效。"""
+    return (record_dir(),
+            tuple((c.get("id"), c.get("name"), tuple(cam_storage_dirs(c)))
+                  for c in cameras()))
+
+
+def recordings_payload(force=False):
     """磁盘上真实存在的录像：每路每天有哪些分片、多大。
 
     full（全时，<摄像头>/<日期>/）与 archive（归档浓缩，_archive/ 下）两套清单
@@ -1191,7 +1268,19 @@ def recordings_payload():
 
     0.9.104 起不再扫描 _clip/：缩时片段（物化切片）已从产品下线，界面没有任何
     消费方。历史 _clip 目录仍由清理任务按保留期删除，不在这里读。
+
+    0.9.114 加 3 秒短缓存：文件页每次进入、切机位、切日期、改配置都会打一次这个
+    接口，而它每次都把 5 路 × 两个源 × 全部日期重新 listdir + stat 一遍（真机
+    两万多个文件）。同一秒内的重复请求直接复用上一次结果，切来切去不再重复扫盘。
+    录像还在写，所以 TTL 不能长；要看刚落盘的新分片可用 ?force=1。
     """
+    key = _rec_key()
+    with _REC_LOCK:
+        hit = _REC_CACHE
+        if (not force and hit["data"] is not None and hit["key"] == key
+                and time.time() - hit["at"] < REC_TTL):
+            return hit["data"]
+    t_scan = time.time()
     root = record_dir()
     per = {}
     arch = {}
@@ -1214,6 +1303,7 @@ def recordings_payload():
                 merged = {x["n"]: x for x in adays.get(f[0], [])}
                 merged.update({x["n"]: x for x in f[1]})
                 adays[f[0]] = [merged[k] for k in sorted(merged)]
+        t_dur = time.time()
         # 归档浓缩必须是真实时长：拿 segment_sec 冒充会让时间轴显示 2 个半小时，
         # 实际 3 秒播完，然后疯狂切文件。
         _attach_durations(adays)
@@ -1225,10 +1315,20 @@ def recordings_payload():
         arch[c["id"]] = adays
         total += sum(len(v) for v in days.values())
     # 回放页时间轴要用真实分片长度，不能在前端写死 300 秒
-    return {"ok": True, "root": root, "total": total,
-            "segment_sec": runtime.segment_sec(runtime.load_config(
-                STATE["var_dir"]).get("record_segment_sec")),
-            "cameras": per, "archive": arch}
+    payload = {"ok": True, "root": root, "total": total,
+               "segment_sec": runtime.segment_sec(runtime.load_config(
+                   STATE["var_dir"]).get("record_segment_sec")),
+               "cameras": per, "archive": arch}
+    cost = time.time() - t_scan
+    # 首屏这次读到的时长立刻落盘：下次服务重启就不用再逐个开文件（只写脏的）
+    _dur_save()
+    # 只在明显慢的时候记一条，正常 100 毫秒内不吵日志
+    if cost > 0.4:
+        _record("录像清单：%d 个文件，扫描 %d 毫秒（其中时长 %d 毫秒）"
+                % (total, int(cost * 1000), int((time.time() - t_dur) * 1000)))
+    with _REC_LOCK:
+        _REC_CACHE.update(at=time.time(), key=key, data=payload)
+    return payload
 
 
 # ---------------------------------------------------------------- 存储占用统计
@@ -2105,7 +2205,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/live":
             return self._send(200, live_payload())
         if path == "/api/recordings":
-            return self._send(200, recordings_payload())
+            # ?force=1 绕过短缓存：归档跑完、手动改了目录结构时用
+            qs = parse_qs(urlparse(self.path).query)
+            force = (qs.get("force") or ["0"])[0] in ("1", "true", "yes")
+            return self._send(200, recordings_payload(force=force))
         if path == "/api/ledger":
             qs = parse_qs(urlparse(self.path).query)
             return self._send(200, ledger_payload(
