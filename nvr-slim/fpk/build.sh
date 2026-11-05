@@ -51,6 +51,9 @@ if [ -n "$NODE" ]; then
   # 断录留洞：活动块按 avail 切段、整段落在断录里留虚线框（0.9.75）
   echo "== 断录切段 =="
   "$NODE" "$ROOT/test/ui/avail_gap.test.js" || exit 1
+  # 回放页归档日期：切得到、坐标用钟点、空日期回退认归档（0.9.110）
+  echo "== 回放页归档日期 =="
+  "$NODE" "$ROOT/test/ui/pv_archive.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

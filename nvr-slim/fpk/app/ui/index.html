@@ -8894,6 +8894,37 @@ function pvSyncVtl(){
   vtlRowHi(PPLAY.t);
 }
 
+/* 回放页这一天该播哪种源：与 loadDay 同一口径（dayKind + 用户手动选的维度）。
+   以前 pvLoadDay 写死 "full"，于是第 4~7 天只有归档的日子永远播不出东西。 */
+function pvKind(day){
+  let kind = dayKind(day);
+  if(state.pmode === "full" || state.pmode === "archive"){
+    const key = state.pmode === "archive" ? "archive" : "cameras";
+    if((((state.rec || {})[key] || {})[state.camId] || {})[day]) kind = state.pmode;
+  }
+  return kind;
+}
+
+/* 回放页的分片清单，统一成「钟点坐标」。
+   全时：realSegs 的 s/e 本来就是钟点，原样用。
+   归档：realSegs 给的 s/e 是「按真实播放时长累加」的播放坐标（0,1,2…），
+         那是文件页顺序播的口径；回放页的 PPLAY.t 要拿去和时间轴红线、OSD、
+         台账活动窗口比对，必须是钟点，混用会整天错位。所以这里改写：
+           s = 源窗口起点 src，e = src + 真实时长
+         · 文件内 0 秒永远对应 s，seek 公式 PPLAY.t - seg.s 两种源通用；
+         · e 取真实时长而不是窗口终点 —— 文件本身只有这么长，照窗口画
+           会播到一半就被判「到头」（真机 148 个片段比标记窗短 ≥1 秒）。 */
+function pvSegs(camId, day){
+  if(!camId || !day) return [];
+  const kind = pvKind(day);
+  const segs = realSegs(camId, day, kind) || [];
+  if(kind !== "archive") return segs;
+  return segs.map(function(x){
+    const len = x.dur > 0.3 ? x.dur : Math.max(1, (x.srcEnd || x.src + 1) - x.src);
+    return Object.assign({}, x, { s: x.src, e: x.src + len, clock: true });
+  });
+}
+
 /* 换机位/换日期：停播并重装分片清单 */
 function pvLoadDay(){
   const day = curDay();
@@ -8901,7 +8932,7 @@ function pvLoadDay(){
     pvStop();
     PPLAY.segIdx = -1; PPLAY.t = 0;
   }
-  PPLAY.segs = (state.camId && day ? realSegs(state.camId, day, "full") : []) || [];
+  PPLAY.segs = pvSegs(state.camId, day);
   PPLAY.endHit = false;   // 新清单装好，「尽头重试」资格恢复
   PPLAY.inAct = false;    // 换日/换机位：不继承上一个清单的「在活动内」状态
   const cam = CAMERAS.find(c=>c.id === state.camId);
@@ -8924,21 +8955,22 @@ function pvEnterStart(){
   return curDay() === jsToday() ? segs[segs.length - 1].s : segs[0].s;
 }
 
-/* 选中的日期没有全时分片（今天还没落盘 / 这是条空日期）→ 退到最近有录像的一天。
+/* 选中的日期一个分片都没有（今天还没落盘 / 这是条空日期）→ 退到最近有录像的一天。
+   全时与归档都算「有录像」：以前只认 full，于是点了只有归档的那天（第 4~7 天）
+   会被悄悄弹回最近的全时日 —— 表现就是「归档的日期切不过去」。
    返回是否发生了切换（切完 PPLAY.segs 已是新日期的清单）。 */
 function pvFallbackDay(){
   if(PPLAY.segs.length) return false;
   const list = (state.dayList || []).slice().reverse();   // 旧→新，从最近的往前找
   for(const d of list){
-    const sg = realSegs(state.camId, d, "full");
-    if(sg && sg.length){
-      state.daySel = d;
-      state.dayIdx = (state.dayList || []).indexOf(d);
-      pvLoadDay();
-      renderPlayDates();          // 实际回退到了别的日期，菜单栏显示跟上
-      renderVtl(null, curDay());
-      return true;
-    }
+    if(!pvSegs(state.camId, d).length) continue;
+    state.daySel = d;
+    state.dayIdx = (state.dayList || []).indexOf(d);
+    loadDay();                  // 清单/时间轴/维度 chip 一起跟上，别只换播放器
+    pvLoadDay();
+    renderPlayDates();          // 实际回退到了别的日期，菜单栏显示跟上
+    renderVtl(null, curDay());
+    return true;
   }
   return false;
 }
