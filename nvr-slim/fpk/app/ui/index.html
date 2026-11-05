@@ -29,6 +29,8 @@ if(d)document.documentElement.dataset.theme="dark";}catch(e){}})();</script>
      #5c8dff 后几乎一模一样，图例完全失效。改用紫色，与全时的蓝拉开 60° 以上，
      浅色/深色两套主题都成立。时间轴归档块同步用这个色。 */
   --arch:#8b5cf6;
+  /* 归档色的淡底与描边（0.9.113 文件页日期条分色用） */
+  --arch-soft:#efe7fd; --arch-line:#d9c8fb;
   --pw:390px; --ph:844px;
 }
 /* 深色：跟随系统（html[data-theme=dark]，由 head 内联脚本与下方 THEME 引擎控制） */
@@ -45,6 +47,7 @@ html[data-theme="dark"]{
   --stage:#0a0c10; --dot:#8fa0bd; --live:#2fd08b;
   --ev-veh:#34d399;
   --arch:#a78bfa;   /* 归档色（深色下提亮，仍与 --primary:#5c8dff 区分得开） */
+  --arch-soft:#241d38; --arch-line:#3d3160;
 }
 html[data-theme="dark"] .card{box-shadow:0 1px 2px rgba(0,0,0,.45)}
 html[data-theme="dark"] .toast{background:rgba(8,10,14,.94)}
@@ -134,12 +137,32 @@ body:not(.desktop) .phone{width:100%!important;height:100dvh!important;border-ra
 .dates::-webkit-scrollbar{display:none}
 .dchip{flex:0 0 auto;min-width:56px;height:54px;border-radius:13px;background:var(--bg);
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;
-  border:1px solid transparent;transition:.15s}
+  border:1px solid transparent;transition:.15s;position:relative;overflow:hidden}
 .dchip .w{font-size:11px;color:var(--faint)}
 .dchip .d{font-size:15px;font-weight:600;letter-spacing:-.3px}
 .dchip .k{font-size:10px;color:var(--faint2)}
+/* 0.9.113 日期条按「这天磁盘上有什么源」分色，与时间轴/存储条的图例同色系
+   （蓝=全时 --primary / 紫=归档 --arch）：
+     full    灰底 + 淡蓝底边（常态）
+     archive 淡紫底 + 紫日期 + 实紫底边（全时已过期，只剩归档浓缩）
+     both    蓝→紫渐变底 + 蓝→紫渐变底边（归档交接期，两个源都在，约一天）
+   底边条是主识别手段：纯淡底在浅色主题下与 --bg:#f4f5f7 差得太少，看不出。
+   选中态整块换成对应源的底色、白字，底边条隐去（底色本身已说明是哪种源）。 */
+.dchip::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;
+  background:var(--primary);opacity:.5}
+.dchip[data-k="archive"]{background:var(--arch-soft);border-color:var(--arch-line)}
+.dchip[data-k="archive"] .d{color:var(--arch)}
+.dchip[data-k="archive"]::after{background:var(--arch);opacity:1}
+.dchip[data-k="both"]{background:linear-gradient(135deg,var(--primary-soft2),var(--arch-soft));
+  border-color:var(--arch-line)}
+.dchip[data-k="both"] .d{color:var(--primary)}
+.dchip[data-k="both"]::after{background:linear-gradient(90deg,var(--primary),var(--arch));opacity:1}
 .dchip.on{background:var(--primary);border-color:var(--primary)}
-.dchip.on .w,.dchip.on .d,.dchip.on .k{color:#fff}
+.dchip.on[data-k="archive"]{background:var(--arch);border-color:var(--arch)}
+.dchip.on[data-k="both"]{background:linear-gradient(135deg,var(--primary),var(--arch));border-color:var(--arch)}
+.dchip.on::after{opacity:0}
+.dchip.on .w,.dchip.on .d,.dchip.on .k,
+.dchip.on[data-k="archive"] .d,.dchip.on[data-k="both"] .d{color:#fff}
 .dchip.on .k{opacity:.75}
 
 /* 概览 */
@@ -2781,20 +2804,31 @@ function renderDates(){
   recalcDayList();                       // 顺序只有这一种：旧→新全量，别处不得再排
   const list = state.dayList;
   box.innerHTML = "";
-  const today = new Date().toISOString().slice(0,10);
+  /* 0.9.113 修「昨天被标成今天」：这里原来用 new Date().toISOString().slice(0,10)，
+     toISOString 走 UTC —— 北京时间 00:00~08:00 之间 UTC 还停在前一天，于是日期条
+     把昨天写成「今天」，而今天那格反倒显示成周几。全文件就地用本地日历 jsToday。 */
+  const today = jsToday();
   list.forEach((d,i)=>{
     const dt = new Date(d+"T00:00:00");
     const rec = state.rec || {};
     const camDays = (rec.cameras && rec.cameras[state.camId]) || {};
     const archDays = (rec.archive && rec.archive[state.camId]) || {};
     /* 日期条的体积按「那天磁盘上真实存在的所有源」合计：全时 + 归档 */
-    const files = (camDays[d] || []).concat(archDays[d] || []);
+    const fullArr = camDays[d] || [];
+    const archArr = archDays[d] || [];
+    const files = fullArr.concat(archArr);
     const bytes = files.reduce((a,f)=>a+(f.b||0),0);
     const ktext = files.length
       ? (bytes >= 1073741824 ? (bytes/1073741824).toFixed(1)+"G" : Math.max(1,Math.round(bytes/1048576))+"M")
       : "—";
+    /* 这天是哪种源（配色依据）：两个都在 → both（归档交接期，只持续一天左右） */
+    const kind = (fullArr.length && archArr.length) ? "both"
+      : (archArr.length ? "archive" : "full");
     const b = document.createElement("button");
     b.className = "dchip" + (i===state.dayIdx ? " on" : "");
+    b.dataset.k = kind;
+    b.title = kind === "both" ? "全时 + 归档都有（归档交接期，约一天）"
+      : kind === "archive" ? "只有归档浓缩（全时已过期）" : "全时录像（原画）";
     b.innerHTML = '<span class="w">' + (d===today ? "今天" : WD[dt.getDay()].replace("周","")) + '</span>' +
       '<span class="d">' + d.slice(5).replace("-","/") + '</span>' +
       '<span class="k">' + ktext + '</span>';
@@ -7492,7 +7526,17 @@ function recalcDayList(){
   }
   state.dayList = all;
   let idx = state.daySel ? all.indexOf(state.daySel) : -1;
-  if(idx < 0) idx = all.length ? all.length - 1 : 0;   // 没选过/选中的天没了 → 最新一天
+  if(idx < 0){
+    /* 没选过 / 选中的天没了 → 落在「最近一个真有录像的日子」。
+       以前直接取 all.length-1，而 all 末位永远补着今天，于是凌晨打开文件页
+       时今天还没落盘、列表整片空白。今天有片时这里仍然选中今天，行为不变。 */
+    idx = -1;
+    for(let i = all.length - 1; i >= 0; i--){
+      const hv = dayHas(all[i]);
+      if(hv.full || hv.archive){ idx = i; break; }
+    }
+    if(idx < 0) idx = all.length ? all.length - 1 : 0;
+  }
   state.dayIdx = idx;
 }
 

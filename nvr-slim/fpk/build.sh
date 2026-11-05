@@ -54,6 +54,9 @@ if [ -n "$NODE" ]; then
   # 回放页归档日期：切得到、坐标用钟点、空日期回退认归档（0.9.110）
   echo "== 回放页归档日期 =="
   "$NODE" "$ROOT/test/ui/pv_archive.test.js" || exit 1
+  # 文件页日期条：今天用本地日历、按源分色、默认落点（0.9.113）
+  echo "== 文件页日期条 =="
+  "$NODE" "$ROOT/test/ui/dates.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

@@ -489,8 +489,10 @@ ck("多日·dayList 旧→新全量（末尾补今天）",
    get('state.dayList.join(",")') === "2026-10-20,2026-10-21,2026-10-22," + get('jsToday()'));
 ck("多日·daySel 命中原选中日（不串天）", get('state.dayIdx') === 1 && get('curDay()') === "2026-10-21");
 run('state.daySel = null; recalcDayList();');
-ck("多日·未选时默认最新一天（今天没文件也补进下拉）",
-   get('state.dayIdx') === 3 && get('curDay()') === get('jsToday()'));
+/* 0.9.113 起默认落点是「最近一个真有录像的日子」：今天虽然补进了末尾，
+   但还没落盘，落到今天会得到一片空白列表。今天有片时仍是今天（下一条）。 */
+ck("多日·未选时默认最近有片的一天（今天空 → 退到 10-22）",
+   get('state.dayIdx') === 2 && get('curDay()') === "2026-10-22");
 run('state.rec.cameras[tc][jsToday()] = [{n:"11-00-00.mp4",b:1024}]; state.daySel = null; recalcDayList();');
 ck("多日·今天已有文件时不重复补",
    get('state.dayList.filter(d=>d===jsToday()).length') === 1 && get('state.dayIdx') === 3);
