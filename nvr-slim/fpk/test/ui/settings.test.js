@@ -1174,7 +1174,11 @@ h = body();
 ck("检测·通用设置卡合并为「检测」", h.includes("移动侦测 + AI 识别"));
 ck("检测·移动侦测组常显（不需要 AI）", h.includes("移动侦测（像素差）"));
 ck("AI·总闸默认关", h.includes("data-deten=\"1\"") && h.includes("默认关闭"));
-ck("AI·总闸关时其余选项收起", !h.includes('data-detcls="person"'));
+/* 0.9.112：三块重复开关合并成矩阵后，AI 关不再「收起」人员/车辆行，
+   而是整行置灰 + 一句说明 —— 收起会让人以为没有这个功能。 */
+ck("AI·总闸关时人员/车辆三行置灰并说明",
+   (h.match(/class="cmx-r off"/g) || []).length === 3
+   && h.includes("AI 未开启") && h.includes("先打开上方总闸"));
 /* 0.9.61：触发与通知移出总闸——关了 AI 也要能配移动侦测通知 */
 ck("检测·AI 关闭时缩时触发仍可配", (()=>{
   run('LK.detEnable = false; renderCamTabs();');
@@ -1194,6 +1198,33 @@ ck("AI·通知三开关 + webhook + 冷却",
    (h.match(/data-ntsw="(motion|person|vehicle)"/g) || []).length === 3
    && h.includes('id="ntWebhook"') && h.includes('data-ntcd="-30"'));
 ck("AI·诊断区有 AI 检测卡", h.includes("cardDetectDiag") || h.includes("AI 检测"));
+/* 0.9.112：类别矩阵 —— 一行一个类别、三列 = 记录 / 算活动 / 通知。
+   合并前是 9 个开关分三块写三遍，只在细节上不同，用户看不出关系。 */
+ck("检测·类别矩阵表头按 记录→算活动→通知 排列", (()=>{
+  const i = h.indexOf('class="cmx-h"');
+  if(i < 0) return false;
+  const seg = h.slice(i, i + 220);
+  const x = seg.indexOf("记录"), y = seg.indexOf("算活动"), z = seg.indexOf("通知");
+  return x > 0 && y > x && z > y;
+})());
+ck("检测·矩阵四行（移动侦测/人员/两轮车/车辆）",
+   (h.match(/class="cmx-r/g) || []).length === 4
+   && h.includes("移动侦测") && h.includes("两轮车"));
+ck("检测·移动侦测的记录列是占位（帧差不分类别）",
+   /cmx-r[^>]*>\s*<span class="cmx-lab">移动侦测<\/span><span class="cmx-dash">—<\/span>/.test(h));
+ck("检测·两轮车的触发与通知标「并入车辆」",
+   (h.match(/cmx-dash">并入车辆/g) || []).length === 2);
+ck("检测·三列开关数量与合并前一致（各 3 个，绑定不用改）",
+   (h.match(/data-detcls="(person|two_wheeler|vehicle)"/g) || []).length === 3
+   && (h.match(/data-dettrig="(motion|person|vehicle)"/g) || []).length === 3
+   && (h.match(/data-ntsw="(motion|person|vehicle)"/g) || []).length === 3);
+ck("检测·矩阵说明点出「记录进台账 / 算活动进事件 / 通知发 Webhook」",
+   h.includes("写不写进活动台账") && h.includes("进不进事件列表与缩时")
+   && h.includes("发不发 Webhook"));
+ck("检测·通知块只剩投递参数（类别已上移）",
+   h.includes("通知通道") && h.includes('id="ntWebhook"')
+   && !h.includes("人员检测通知") && !h.includes("车辆检测通知"));
+
 
 /* 每路检测段（手风琴第四段）——先把总闸打开、本路回到 follow，
    否则类别行按「本路关/全局关」隐藏，断言不到东西 */

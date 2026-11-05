@@ -443,6 +443,19 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .swrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--line2);font-size:12.5px;color:var(--text2)}
 .swrow:first-of-type{border-top:none;padding-top:2px}
 .swrow .sw{margin-left:auto;flex:0 0 40px}
+/* 类别矩阵（0.9.112）：一行一个类别，三列 = 记录 / 算活动 / 通知。
+   以前三块各写三个开关，九个开关里八个重复，用户看不出它们的关系。 */
+.cmx{margin-top:10px;padding-top:6px}
+.cmx-h,.cmx-r{display:flex;align-items:center;gap:8px}
+.cmx-h{padding-bottom:1px}
+.cmx-col{width:46px;flex:0 0 46px;text-align:center;font-size:11px;color:var(--faint)}
+.cmx-c{width:46px;flex:0 0 46px;display:flex;justify-content:center}
+.cmx-c .sw{margin-left:0;flex:0 0 40px}
+.cmx-dash{width:46px;flex:0 0 46px;text-align:center;font-size:10.5px;color:var(--faint)}
+.cmx-r{padding:7px 0;border-top:1px solid var(--line2)}
+.cmx-r.off{opacity:.38;pointer-events:none}
+.cmx-lab{flex:1;min-width:0;font-size:12.5px;color:var(--text2);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .btnline{width:100%;height:37px;border-radius:10px;background:var(--primary-soft);color:var(--primary);
   font-size:13px;font-weight:500;margin-top:10px}
 .btnline:active{background:var(--primary-soft2)}
@@ -5163,21 +5176,26 @@ function detStatusLine(){
 }
 
 function cardDetect(){
-  const clsRow = (k, label, hint) =>
-    '<div class="swrow"><span>' + label + '</span>'
-    + '<div class="sw ' + (LK.detCls[k]?"on":"") + '" data-detcls="' + k + '"></div></div>'
-    + (hint ? '<div class="h" style="margin-top:2px">' + hint + '</div>' : '');
-  const trigRow = (k, label) =>
-    '<div class="swrow" style="border:none;padding:5px 0 0"><span>' + label + '</span>'
-    + '<div class="sw ' + (LK.detTrigger[k]?"on":"") + '" data-dettrig="' + k + '"></div></div>';
-  const ntRow = (k, label, on) =>
-    '<div class="swrow" style="border:none;padding:5px 0 0"><span>' + label + '</span>'
-    + '<div class="sw ' + (on?"on":"") + '" data-ntsw="' + k + '"></div></div>';
+  /* 0.9.112：三块「同样的三个类别」合并成一张矩阵。
+     以前是「检测类别」3 个开关、「活动触发」3 个开关、「通知」3 个开关，
+     九次重复、只有细节不同（触发与通知多了移动侦测、少了单独的两轮车），
+     用户很难看出三者是什么关系。现在一行一个类别，三列分别是
+     记录 / 算活动 / 通知，语义直接摆在一行里。
+     data-detcls / data-dettrig / data-ntsw 三个属性名刻意保持不变，
+     所以下面的事件绑定代码一行都不用改。 */
+  const aiOff = !LK.detEnable;
+  const cell = (attr, k, on) =>
+    '<span class="cmx-c"><div class="sw ' + (on ? 'on' : '') + '" '
+    + attr + '="' + k + '"></div></span>';
+  const dash = '<span class="cmx-dash">—</span>';
+  const join = '<span class="cmx-dash">并入车辆</span>';
+  const row = (label, rec, trig, nt, off) =>
+    '<div class="cmx-r' + (off ? ' off' : '') + '">'
+    + '<span class="cmx-lab">' + label + '</span>' + rec + trig + nt + '</div>';
   return '<div class="gcard">'
     + '<h3>检测 <span class="sub">移动侦测 + AI 识别 · 所有摄像头共用 · 每路可单独覆盖</span></h3>'
     /* 组 1：移动侦测（像素差）。不需要 AI、没有自己的总闸——它随「事件侦测与归档
-       方案」运行，方案关闭就不判定。参数在每路「检测」段，这里只做说明与指路，
-       免得用户到处找「帧差设置在哪」。 */
+       方案」运行，方案关闭就不判定。参数在每路「检测」段，这里只做说明与指路。 */
     + '<div class="srow" style="padding-top:0;border-top:none">'
       + '<div class="top"><span class="n">移动侦测（像素差）</span>'
         + '<span class="v">' + (LK.condenseMode === "off"
@@ -5188,26 +5206,18 @@ function cardDetect(){
         + '灵敏度、判读引擎、像素差门槛等参数在<b>摄像头设置 → 检测段</b>，每路可单独调；'
         + '判读滤镜是否可用见「诊断与日志 · 环境自检」。</div>'
     + '</div>'
-    /* 组 2：AI 识别。总闸关时下面全部收起，不出现假选项 */
+    /* 组 2：AI 总闸 */
     + '<div class="srow">'
       + '<div class="top"><span class="n">AI 识别（人 / 两轮车 / 车）</span>' + detStatusLine() + '</div>'
       + '<div class="swrow" style="border:none;padding:6px 0 0"><span>开启（每 5 秒/路抽帧 · CPU 推理）</span>'
         + '<div class="sw ' + (LK.detEnable?"on":"") + '" data-deten="1"></div></div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">默认关闭。开启后每 5 秒对每路抽 1 帧推理（YOLO11n · CPU），'
-        + '检出的人 / 两轮车 / 车辆按<b>每路勾选的类别</b>记进活动台账，与移动侦测的台账合并后'
+        + '检出的人 / 两轮车 / 车辆按下表与<b>每路勾选的类别</b>记进活动台账，与移动侦测的台账合并后'
         + '一起供给回放页筛选、活动触发和通知。不换硬件也能跑：i3-12100 扛 5 路只占约半个核。</div>'
     + '</div>'
     + (LK.detEnable ? (
-      /* 检测类别（全局默认）：每路三开关初值从这里拷过去 */
-      '<div class="srow">'
-      + '<div class="n">检测类别（全局默认）</div>'
-      + clsRow("person", "人员", "")
-      + clsRow("two_wheeler", "两轮车（自行车 / 电动车 / 摩托车合并）", "远距离是小目标，阈值已系统性放低换召回；夜间红外画面检出率会下降。")
-      + clsRow("vehicle", "车辆（汽车 / 卡车 / 巴士）", "")
-      + '<div class="h" style="margin-top:6px">只为需要的内容花算力。每路可在摄像头设置的「检测」段单独覆盖（如院子检车和人、客厅只检人）。</div>'
-    + '</div>'
       /* 灵敏度三档 → 分品类阈值 */
-    + '<div class="srow">'
+      '<div class="srow">'
       + '<div class="top"><span class="n">灵敏度</span><span class="v">'
         + (LK.detSens==="high" ? "高" : LK.detSens==="low" ? "低" : "标准") + '</span></div>'
       + '<div class="chips">'
@@ -5217,34 +5227,55 @@ function cardDetect(){
       + '</div>'
       + '<div class="h">高=多报（阈值 人.45/两轮.28/车.35），低=少报（.55/.38/.45）。漏检比误检好——误检会污染台账和事件判定。</div>'
     + '</div>'
-      /* 0.9.111：删掉「实时检测（下个版本）」这个永远点不动的按钮。
-         留一个灰着的未来选项没有信息量，反而让人反复去点、怀疑自己没配对。 */
+      /* 0.9.111：删掉「实时检测（下个版本）」这个永远点不动的按钮。 */
     + '<div class="srow">'
       + '<div class="top"><span class="n">检测模式</span><span class="v">快照检测 · 每 5 秒 / 路</span></div>'
       + '<div class="h">按固定间隔抓一帧做判读，对「有人 / 有车经过」的台账事件已经够用，且几乎不占 CPU。</div>'
     + '</div>'
     ) : '')
-    /* 组 3：触发与通知。刻意放在 AI 总闸之外——移动侦测的通知不需要 AI，
-       以前这两组缩在 detEnable 里，「关了 AI 就配不了移动侦测通知」。 */
+    /* 组 3：类别矩阵。三件事写在一行里，取代原来三块重复的开关。 */
     + '<div class="srow">'
-      + '<div class="top"><span class="n">活动触发</span><span class="v">未勾选的类别按静止画面剔除</span></div>'
-      + trigRow("motion", "移动侦测（像素差，不需要 AI）")
-      + trigRow("person", "人员")
-      + trigRow("vehicle", "车辆（含两轮车）")
-      + '<div class="h" style="margin-top:6px;line-height:1.55">台账照实记录所有检出类别（回放页可分别筛选）；'
-        + '<b>算不算活动、进不进事件</b>由这里裁决。至少保留一项。AI 关闭时只有「移动侦测」一项生效，行为与以前完全一致。</div>'
+      + '<div class="n">按类别控制</div>'
+      + '<div class="h" style="margin-top:2px;line-height:1.55">一行一个类别，三列分别管三件事：'
+        + '<b>记录</b>＝写不写进活动台账，<b>算活动</b>＝进不进事件列表与缩时，<b>通知</b>＝发不发 Webhook。</div>'
+      + '<div class="cmx">'
+        + '<div class="cmx-h"><span class="cmx-lab">类别</span>'
+          + '<span class="cmx-col">记录</span>'
+          + '<span class="cmx-col">算活动</span>'
+          + '<span class="cmx-col">通知</span></div>'
+        + row("移动侦测", dash,
+              cell("data-dettrig", "motion", LK.detTrigger.motion),
+              cell("data-ntsw", "motion", LK.ntMotion), false)
+        + row("人员",
+              cell("data-detcls", "person", LK.detCls.person),
+              cell("data-dettrig", "person", LK.detTrigger.person),
+              cell("data-ntsw", "person", LK.ntPerson), aiOff)
+        + row("两轮车",
+              cell("data-detcls", "two_wheeler", LK.detCls.two_wheeler),
+              join, join, aiOff)
+        + row("车辆",
+              cell("data-detcls", "vehicle", LK.detCls.vehicle),
+              cell("data-dettrig", "vehicle", LK.detTrigger.vehicle),
+              cell("data-ntsw", "vehicle", LK.ntVehicle), aiOff)
+      + '</div>'
+      + '<div class="h" style="margin-top:8px;line-height:1.55">'
+        + '移动侦测是像素差，不分类别，所以「记录」列没有开关；'
+        + '两轮车在<b>触发与通知</b>上并入车辆（后端同一口径，无法单独控制），'
+        + '要它不参与就关车辆那两列，想连录像也别留就关它「记录」列的开关——'
+        + '但那样这段画面不会再进归档。记录与算活动各列至少留一项，通知可以全关。'
+        + (aiOff ? '<br><b>AI 未开启</b>：人员 / 两轮车 / 车辆三行暂不生效，先打开上方总闸。' : '')
+      + '</div>'
     + '</div>'
+    /* 组 4：通知通道。类别开关已经上移到矩阵，这里只剩投递参数。 */
     + '<div class="srow">'
-      + '<div class="n">通知</div>'
-      + ntRow("motion", "移动侦测通知", LK.ntMotion)
-      + ntRow("person", "人员检测通知", LK.ntPerson)
-      + ntRow("vehicle", "车辆检测通知（含两轮车）", LK.ntVehicle)
+      + '<div class="n">通知通道</div>'
       + '<div class="swrow" style="border:none;padding:8px 0 0"><span>冷却（同路同类最小间隔）</span>'
         + '<div class="stepper"><button data-ntcd="-30">−</button><span class="val">' + LK.ntCooldown + ' 秒</span><button data-ntcd="30">+</button></div></div>'
       + '<input type="url" class="mono" id="ntWebhook" placeholder="https://example.com/webhook" value="' + esc(LK.ntWebhook) + '"'
         + ' style="margin-top:8px;width:100%;box-sizing:border-box;height:36px;padding:0 10px;'
         + 'border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font-size:12.5px">'
-      + '<div class="h" style="margin-top:6px;line-height:1.55">经自定义 Webhook 发送（飞书 / 钉钉 / 企业微信 / Server酱 / Bark 等标准格式）。'
+      + '<div class="h" style="margin-top:6px;line-height:1.55">上表里勾了「通知」的类别，经这个 Webhook 发出'
+        + '（飞书 / 钉钉 / 企业微信 / Server酱 / Bark 等标准格式）。'
         + 'fnOS 未开放应用级系统通知接口，故不走系统通知中心。没有冷却，移动侦测通知能把手机炸掉。</div>'
       + '<div style="display:flex;gap:8px;margin-top:8px">'
         + '<button class="btnline" id="btnNtTest" style="flex:1">测试发送</button>'
