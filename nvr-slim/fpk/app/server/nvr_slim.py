@@ -46,6 +46,7 @@ import notify  # noqa: E402
 import archive  # noqa: E402
 import health  # noqa: E402
 import auth  # noqa: E402
+import redact  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
 # 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
@@ -97,8 +98,9 @@ def _log_path():
     return os.path.join(STATE["var_dir"], "log", "nvr.log")
 
 
-# RTSP 地址里的 user:pass 一律脱敏成 ***，日志可放心发给开发者或贴出来
-_CRED = re.compile(r'(rtsp://)[^@/\s]+@')
+# 凭证统一走 redact.mask_text（RTSP/HTTP 的 user:pass、URL 里的 token 参数、
+# Authorization 头、会话 cookie、以及 token 字面量）。以前这里只有一条只认
+# rtsp:// 的正则，加了 API 凭证之后它管不住攻击面。
 
 
 def _tb_where():
@@ -218,7 +220,7 @@ def _record(line, lvl=None):
 
     lvl 为 None 时按内容自动判级；显式传 "info"/"warn"/"err" 可覆盖。
     """
-    line = _CRED.sub(r'\1***@', line)
+    line = redact.mask_text(line)
     if lvl not in ("info", "warn", "err"):
         lvl = log_level(line)
     _count_level(lvl)
@@ -275,7 +277,7 @@ def _record_access(line):
     次数在 _access_tail_locked() 里补一行。总量 _ACCESS_TOTAL 照常累加，
     诊断页仍能看出「这次到底发生了多少请求」。
     """
-    line = _CRED.sub(r'\1***@', line)
+    line = redact.mask_text(line)
     with _ACCESS_LOCK:
         _ACCESS_TOTAL[0] += 1
         path = _access_path(line)
@@ -504,7 +506,7 @@ def log_export_text():
             except OSError:
                 continue
     text = "\n".join(head + body)
-    return _CRED.sub(r'\1***@', text)
+    return redact.mask_text(text)
 
 
 
@@ -961,9 +963,8 @@ def _probe_one(cam, ff, fp, root=None, seg_sec=None):
                                 "-i", url], capture_output=True, timeout=25)
             rep["probe_ok"] = True
             raw = (r.stdout or b"").decode("utf-8", "replace")
-            rep["probe_err"] = _CRED.sub(r"\1***@",
-                                         (r.stderr or b"").decode("utf-8", "replace")
-                                         ).strip()[-500:]
+            rep["probe_err"] = redact.mask_text(
+                (r.stderr or b"").decode("utf-8", "replace")).strip()[-500:]
             try:
                 js = json.loads(raw) if raw.strip() else {}
             except ValueError:
@@ -1019,7 +1020,7 @@ def _probe_one(cam, ff, fp, root=None, seg_sec=None):
         cmd[j:j] = ["-t", "8"]
         r = subprocess.run(cmd, capture_output=True, timeout=40)
         err = (r.stderr or b"").decode("utf-8", "replace")
-        err = _CRED.sub(r"\1***@", err)
+        err = redact.mask_text(err)
         rep["trial_err"] = err.strip()[-4000:]
         rep["trial_rc"] = r.returncode
         # Stream mapping 那几行是"到底有没有输出流"的铁证，单独拎出来

@@ -4183,6 +4183,13 @@ function pushCfg(){
       /* 服务端把配置收敛过（比如端口/并发被夹取），以它回来的为准重新对齐一次 */
       lastPushedAt = Date.now();
       applyServerCfg(d.config);
+      /* 清空标记是一次性的：服务端在 merge_cam_urls 里消费掉它并落盘。
+         本地若一直留着，下次任何推送都会再删一遍地址 —— 用户在两台设备之间
+         来回切换时，这足以把刚配好的地址莫名其妙清掉。 */
+      CAMERAS.forEach(c=>{
+        const p = camParams[c.id];
+        if(p){ p.urlClear = false; p.subClear = false; }
+      });
     }else if(d && d.ok === false){
       lastPushSig = "";            /* 失败允许下次重发，别把签名钉死 */
     }
@@ -5974,11 +5981,25 @@ function renderCamEdit(c, p){
       + (c.hasUrl && !p.main
           ? "已保存在 NAS（本机不显示明文）· 留空 = 不修改"
           : "rtsp://192.0.2.10:554/stream1") + '"></div>'
+    /* 「留空 = 不修改」与「清掉地址」必须是两个动作。
+       0.9.120 起明文不再留在本机（localStorage 里没有地址），所以输入框是空的
+       这件事本身只代表"本机不知道"，不能推断成"要删掉"；真要删就点这个按钮，
+       由它打 url_clear 标记。 */
+    + (c.hasUrl && !p.main
+        ? '<div class="hint" style="margin:-4px 0 10px;font-size:10.5px">'
+          + '<button class="minibtn" data-nuke="main">清除 NAS 上已保存的主码流地址</button>'
+          + '<span style="margin-left:8px">换机位才用 · 清空后这一路会停止录像</span></div>'
+        : '')
     + '<div class="fld2"><label>子码流 RTSP · 预览用（可空，留空则用主码流）</label>'
       + '<input type="text" class="mono" value="' + esc(p.sub) + '" data-k="sub" placeholder="'
       + (c.hasSub && !p.sub
           ? "已保存在 NAS（本机不显示明文）· 留空 = 不修改"
           : "rtsp://192.0.2.10:554/stream2") + '"></div>'
+    + (c.hasSub && !p.sub
+        ? '<div class="hint" style="margin:-4px 0 10px;font-size:10.5px">'
+          + '<button class="minibtn" data-nuke="sub">清除 NAS 上已保存的子码流地址</button>'
+          + '<span style="margin-left:8px">清空后预览改用主码流</span></div>'
+        : '')
     + '<div class="hint" style="margin:6px 0 10px;font-size:10.5px">需要认证就把用户名密码写进地址：'
       + '<code style="font-size:10px">rtsp://user:pass@ip:554/...</code></div>'
     + '<div class="swrow"><div><span class="n">该摄像头启用</span>'
@@ -6444,11 +6465,12 @@ function saveDraft(){
   const id = state.camId;
   if(!id || !SET.draft) return;
   const dst = camParams[id];
-  /* 地址清空意图：明文只在本机。本地原本有、保存时被清空 → 用户真想清，
-     打显式标记让服务端真清；本地本来就没有（换设备/清缓存）→ 空值只代表
-     "不知道"，服务端会回落 NAS 上已存的旧地址，绝不覆盖。 */
-  dst.urlClear = !!(dst.main && !SET.draft.main);
-  dst.subClear = !!(dst.sub && !SET.draft.sub);
+  /* 地址清空意图只认显式动作（编辑页「清除地址」按钮打的标记）。
+     以前是"本地曾有明文 + 保存时被清空"来推断，那条路在 0.9.120 断了：
+     明文不再留在本机，输入框在任何刷新过的页面上都是空的 —— 若还按旧规则
+     推断，每次保存任何一项设置都会把 NAS 上的地址删掉。 */
+  dst.urlClear = !!SET.draft.urlClear;
+  dst.subClear = !!SET.draft.subClear;
   Object.keys(SET.draft).forEach(k=>{ dst[k] = SET.draft[k]; });
   SET.editing = false; SET.draft = null; SET.open = id;
   renderCamTabs();
@@ -7589,6 +7611,9 @@ function bindSettings(body){
       const k = inp.dataset.k;
       const v = inp.type === "range" ? +inp.value : inp.value;
       draftSet(k, v);
+      /* 又填了新地址 → 之前点的「清除」作废：用户的最后意图是"改成这个"，
+         不是"先删再建"。服务端也按"新明文优先于 clear 标记"处理，两边一致。 */
+      if((k === "main" || k === "sub") && v) draftSet(k === "main" ? "urlClear" : "subClear", false);
       syncOuts();
     };
     inp.onchange = inp.oninput;
@@ -7597,6 +7622,18 @@ function bindSettings(body){
   if(nm) nm.oninput = ()=>{ const c = curCam(); if(c) c.name = nm.value; };
 
   /* 编辑态：快照型按钮（点击后重绘） */
+  body.querySelectorAll("[data-nuke]").forEach(el=>{
+    el.onclick = e=>{
+      e.stopPropagation();
+      /* 只打标记、不直接发请求：和别的改动一样走「点保存才生效」，
+         用户误点了还能取消（取消 = 丢掉草稿，标记也就没了）。 */
+      const k = el.dataset.nuke;
+      if(k === "main"){ draftSet("main", ""); draftSet("urlClear", true); }
+      else { draftSet("sub", ""); draftSet("subClear", true); }
+      renderCamTabs();
+      toast("toast2", "已标记清除 · 点「保存」才真正删掉 NAS 上的地址");
+    };
+  });
   body.querySelectorAll("[data-camseg]").forEach(el=>{
     el.onclick = ()=>{
       draftSet("segSec", +el.dataset.camseg);
@@ -7748,7 +7785,18 @@ function saveCfg(){
     cfgTimer = null;
     pushCfg();
     const params = {};
-    CAMERAS.forEach(c=>{ if(camParams[c.id]) params[c.id] = camParams[c.id]; });
+    CAMERAS.forEach(c=>{
+      const p = camParams[c.id];
+      if(!p) return;
+      /* 地址与其中的账号密码不落盘（0.9.120）。
+         以前整份 camParams 直接序列化，于是 rtsp://user:pass@ip 就永久留在了
+         这台设备的 localStorage 里 —— 而它很可能是前台电脑或临时借来的手机，
+         清缓存之前谁都读得到。现在明文只在内存里活到页面关闭；要看/改地址
+         就重新填一遍，只改别的设置则留空即可（服务端回落 NAS 值）。 */
+      const q = Object.assign({}, p);
+      delete q.main; delete q.sub; delete q.url; delete q.subUrl;
+      params[c.id] = q;
+    });
     localStorage.setItem(CFG_KEY, JSON.stringify({
       v: 1,
       cams: CAMERAS.map(c=>({ id:c.id, name:c.name, ch:c.ch, res:c.res, online:!!c.online })),
@@ -7801,6 +7849,11 @@ function loadCfg(){
     const saved = d.params && d.params[c.id];
     const p = cfgMerge(defaultCamParams(c, i), saved || null);
     p.masks = normMasks(p.masks);
+    /* 旧版本把明文地址存在这里（0.9.120 之前）。读到就清空：留着等于帮它续命，
+       而且一旦被 pushCfg 带上服务端，服务端会当成"新地址"覆盖 —— 明明没改。
+       键保留成空串（不是删掉），下面渲染与推送都按"本机没有明文"处理。 */
+    p.main = ""; p.sub = "";
+    delete p.url; delete p.subUrl;
     /* 老配置迁移：0~100 的灵敏度百分比 / 最短保留 / 静默合并 → 新判读模型 */
     p.judge = normJudge(p.judge, saved || null);
     delete p.sensitivity; delete p.minKeep; delete p.mergeGap;

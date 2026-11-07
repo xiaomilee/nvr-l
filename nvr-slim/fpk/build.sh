@@ -69,6 +69,9 @@ if [ -n "$NODE" ]; then
   # 凭证引导：引导层能开合、token 存得住清得掉（0.9.120）
   echo "== 凭证引导 =="
   "$NODE" "$ROOT/test/ui/auth.test.js" || exit 1
+  # 凭据不出本机：明文地址不落 localStorage、留空=保留、清空要显式动作（0.9.120）
+  echo "== 凭据不出本机 =="
+  "$NODE" "$ROOT/test/ui/cred.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

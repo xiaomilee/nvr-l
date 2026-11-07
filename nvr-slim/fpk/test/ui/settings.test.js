@@ -635,9 +635,13 @@ ck("跨设备·连续播放计数认 NAS 地址",
    src.includes("(p.main || c.hasUrl) && p.enabled !== false"));
 ck("跨设备·推送带显式清空标记，空值不再覆盖",
    src.includes("url_clear: !!p.urlClear, sub_clear: !!p.subClear"));
-ck("跨设备·清空意图只在本地曾有明文且被清空时打标",
-   src.includes("dst.urlClear = !!(dst.main && !SET.draft.main)")
-   && src.includes("dst.subClear = !!(dst.sub && !SET.draft.sub)"));
+ck("跨设备·清空意图只认显式动作，不从「输入框空了」推断（0.9.120）",
+   src.includes("dst.urlClear = !!SET.draft.urlClear")
+   && src.includes("dst.subClear = !!SET.draft.subClear"));
+ck("跨设备·编辑页有「清除地址」按钮（留空 ≠ 删除，删除要单独一个动作）",
+   src.includes('data-nuke="main"') && src.includes('data-nuke="sub"'));
+ck("跨设备·点清除只改草稿，点保存才生效",
+   src.includes('draftSet("main", ""); draftSet("urlClear", true);'));
 ck("跨设备·编辑页如实提示地址存于 NAS",
    src.includes("已保存在 NAS（本机不显示明文）· 留空 = 不修改"));
 ck("跨设备·只读页提示明文存于 NAS", src.includes("已保存在 NAS · 本机不显示明文"));

@@ -115,6 +115,41 @@ class AccessLogSplitTest(unittest.TestCase):
         joined = "\n".join(nvr_slim._ACCESS)
         self.assertNotIn("secret123", joined)
 
+    def test_token_in_query_redacted(self):
+        """`curl ...?token=<真 token>` 是用户试接口时最常见的写法：
+        访问行会把整条 URL 记下来，不抹就等于把凭证写进诊断文件。"""
+        self._access("/api/status", "?token=abcDEF123456ghi")
+        joined = "\n".join(nvr_slim._ACCESS)
+        self.assertNotIn("abcDEF123456ghi", joined)
+        self.assertIn("/api/status?token=***", joined)
+
+    def test_path_collapse_still_works_after_redaction(self):
+        """脱敏不能把"同一路径折叠"搞坏：折叠按 query 前的路径比，
+        抹完如果整条被改写（比如连路径都对不上），一次回放就会刷几百条。"""
+        for _ in range(5):
+            self._access("/api/status", "?token=abcDEF123456ghi")
+        self.assertEqual(len(nvr_slim._ACCESS), 1)
+
+    def test_token_literal_redacted_in_log(self):
+        """token 不一定长在 URL 里：轮换提示、异常原文、ffmpeg 命令行都可能是"""
+        tok = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_abc"
+        import redact
+        redact.add_secret(tok)
+        nvr_slim.log_line("凭证已轮换（新凭证 %s）" % tok)
+        joined = "\n".join(nvr_slim._LOG)
+        self.assertNotIn(tok, joined)
+        self.assertIn("凭证已轮换", joined)
+
+    def test_export_contains_no_token(self):
+        tok = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_abc"
+        import redact
+        redact.add_secret(tok)
+        nvr_slim.log_line("token=%s" % tok)
+        self._access("/api/status", "?token=" + tok)
+        text = nvr_slim.log_export_text()
+        self.assertNotIn(tok, text)
+        self.assertFalse(redact.mask_text(text) != text, "导出文本里不该再有可抹的东西")
+
     def test_export_has_both_sections(self):
         nvr_slim.log_line("业务一行")
         self._access("/api/record/file", "?cam=c1")

@@ -31,6 +31,8 @@ import re
 import secrets
 import time
 
+import redact
+
 SECRET_NAME = "secret.json"
 # 允许外部注入（容器、自动化测试、装的时候想固定一枚）。环境变量优先于文件：
 # 有它就不落盘、也不轮换，避免"以为换了其实没换"。
@@ -111,10 +113,16 @@ def load(var_dir, create=True):
 
 
 def token(var_dir):
-    """当前 token（带缓存）。每个请求都要用它，不该每次都读盘 + 解析 JSON。"""
+    """当前 token（带缓存）。每个请求都要用它，不该每次都读盘 + 解析 JSON。
+
+    返回前顺手登记给脱敏层：token 会以任意形态漏进日志（`?token=`、轮换提示、
+    命令行），正则认不出"这串就是凭证"，只能按字面量抹。放在这个唯一取值口
+    登记，任何调用方（含测试、将来的新接口）都不会漏 —— 漏一次就是整枚凭证
+    进了用户要贴给别人的诊断文件。
+    """
     env = env_token()
     if env:
-        return env
+        return redact.add_secret(env)
     path = secret_path(var_dir)
     try:
         st = os.stat(path)
@@ -126,7 +134,7 @@ def token(var_dir):
     tok = load(var_dir).get("api_token") or ""
     if key is not None:
         _CACHE.update({"path": path, "key": key, "token": tok})
-    return tok
+    return redact.add_secret(tok)
 
 
 def verify(var_dir, given):
@@ -170,6 +178,9 @@ def rotate(var_dir):
     os.makedirs(var_dir, exist_ok=True)
     _write(secret_path(var_dir), data)
     _CACHE.update({"path": None, "key": None, "token": ""})
+    # 新 token 立刻登记：紧接着那行「凭证已轮换（新凭证 xxxx）」日志要靠它脱敏。
+    # 旧 token 留在登记表里 —— 轮换后日志里最该被抹掉的恰恰是"刚才用过的那个"。
+    redact.add_secret(tok)
     return {"api_token": tok, "created_at": data["created_at"]}
 
 
