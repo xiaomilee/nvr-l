@@ -47,6 +47,7 @@
 | 1 | 11-08 02:30 | 批次 1 全量（health.py / status 语义 / 缺口接口 / 诊断卡） | 64aa8ee | done，0.9.118 已打包 |
 | 2 | 11-08 03:42 | 打通测试平台部署链路（`tools/deploy_test.py`）、两路 RTSP 接入、修「上游 0 秒没数据」文案 | 8fbe09f | 0.9.119 部署 152 自检六项全绿，两路 recording |
 | 3 | 11-08 04:57 | 批次 2 切片一：安装级 token（`auth.py`）、统一鉴权闸、登录/cookie/轮换接口、页面粘贴引导；顺手修「界面谎报 stalled」（`status()` 与看门狗同源） | bb1034e / 010c162 | 未出包（批次未收尾，按规则不 bump）；152 只读出「两路实际在写、界面报 stalled」并已修 |
+| 4 | 11-08 06:35 | 批次 2 切片二：明文凭据不再落 localStorage（实测 `saveCfg` 原来整份序列化 camParams）、「清除地址」改显式按钮；新增 `redact.py` 统一脱敏（日志/诊断/试录 stderr），token 在 `auth.token()` 入口登记 | ea066ee | 未出包（批次只剩第 6/8 项）；后端 828 条 + 前端 cred 12 项全绿 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -148,16 +149,25 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
       401 时自动回到引导。
       *（实现补充：`<img>/<video>` 带不了请求头，登录时另签一枚 HttpOnly 会话 cookie —— 签名密钥就是
       token 本身、服务端无状态，主 token 因此永远不进 URL。轮换 token 即让所有旧 cookie 失效。）*
-- [ ] RTSP 凭据收敛：GET 配置一律脱敏；编辑时密码框留空 = 保留原密码（服务端合并）；前端不再把明文写 localStorage。
-- [ ] 日志/诊断统一脱敏（token、RTSP 密码、URL query）。
+- [x] RTSP 凭据收敛：GET 配置一律脱敏；编辑时密码框留空 = 保留原密码（服务端合并）；前端不再把明文写 localStorage。
+      *（第 4 轮收尾：脱敏与"留空=保留"早就在，缺的是"明文真的没落盘" —— 实测 `saveCfg`
+      把整份 camParams 序列化，`rtsp://user:pass@ip` 就永久留在了那台设备的 localStorage 里。
+      已改为地址字段不落盘 + 读到旧值时清空；"清掉地址"改由编辑页的「清除 NAS 上已保存的地址」
+      按钮显式打标，不再从"输入框是空的"推断——后者在明文不落盘之后会把每次保存都变成删地址。）*
+- [x] 日志/诊断统一脱敏（token、RTSP 密码、URL query）。
+      *（新模块 `app/server/redact.py`：rtsp/http(s)/ftps 的 user:pass、敏感 query 参数、
+      `Authorization: Bearer`、`nvr_sess` cookie、以及 api_token 字面量；`_record` /
+      `_record_access` / 诊断导出 / ffprobe 与试录 stderr 全部走这一处。
+      token 在 `auth.token()` 这唯一取值口登记，任何调用方都不会漏。）*
 - [ ] 前端统一请求层 `API.get/post`（超时 + 401 + JSON + CSRF 头），替掉散落的 `fetch`。
 - [x] 测试：`test_auth.py`（401/放行/常量时间/白名单/轮换 12+ 条）、`test/ui/auth.test.js`。
       *实际 38 条 + 11 条；另 `test_http_smoke.py` 补 4 条 HTTP 级断言（本地 52 项全绿）。*
 - [ ] 版本 0.9.120。
 
-> 批次 2 进度（11-08 第 3 轮）：鉴权主干已落地并通过本地真 HTTP 验证，剩余 4/5/6/8 五项。
-> 本批未收尾，所以**没有 bump 版本、没有出包**（同一版本号对应两份不同字节是更危险的事）。
-> 下一轮把凭据收敛 + 脱敏 + 前端统一请求层做完，再一起 bump 0.9.120、打包、部署到 152。
+> 批次 2 进度（11-08 第 4 轮）：清单只剩两项 —— 前端统一请求层（第 6 项）与
+> bump 0.9.120（第 8 项）。本批仍未收尾，所以**没有 bump、没有出包**。
+> 下一轮把 `API.get/post`（超时 + 401 + JSON + CSRF 头）替掉散落的 18 处 `fetch`，
+> 然后 bump 五处、打包、部署到 152、看两路 hstate，最后回填台账并标 done。
 
 > **本轮顺带修的真问题（批次 1 的回归，记在这里以免漏账）**：152 上只读检查发现两路
 > `hstate=stalled`，而磁盘上 `.part` 一直在写。原因是 `recorder.status()` 的
