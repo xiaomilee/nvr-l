@@ -149,6 +149,30 @@ class TestState(unittest.TestCase):
                        ("stopped", self.ch(state="idle"))):
             self.assertTrue(health.reason_of(st, ch), st)
 
+    def test_stalled_upstream_fine_does_not_blame_upstream(self):
+        """上游畅通、只有分片停住时，不许写「上游 N 秒没数据」。
+
+        这条是真机撞出来的：0.9.118 装在测试机上，两路信号明明在来，
+        界面却显示「上游 0 秒没数据；分片 1194 秒没增长」——句子自己打自己，
+        看的人会去查网络，实际问题是分片不再增长。
+        """
+        ch = self.ch(last_age_sec=1194)
+        r = health.reason_of("stalled", ch, idle_sec=0)
+        self.assertNotIn("上游", r)
+        self.assertIn("分片", r)
+
+    def test_stalled_upstream_dead_mentions_both(self):
+        """上游确实断了才两个都说，而且断的秒数要出现在句子里。"""
+        ch = self.ch(last_age_sec=300)
+        r = health.reason_of("stalled", ch, idle_sec=95)
+        self.assertIn("上游 95 秒没数据", r)
+        self.assertIn("分片 300 秒没增长", r)
+
+    def test_stalled_upstream_below_threshold_silent(self):
+        """30 秒的取流抖动不足以解释 20 分钟不分片，别把它塞进原因里。"""
+        r = health.reason_of("stalled", self.ch(last_age_sec=1200), idle_sec=30)
+        self.assertNotIn("上游", r)
+
 
 class TestGapReason(unittest.TestCase):
     def test_midnight_start(self):

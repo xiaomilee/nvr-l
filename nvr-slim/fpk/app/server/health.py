@@ -143,7 +143,12 @@ def reason_of(state, ch, idle_sec=None):
         return "上次卡住后正在恢复（第 %d 次）" % int(ch.get("stall") or 0)
     if state == "stalled":
         age = ch.get("last_age_sec")
-        idle = ("上游 %.0f 秒没数据" % float(idle_sec)) if idle_sec is not None else ""
+        # 只有「上游真的断到超过阈值」才写上游。之前只要 idle_sec 不是 None 就拼上去，
+        # 于是出现「上游 0 秒没数据；分片 1194 秒没增长」这种自相矛盾的句子——
+        # 上游明明畅通，用户会以为是网络问题，实际是分片不再增长。
+        idle = ""
+        if idle_sec is not None and float(idle_sec) > float(STALL_SEC):
+            idle = "上游 %.0f 秒没数据" % float(idle_sec)
         if age is not None:
             tail = "分片 %.0f 秒没增长" % float(age)
             return ("%s；%s" % (idle, tail)) if idle else tail

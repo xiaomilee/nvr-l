@@ -33,3 +33,6 @@ nvr-slim/fpk/test/log/
 
 # 时长缓存（0.9.114）：运行期写在 var/ 下，测试直跑时可能落在 fpk/ 根
 durations.json
+
+# 部署自检报告（工具每次生成，不入库）
+test-reports/
