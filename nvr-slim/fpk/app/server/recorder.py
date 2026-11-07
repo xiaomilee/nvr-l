@@ -1538,12 +1538,22 @@ class Recorder:
             running = bool(p and p.poll() is None)
             segs = list_segments(self.root, cam.get("dir_name") or cid, cache)
             last = segs[-1] if segs else None
-            age = None
-            if last:
+            # 「多久没写进字节」必须与看门狗同源（_newest_age 会把**正在写的
+            # .part** 算进去），不能只看已封口的 .mp4。
+            # 0.9.119 在测试机上就是这么谎报的：分片 300 秒、判 stalled 的阈值 60 秒，
+            # 而 .part 要等封口才进 list_segments —— 于是每 5 分钟里有 4 分钟界面写着
+            # 「断流」，真断流时反而分不出来（一直红着就等于没有告警）。同时它还会
+            # 让「界面说 stalled」和「看门狗说没事」互相打脸。
+            age = self._newest_age(cam)
+            if age is None and last:
+                # 今天一个字节都还没落（跨天刚过 / 刚启动）：退回已封口分片，
+                # 保证「今天确实什么都没录」仍然是个很大的 age，不会被看成正常。
                 try:
-                    age = int(time.time() - os.path.getmtime(last))
+                    age = time.time() - os.path.getmtime(last)
                 except OSError:
                     age = None
+            if age is not None:
+                age = int(max(0.0, age))
             out["channels"].append({
                 "id": cid, "name": cam.get("name") or cid,
                 "state": "recording" if running else ("idle" if self.enabled else "off"),
