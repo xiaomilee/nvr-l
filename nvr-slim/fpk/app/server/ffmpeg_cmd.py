@@ -282,7 +282,7 @@ def encode_cmd(ffmpeg, src, out, enc, hw="qsv", night=False, ss=None, to=None):
 
 
 def precise_cmd(ffmpeg, src, out, ss, to, hw="qsv", speed=1.0,
-                quality=26, fps_cap=15):
+                quality=26, fps_cap=15, maxrate_kbps=None):
     """活动切片的精确导出：重编码换帧级切点。
 
     -ss/-to 放在 -i 前（输入侧 seek）+ 重编码，起点不再受关键帧约束。
@@ -294,6 +294,12 @@ def precise_cmd(ffmpeg, src, out, ss, to, hw="qsv", speed=1.0,
     hw="none"  libx264 veryfast：任何 NAS 都编得动，画质对监控画面足够。
     speed>1    与 fast 路径同规则：setpts 压时间轴 + fps 封顶，否则 2×
                的 25fps 源会变成 50fps，文件反而更大。
+    maxrate_kbps>0
+               给码率钉一个上限（VBV）。只用 CRF 时，低码率、高噪声的监控源
+               重编码后会**比原片还大**（0.9.115 真机：客厅 1759 kbps vs 源
+               1373，院子 L 是源的 2.8 倍）——CRF 只保证「质量」不管体积。
+               加 VBV 后复杂画面会自动降质量保体积，静止画面不受影响
+               （本来就压得比上限低）。
     """
     try:
         speed = float(speed or 1.0)
@@ -330,6 +336,16 @@ def precise_cmd(ffmpeg, src, out, ss, to, hw="qsv", speed=1.0,
         cmd += ["-vf", filt,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", str(int(quality)),
                 "-g", str(gop), "-keyint_min", str(max(1, gop // 2))]
+    # 码率上限（0.9.115）。必须放在编码器参数之后、-vsync 之前：VBV 是编码
+    # 选项，位置错了会被当成输出选项报「Option not found」。qsv 与 x264 都认
+    # -maxrate/-bufsize；万一某个 x264/QSV 构建不认，会走 _export_precise 的
+    # 回落链（qsv 失败还有 x264，再不行才转封装），不会把整片判死。
+    try:
+        mr = int(maxrate_kbps or 0)
+    except (TypeError, ValueError):
+        mr = 0
+    if mr > 0:
+        cmd += ["-maxrate", "%dk" % mr, "-bufsize", "%dk" % (mr * 2)]
     # 强制 CFR：摄像头的变帧率（真机 cam-mvi60dte 是 80ms×11 + 120ms×1 循环，
     # 即每秒 12 帧里有一帧多停 40ms）原样透传后，播放器每秒顿一次；而且 VFR
     # 上 seek 的落点与画面不同步，观感就是「一顿一顿」。0.9.107 及以前是

@@ -45,6 +45,43 @@ DONE_NAME = ".done"
 # 且在回放页变成一串 0.2 秒的黑块 —— 一律当失败处理并清理。
 EMPTY_PART_BYTES = 1024
 
+# ---- 归档重编码的码率上限（0.9.115）----------------------------------------
+# 只给 CRF 不设上限时，监控源会被「越压越肿」：CRF 只管画质，不管体积，
+# 低码率 + 高噪声的画面重编码后比特率反而高于原片。真机 11-05 的账：
+#   客厅  源 1373 kbps → 归档 1759（1.28 倍，一天 9.6GB，比当天全时只省 36%）
+#   院子L 源 578 kbps  → 归档 1628（2.82 倍）
+#   院子R 源 960 kbps  → 归档 1840（1.92 倍）
+# 客厅活动覆盖 15.8 小时/天（真实有人），覆盖时长没法砍，能砍的只有码率。
+# 按「源分片自身码率」打 75 折算上限：等于把归档的比特率钉死在源之下，
+# 从结构上保证「归档不会比全时更占地方」。
+ARCH_MAXRATE_RATIO = 0.75
+ARCH_MAXRATE_FLOOR = 500          # kbps，再低画面就糊了
+ARCH_MAXRATE_CEIL = 3000          # kbps，高码率源（4MP/4K）别一刀切死
+
+
+def src_maxrate_kbps(src, seg_sec):
+    """按源分片的体积与时长估一个码率上限（kbps）；信息不全返回 None。
+
+    seg_sec 用这一路的标称分片长度（不是实测）：真机分片常因断流提前收尾，
+    实测时长会把码率算高、上限放得过松。宁可估低一点。
+    """
+    try:
+        size = os.path.getsize(src)
+    except OSError:
+        return None
+    try:
+        sec = float(seg_sec or 0)
+    except (TypeError, ValueError):
+        return None
+    if size <= 0 or sec <= 0:
+        return None
+    kbps = size * 8.0 / sec / 1000.0
+    if kbps <= 0:
+        return None
+    return int(max(ARCH_MAXRATE_FLOOR, min(kbps * ARCH_MAXRATE_RATIO,
+                                          ARCH_MAXRATE_CEIL)))
+
+
 # 产物片段的后缀：write_split 产出 <分片名>.c01.mp4、.c02.mp4…
 # 清空壳时靠它反推「这一片属于哪个 idx」，而不是把整个目录的 idx 全删。
 _PART_SUFFIX_RE = re.compile(r"^(.*)\.c\d+$", re.I)
@@ -566,7 +603,7 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
                 break
             src = os.path.join(day_base, fname)
             out_base = os.path.join(arc, fname[:-4])
-            r = _split(ffmpeg, src, out_base, wins, arc)
+            r = _split(ffmpeg, src, out_base, wins, arc, seg_sec=cam_seg)
             if r.get("reason") == "exists":
                 # 上一轮已经裁好（idx 在）：不再花预算，也不再算产出
                 processed += 1
@@ -617,13 +654,17 @@ def run(root, cams, cam_cfg, modes, ffmpeg, today=None, seg_sec=300.0,
                      "est_bytes": p["est_bytes"], "policy": p["policy"]}}
 
 
-def _split(ffmpeg, src, out_base, wins, arc_dir):
-    """调 condense.write_split，输出目录不存在时先建。"""
+def _split(ffmpeg, src, out_base, wins, arc_dir, seg_sec=None):
+    """调 condense.write_split，输出目录不存在时先建。
+
+    seg_sec 用来按这一路的源码率算归档上限；拿不到就不设上限（老行为）。
+    """
     import condense
-    os.makedirs(arc_dir, exist_ok=True)
     try:
+        os.makedirs(arc_dir, exist_ok=True)
         return condense.write_split(ffmpeg, src, out_base, wins,
-                                    arc_dir, hw="qsv")
+                                    arc_dir, hw="qsv",
+                                    maxrate_kbps=src_maxrate_kbps(src, seg_sec))
     except Exception as e:                 # ffmpeg 异常不能带死整批
         return {"ok": False, "error": str(e)}
 

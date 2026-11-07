@@ -166,7 +166,7 @@ class TestRun(_Env):
     def _run(self, batch=10, fail_names=(), part_bytes=4096):
         real_split = archive._split
 
-        def fake_split(ffmpeg, src, out_base, wins, arc_dir):
+        def fake_split(ffmpeg, src, out_base, wins, arc_dir, seg_sec=None):
             name = os.path.basename(out_base) + ".mp4"
             if name in fail_names:
                 return {"ok": False, "error": "boom"}
@@ -243,7 +243,7 @@ class TestRun(_Env):
         """
         real_split = archive._split
 
-        def fake_split(ffmpeg, src, out_base, wins, arc_dir):
+        def fake_split(ffmpeg, src, out_base, wins, arc_dir, seg_sec=None):
             if os.path.isfile(out_base + ".idx.json"):
                 return {"ok": True, "reason": "exists", "parts": 0, "files": []}
             out = out_base + ".c01.mp4"
@@ -271,7 +271,7 @@ class TestRun(_Env):
         steps = []
         real_split = archive._split
 
-        def fake_split(ffmpeg, src, out_base, wins, arc_dir):
+        def fake_split(ffmpeg, src, out_base, wins, arc_dir, seg_sec=None):
             out = out_base + ".c01.mp4"
             touch(out, 4096)
             return {"ok": True, "reason": "split", "files": [out]}
@@ -355,10 +355,12 @@ class TestPerCamSegment(unittest.TestCase):
 
     def _run(self, cam_extra):
         used = []
+        self.segs_seen = []                  # 0.9.115：_split 收到的这一路分片长度
         real = archive._split
 
-        def fake(ffmpeg, src, out_base, wins, arc_dir):
+        def fake(ffmpeg, src, out_base, wins, arc_dir, seg_sec=None):
             used.append(os.path.basename(src))
+            self.segs_seen.append(seg_sec)
             out = out_base + ".c01.mp4"
             touch(out, 4096)                 # 真实片段体积
             return {"ok": True, "files": [out]}
@@ -377,6 +379,12 @@ class TestPerCamSegment(unittest.TestCase):
         # 该路配 60 秒分片：只有 18-45-00 真正含这段窗口
         used = self._run({"segment_sec": 60})
         self.assertEqual(used, ["18-45-00.mp4"])
+
+    def test_cam_seg_passed_to_split(self):
+        # 0.9.115：归档码率上限按「这一路」的分片长度算 —— 传错就会拿全局
+        # 300 秒去套 60 秒的一路，源码率被低估 5 倍，上限形同虚设。
+        self._run({"segment_sec": 60})
+        self.assertEqual(self.segs_seen, [60.0])
 
     def test_old_global_seg_would_misfire(self):
         # 反证：同一批分片按全局 300 秒算，18:40:22 也会被拉进来（旧 bug 现场）

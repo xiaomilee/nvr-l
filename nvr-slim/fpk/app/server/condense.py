@@ -632,7 +632,8 @@ def short_part_reason(out, ss, to, speed=1.0):
     return ""
 
 
-def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
+def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900,
+                    maxrate_kbps=None):
     """单区间精确导出：QSV → libx264 → 转封装 三级回落。
 
     第三级是兜底里的兜底：软编也失败（ffmpeg 缺 libx264、盘满）时，
@@ -646,7 +647,7 @@ def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
     for codec, use_hw in attempts:
         cmd = ffmpeg_cmd.precise_cmd(ffmpeg, src, out, ss, to,
                                      hw="qsv" if use_hw else "none",
-                                     speed=speed)
+                                     speed=speed, maxrate_kbps=maxrate_kbps)
         try:
             r = subprocess.run(cmd, capture_output=True, timeout=timeout)
         except (OSError, subprocess.TimeoutExpired) as e:
@@ -684,7 +685,7 @@ def _export_precise(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
 
 
 def write_split(ffmpeg, src, out_base, windows, tmpdir,
-                hw="qsv", timeout=900, speed=1.0):
+                hw="qsv", timeout=900, speed=1.0, maxrate_kbps=None):
     """把若干区间各自切成独立片段 + 侧车索引。
 
     out_base：不带扩展名的输出前缀（…/_clip/<cam>/<date>/<HH-MM-SS>），
@@ -711,7 +712,8 @@ def write_split(ffmpeg, src, out_base, windows, tmpdir,
         # 在序号上留洞（.c03 缺失会让回放页的排序/计数看着像丢文件）。
         out = "%s.c%02d.mp4" % (out_base, len(files) + 1)
         ok, err, codec = _export_precise(ffmpeg, src, out, ss, to, hw,
-                                         speed=speed, timeout=timeout)
+                                         speed=speed, timeout=timeout,
+                                         maxrate_kbps=maxrate_kbps)
         if not ok:
             if str(err).startswith("short-part:"):
                 # 源分片在这个时段已经断流：裁不出画面是**正常结果**，不是故障。
@@ -735,6 +737,13 @@ def write_split(ffmpeg, src, out_base, windows, tmpdir,
             "speed": speed,
             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
             "windows": entries}
+    try:                                 # 上游传了怪值也不能让整片裁不出来
+        _mr = int(maxrate_kbps or 0)
+    except (TypeError, ValueError):
+        _mr = 0
+    if _mr > 0:
+        # 事后能一眼看出这批片段是按哪个上限裁的（排查「归档怎么又变大了」）
+        meta["maxrate"] = _mr
     if dead:
         meta["dead"] = dead                # 被跳过的死区间个数，事后可查
     try:

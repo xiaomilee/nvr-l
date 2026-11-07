@@ -353,7 +353,8 @@ class TestWriteSplit(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _fake_export(self, ok=True, codec="qsv"):
-        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
+        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900,
+                 maxrate_kbps=None):
             if ok:
                 with open(out, "wb") as f:
                     f.write(FAKE_PART)
@@ -394,7 +395,8 @@ class TestWriteSplit(unittest.TestCase):
     def test_partial_failure_cleans_up(self):
         state = {"n": 0}
 
-        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
+        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900,
+                 maxrate_kbps=None):
             state["n"] += 1
             if state["n"] == 1:
                 with open(out, "wb") as f:
@@ -423,7 +425,8 @@ class TestWriteSplit(unittest.TestCase):
         记成失败的话整天写不下 .done（run 要求零失败才收尾），真机 24.4% 的
         分片实际内容远短于标称，一旦走成失败就是每轮重试、永远追不平。
         """
-        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
+        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900,
+                 maxrate_kbps=None):
             if float(ss) == 6.0:
                 return False, "short-part: 窗口 22.0s 只裁出 0.16s", "qsv"
             with open(out, "wb") as f:
@@ -446,7 +449,8 @@ class TestWriteSplit(unittest.TestCase):
 
     def test_all_dead_still_writes_index(self):
         """整天都是死区间：留一个空 idx 当幂等标记，别让下一轮再来一遍。"""
-        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900):
+        def fake(ffmpeg, src, out, ss, to, hw, speed=1.0, timeout=900,
+                 maxrate_kbps=None):
             return False, "short-part: 无画面", "qsv"
 
         with mock.patch.object(condense, "_export_precise", fake):
