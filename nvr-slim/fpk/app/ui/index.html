@@ -6469,11 +6469,23 @@ function fmtBytes(b){
   return b + " B";
 }
 
+/* 0.9.118：每路的细分状态由后端算（hstate），这里只做兜底。
+   以前前端拿 c.state 判「在不在录」，而那个值是 fs 的「进程还在」——
+   真机断流时 ffmpeg 进程照样活着（poll() 还是 None），界面就一直写「在录」，
+   用户在时间轴上看到的是满的、点进去播到一半才断。 */
+function recHState(c){
+  if(c && c.hstate) return String(c.hstate);
+  return (c && c.state === "recording") ? "recording" : "stopped";
+}
+
 function diagSummary(){
   const rec = LK.rec;
   const ch = (rec && Array.isArray(rec.channels)) ? rec.channels : [];
-  const on = ch.filter(c=>c.state === "recording").length;
-  const bad = ch.filter(c=>c.state !== "recording" && (c.error || c.hint)).length;
+  const on = ch.filter(c=>recHState(c) === "recording").length;
+  const bad = ch.filter(c=>{
+    const s = recHState(c);
+    return s === "stalled" || s === "error";
+  }).length;
   const free = REC.diskFreeGB;
   /* AI 检测摘要（0.9.60）：没开就不提；开了但 worker 没起/推理报错要给个醒 */
   let det = "";
@@ -6503,7 +6515,9 @@ function renderDiagZone(){
     + '<div><b>诊断与日志</b><div class="zs">存储占用 · 每路录制 · 环境 · AI 检测 · 日志</div></div>'
     + '<span class="chev">' + (SET.diagOpen ? "收起 ⌃" : "展开 ⌄") + '</span></div>';
   if(SET.diagOpen){
-    h += cardStorage() + cardRecCams() + cardIngest() + cardEnv() + cardParts()
+    /* 缺口要扫当天分片目录，进诊断页才拉，且 60 秒内不重复拉 */
+    if(!GAPS.data && !GAPS.loading && !GAPS.err) loadGaps(false);
+    h += cardStorage() + cardRecCams() + cardGaps() + cardIngest() + cardEnv() + cardParts()
        + cardDetectDiag() + cardLog() + cardMaint();
   }else{
     h += '<div class="gcard genfold"><div class="genline" id="diagSum">' + diagSummary() + '</div>'
@@ -6635,12 +6649,19 @@ function cardRecCams(){
     // 失败时先说「下一步怎么办」（后端按错误分类给的中文建议），
     // ffmpeg 的英文原文收进 details —— 原文对排查有用，但对用户是天书。
     inner = rec.channels.map(c=>{
-      const running = c.state === "recording";
+      const hs = recHState(c);
+      const running = hs === "recording";
       const err = c.error ? String(c.error) : "";
       const hint = c.hint ? String(c.hint) : "";
-      const dot = running ? "var(--live)" : (err ? "var(--warn)" : "var(--faint2)");
+      const hwhy = c.hreason ? String(c.hreason) : "";
+      /* 卡住与异常是两种事：卡住 = 进程在跑但没输出（断流 / 相机无响应），
+         异常 = 进程已经退出。都该告警，但文案必须分开 —— 否则用户会拿
+         「重启一下」去处理一个其实还活着的进程。 */
+      const dot = running ? "var(--live)"
+        : ((hs === "stalled" || hs === "error") ? "var(--warn)" : "var(--faint2)");
       let tail;
       if(running) tail = c.last_seg ? ("在录 · 最新 " + c.last_seg) : "已连上，等第一个分片";
+      else if(hwhy) tail = hwhy;
       else if(hint) tail = hint;
       else if(err) tail = err;
       else tail = "进程未运行";
@@ -6659,15 +6680,100 @@ function cardRecCams(){
     }
   }
   const on = (rec && Array.isArray(rec.channels))
-    ? rec.channels.filter(c=>c.state === "recording").length : 0;
+    ? rec.channels.filter(c=>recHState(c) === "recording").length : 0;
+  const stalled = (rec && Array.isArray(rec.channels))
+    ? rec.channels.filter(c=>recHState(c) === "stalled").length : 0;
   const n = (rec && Array.isArray(rec.channels)) ? rec.channels.length : CAMERAS.length;
   return '<div class="dcard">'
     + '<div class="dh">每路录制状态<span class="tg">进程 / 最新分片 / 诊断</span>'
-    + '<span class="rt">' + on + " / " + n + ' 在录</span></div>'
+    + '<span class="rt">' + on + " / " + n + ' 在录'
+    + (stalled ? (' · <span style="color:var(--warn)">' + stalled + ' 路卡住</span>') : '')
+    + '</span></div>'
     + inner
     + '<div class="dline" style="margin-top:9px;font-size:10px;color:var(--faint)">'
     + '点「诊断」就地展开：ffprobe 读流 + 试录 8 秒，直接给出是摄像头还是 ffmpeg 的问题。</div>'
     + '</div>';
+}
+
+/* 录像缺口（0.9.118）：回答「今天到底录上了没有」。
+
+   这张卡与上面「每路录制状态」不是一回事：上面说的是「此刻进程在不在写」，
+   这里说的是「盘上这一天真的有连续画面吗」。真机最常见的误解就发生在这两者
+   之间 —— 进程一直在跑，中间断了 19 分钟，时间轴看着还是满的。 */
+const GAPS = {data:null, err:"", loading:false, at:0};
+
+function gfmtDur(sec){
+  const s = Math.max(0, Math.round(+sec || 0));
+  if(s < 60) return s + " 秒";
+  const m = Math.floor(s / 60);
+  if(m < 60) return m + " 分" + (m < 10 && s % 60 ? (s % 60) + " 秒" : "");
+  return Math.floor(m / 60) + " 时 " + (m % 60) + " 分";
+}
+function gfmtClock(sec){
+  const s = Math.max(0, Math.round(+sec || 0));
+  const p = n => (n < 10 ? "0" : "") + n;
+  return p(Math.floor(s / 3600)) + ":" + p(Math.floor((s % 3600) / 60)) + ":" + p(s % 60);
+}
+
+function loadGaps(force){
+  if(GAPS.loading) return Promise.resolve(GAPS.data);
+  /* 失败过就不再自动重试：否则「渲染 → 请求 → 失败 → 再渲染」会打成一个环，
+     页面一直闪。要重试由用户点「重新核对」。 */
+  if(!force && GAPS.err) return Promise.resolve(null);
+  if(!force && GAPS.data && (Date.now() / 1000 - GAPS.at) < 60) return Promise.resolve(GAPS.data);
+  GAPS.loading = true;
+  GAPS.err = "";
+  const day = (typeof jsToday === "function") ? jsToday() : "";
+  const url = "/api/health/gaps" + (day ? ("?date=" + encodeURIComponent(day) + (force ? "&force=1" : "")) : "");
+  return apiGet(url).then(d=>{
+    if(d && d.ok){
+      GAPS.data = d;
+      GAPS.at = Date.now() / 1000;
+    }else{
+      GAPS.err = (d && d.error) || "服务端没有返回缺口数据";
+    }
+    return GAPS.data;
+  }).catch(e=>{
+    GAPS.err = String((e && e.message) || e);
+    return GAPS.data;
+  }).finally(()=>{
+    GAPS.loading = false;
+    const body = document.getElementById("camBody");
+    if(body && SET.diagOpen && !SET.editing) renderCamTabs();
+  });
+}
+
+function cardGaps(){
+  const d = GAPS.data;
+  let body;
+  if(!d){
+    body = '<div class="dline">' + (GAPS.err
+      ? ('读取失败：' + esc(GAPS.err) + '（点「重新核对」再试一次）')
+      : '正在按分片的真实时长核对今天的录像（只读目录元数据，不读文件内容）…') + '</div>';
+  }else if(!d.cams || !d.cams.length){
+    body = '<div class="dline">今天各路都没有超过 1 分钟的缺口。</div>';
+  }else{
+    const t = d.total || {};
+    body = '<div class="dline">合计缺口 ' + gfmtDur(t.gap_sec) + ' · ' + (t.gap_count || 0)
+      + ' 段' + (t.max_gap_sec ? (' · 最长 ' + gfmtDur(t.max_gap_sec)) : '') + '</div>'
+      + d.cams.map(c=>{
+          const gaps = (c.gaps || []).slice(0, 6);
+          return '<div class="recrow"><i style="background:var(--warn)"></i>'
+            + '<b>' + esc(c.name) + '</b><span>' + (c.gap_count || 0) + ' 段 · 共 '
+            + gfmtDur(c.gap_sec) + ' · 覆盖 ' + Math.round((c.coverage || 0) * 100) + '%</span></div>'
+            + gaps.map(g=>'<div class="dline" style="margin:3px 0 0 22px">'
+              + gfmtClock(g.start) + ' → ' + gfmtClock(g.end)
+              + '（' + gfmtDur(g.duration) + '）'
+              + (g.reason ? ('<span style="color:var(--faint)"> · ' + esc(g.reason) + '</span>') : '')
+              + '</div>').join('')
+            + (c.gap_count > gaps.length
+              ? ('<div class="dline" style="margin-left:22px;color:var(--faint)">还有 '
+                 + (c.gap_count - gaps.length) + ' 段未列出（按时间排序，最长的在前）</div>') : '');
+        }).join("");
+  }
+  return '<div class="dcard"><div class="dh">录像缺口<span class="tg">今天的实际覆盖</span>'
+    + '<span class="rt"><button class="btnmini" id="btnGapsRefresh">重新核对</button></span></div>'
+    + body + '</div>';
 }
 
 /* 统一取流（0.9.80）：每路一条 RTSP 连接 + 本机端口 + 消费者数。
@@ -7494,6 +7600,17 @@ function bindSettings(body){
       if(st && SET.diagOpen) st.scrollTop = st.scrollHeight;
     };
   });
+  const gR = body.querySelector("#btnGapsRefresh");
+  if(gR) gR.onclick = ()=>{
+    gR.disabled = true;
+    gR.textContent = "核对中…";
+    loadGaps(true).then(()=>{
+      const b = document.getElementById("btnGapsRefresh");
+      if(b){ b.disabled = false; b.textContent = "重新核对"; }
+      toast("toast2", GAPS.err ? "读取缺口失败 · 看日志" : "已按分片重新核对今天的录像");
+    });
+  };
+
   const stR = body.querySelector("#btnStRefresh");
   if(stR) stR.onclick = ()=>{
     stR.disabled = true;

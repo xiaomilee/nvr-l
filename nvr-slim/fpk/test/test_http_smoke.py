@@ -205,6 +205,24 @@ def main():
         check("access=1 时连访问行一起给", s == 200 and d2.get("ok") is True,
               (s, (d2.get("lines") or [])[:1]))
 
+        # 0.9.118 录像可信度：计数有真实出处（不是配置数），缺口可查
+        s, b = req("/api/health")
+        d = json.loads(b)
+        check("健康接口带摄像头计数",
+              s == 200 and isinstance(d.get("cams"), dict)
+              and isinstance((d["cams"] or {}).get("recording"), int)
+              and isinstance((d["cams"] or {}).get("stalled"), int),
+              (s, d.get("cams")))
+        s, b = req("/api/health/gaps")
+        d = json.loads(b)
+        check("缺口接口可用（没有录像也该返回 ok + 空清单）",
+              s == 200 and d.get("ok") is True
+              and isinstance(d.get("cams"), list) and isinstance(d.get("total"), dict),
+              (s, list(d)[:8]))
+        s, b = req("/api/health/gaps?date=2026/11/06")
+        check("缺口接口拒绝坏日期", s == 200 and json.loads(b).get("ok") is False,
+              (s, b[:60]))
+
         s, b = req("/api/link/run", "POST", {})
         d = json.loads(b)
         check("立即处理一批可用", s == 200 and d.get("ok") is True, (s, b[:100]))

@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""NVR 后端骨架。
+"""NVR-L 后端主程序：HTTP 服务、调度、状态汇总。
 
-当前只做三件真事：核显自检、配置读写、并发槽位——先把资源边界立住，
-扫描与分析在 worker 里接（下一步）。其余接口返回结构化占位数据。
+这个文件是 Web 层的唯一入口，只做三件事：
+  1. 起 HTTP（localhost 之外的手机直连也要用，所以监听 0.0.0.0）；
+  2. 把各模块（取流 / 取帧 / 录制 / 检测 / 台账 / 归档 / 通知 / 存储）串成一条时间线；
+  3. 把它们的真实状态汇总成 /api/status、/api/health 之类的只读视图。
+
+真正的业务逻辑都在各自模块里：录制在 recorder.py，AI 在 detect.py，
+台账在 ledger.py，归档在 archive.py，录像缺口在 health.py。
+这里不要藏算法——放进来就会变成 3000 行里最难找的那一段。
 """
 import argparse
 import json
@@ -38,6 +44,7 @@ import ledger  # noqa: E402
 import detect  # noqa: E402
 import notify  # noqa: E402
 import archive  # noqa: E402
+import health  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
 # 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
@@ -2158,6 +2165,154 @@ def frames_status():
         return {"error": repr(e)}
 
 
+def _ingest_idle_map():
+    """cam_id → 上游多少秒没收到字节；没走统一取流的路不出现在里面。
+
+    这是「摄像头还活着吗」和「录像还在写吗」之间缺的那一环：进程在、分片也在长，
+    但上游早断了（ffmpeg 会把缓冲吐完再停），单看哪一层都会误判。
+    """
+    ing = STATE.get("ingest")
+    out = {}
+    if ing is None:
+        return out
+    try:
+        st = ing.status()
+    except Exception:
+        return out
+    if not isinstance(st, dict):
+        return out
+    for cid, it in st.items():
+        if isinstance(it, dict):
+            out[cid] = it.get("idle_sec")
+    return out
+
+
+def cams_counts():
+    """真实口径的摄像头计数（0.9.118）。
+
+    以前 `cams.recording` 数的是「配了 RTSP 且启用」的路数 —— 院子 R 每 25 秒
+    断一次流、客厅半夜卡过半小时，这个数字从来都是 5。现在按三层实测判定：
+    进程存活 + 分片在长 + 上游在来字节，缺一层就不算 recording。
+
+    connecting / recovering 单独不进 error：它们自己会回来，
+    混进 error 只会让「异常」这个数字天天红着，真出事反而没人看。
+    """
+    cams = cameras()
+    total = len(cams)
+    enabled = sum(1 for c in cams if c.get("enabled", True) and c.get("url"))
+    out = {"total": total, "enabled": enabled, "connected": 0,
+           "recording": 0, "stalled": 0, "error": 0, "retrying": 0,
+           "off": total - enabled}
+    rc = STATE.get("recorder")
+    if rc is None:
+        return out
+    try:
+        chs = rc.status().get("channels") or []
+    except Exception:
+        return out
+    idle = _ingest_idle_map()
+    for ch in chs:
+        st = health.state_of(ch, idle.get(ch.get("id")))
+        if st == "recording":
+            out["recording"] += 1
+            out["connected"] += 1
+        elif st == "stalled":
+            out["stalled"] += 1
+        elif st == "error":
+            out["error"] += 1
+        elif st in ("connecting", "recovering"):
+            out["retrying"] += 1
+    return out
+
+
+_HG_CACHE = {"key": None, "at": 0.0, "data": None}
+_HG_TTL = 3.0
+
+
+def health_gaps_payload(date="", force=False):
+    """录像缺口报告：每路这一天缺了哪几段、各多久、为什么（0.9.118）。
+
+    /api/status 只回答「现在在不在录」，回答不了「昨天凌晨有没有录上」。
+    缺口要扫当天分片的 mtime 才能算（真机两万多个文件，单次约 1.6 秒），
+    所以给 3 秒短缓存：切页面、切机位不重复扫盘，刚落盘的新分片用 ?force=1。
+
+    没有洞的路不返回 —— 5 路都正常时页面该是「今天没有缺口」，
+    而不是五行「0 段」的噪声。
+    """
+    date = (date or "").strip() or time.strftime("%Y-%m-%d")
+    try:
+        time.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        return {"ok": False, "error": "日期格式应为 YYYY-MM-DD"}
+    key = (date, len(cameras()))
+    now = time.time()
+    if (not force) and _HG_CACHE["key"] == key and now - _HG_CACHE["at"] < _HG_TTL:
+        return _HG_CACHE["data"]
+    root = record_dir()
+    rc = STATE.get("recorder")
+    cfg = runtime.load_config(STATE["var_dir"])
+    seg_cfg = runtime.segment_sec(cfg.get("record_segment_sec"))
+    idle = _ingest_idle_map()
+    today = date == time.strftime("%Y-%m-%d")
+    now_sec = ledger.day_sec_now() if today else None
+    ch_map = {}
+    if rc is not None:
+        try:
+            ch_map = {c.get("id"): c for c in (rc.status().get("channels") or [])}
+        except Exception:
+            ch_map = {}
+    rows = []
+    all_sum = []
+    for cam in cameras():
+        cid = cam.get("id")
+        seg = rc.seg_of(cam) if rc is not None else seg_cfg
+        starts, ends = [], {}
+        for dn in cam_storage_dirs(cam):
+            for f in _scan_day_dirs(os.path.join(root, dn)).get(date, []):
+                st = ledger.src_start(f["n"])
+                if st is None:
+                    continue
+                starts.append(st)
+                m = f.get("m")
+                if m:
+                    cs = ledger.clock_sec_of(m, date)
+                    if cs is not None:
+                        ends[st] = cs
+        # 一整天一个分片都没有、又不是今天 —— 那天多半录像本来就没开，
+        # 报一条 20 小时的缺口只会让「今天缺了多久」这个数字失去意义。
+        if not starts and not today:
+            continue
+        spans = ledger.avail_spans(starts, seg, now_sec, ends)
+        gaps = health.gaps_of(spans, now_sec)
+        sm = health.summarize(spans, gaps, now_sec)
+        # 汇总要算上没洞的路，否则「今天总共录了多少」会漏掉表现最好的那几路
+        all_sum.append(sm)
+        if not gaps:
+            continue
+        ch = ch_map.get(cid) or {"enabled": bool(cam.get("enabled", True))}
+        sstate = health.state_of(ch, idle.get(cid))
+        for g in gaps:
+            g["reason"] = health.gap_reason(g, sstate, today)
+        rows.append({"id": cid, "name": cam.get("name") or cid,
+                     "state": sstate,
+                     "label": health.STATE_LABEL.get(sstate, sstate),
+                     "now_reason": health.reason_of(sstate, ch, idle.get(cid)),
+                     "segment_sec": seg,
+                     "segments": len(starts),
+                     "gaps": gaps[:30],
+                     "gap_truncated": len(gaps) > 30,
+                     "covered_sec": sm["covered_sec"],
+                     "gap_sec": sm["gap_sec"],
+                     "gap_count": sm["gap_count"],
+                     "max_gap_sec": sm["max_gap_sec"],
+                     "coverage": sm["coverage"]})
+    data = {"ok": True, "date": date, "now": now_sec,
+            "cams": rows,
+            "total": health.day_report(all_sum)}
+    _HG_CACHE.update({"key": key, "at": now, "data": data})
+    return data
+
+
 def status_payload():
     cfg = runtime.load_config(STATE["var_dir"])
     g = gpu()
@@ -2192,8 +2347,7 @@ def status_payload():
         # 不该让整个 /api/status 500 —— 那样摄像头列表、录制状态、看板会一起废掉，
         # 用户看到的是"页面转圈"，而真正的原因只是某个 /proc 字段读不到。
         "res": _safe_res(g),
-        "cams": {"total": len(cameras()),
-                 "recording": sum(1 for c in cameras() if c.get("url") and c.get("enabled", True))},
+        "cams": cams_counts(),
         "config": runtime.redact_cfg(cfg),
         "limits": {
             "concurrency": effective,
@@ -2232,6 +2386,17 @@ def link_payload():
     d = lo.status()
     d["ok"] = True
     d["record"] = rc.status() if rc else None
+    if d.get("record"):
+        # 0.9.118：每路细分状态一起下发给前端。
+        # recorder.status() 只知道「进程在不在」，判不出「进程在但没输出」——
+        # 那恰好是真机断流的样子（ffmpeg 还活着，mtime 不涨），
+        # 上游 idle 也只有这里拿得到，所以在出口统一补一次。
+        _idle = _ingest_idle_map()
+        for _ch in (d["record"].get("channels") or []):
+            _s = health.state_of(_ch, _idle.get(_ch.get("id")))
+            _ch["hstate"] = _s
+            _ch["hlabel"] = health.STATE_LABEL.get(_s, _s)
+            _ch["hreason"] = health.reason_of(_s, _ch, _idle.get(_ch.get("id")))
     d["configured_cams"] = sum(1 for c in cameras() if c.get("url"))
     d["record_enable"] = bool(runtime.load_config(STATE["var_dir"]).get("record_enable", True))
     return d
@@ -2366,10 +2531,18 @@ class Handler(BaseHTTPRequestHandler):
     def _do_get(self):
         path = urlparse(self.path).path
         if path == "/api/health":
+            # cams 一起给：设置页顶部的版本徽标已经在这里取数，
+            # 首页想看「几路真在录」就不必再打一次 /api/status（那份重得多）。
             return self._send(200, {"ok": True, "version": runtime.VERSION,
                                     "uptime": int(time.time() - STATE["started_at"]),
+                                    "cams": cams_counts(),
                                     "ffmpeg": runtime.find_ffmpeg(STATE["app_dir"]),
                                     "ffprobe": runtime.find_ffprobe(STATE["app_dir"])})
+        if path == "/api/health/gaps":
+            qs = parse_qs(urlparse(self.path).query)
+            date = (qs.get("date") or [""])[0]
+            force = (qs.get("force") or ["0"])[0] in ("1", "true", "yes")
+            return self._send(200, health_gaps_payload(date, force=force))
         if path == "/api/config":
             # UI 的 syncFromServer 靠这个接口把「分片长度 / 衔接模式 / 快照间隔」
             # 拉回来。以前这里根本没路由，请求落到静态文件返回 index.html，

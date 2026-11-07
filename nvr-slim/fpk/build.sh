@@ -63,6 +63,9 @@ if [ -n "$NODE" ]; then
   # 历史日志：翻页取文件、顺序不能反、到底/到上限要禁用（0.9.117）
   echo "== 历史日志翻页 =="
   "$NODE" "$ROOT/test/ui/log_tail.test.js" || exit 1
+  # 录像可信度：细分状态不撒谎 + 缺口卡说人话（0.9.118）
+  echo "== 录像可信度 =="
+  "$NODE" "$ROOT/test/ui/health.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi
