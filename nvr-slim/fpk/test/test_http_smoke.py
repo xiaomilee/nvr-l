@@ -189,6 +189,22 @@ def main():
               and isinstance(d.get("warn"), int) and isinstance(d.get("err"), int),
               (s, list(d)[:8]))
 
+        # 0.9.117 历史日志：从落盘文件尾部读，start/end 供前端往前翻
+        s, b = req("/api/log/file?lines=50")
+        d = json.loads(b)
+        check("历史日志可读且带翻页坐标",
+              s == 200 and d.get("ok") is True and isinstance(d.get("lines"), list)
+              and isinstance(d.get("start"), int) and isinstance(d.get("end"), int)
+              and isinstance(d.get("more"), bool),
+              (s, [k for k in d][:8]))
+        check("历史日志默认只给业务行（访问行会把它冲淡）",
+              all(x.startswith("[nvr] ") for x in (d.get("lines") or [])),
+              (d.get("lines") or [])[:2])
+        s, b = req("/api/log/file?lines=50&access=1")
+        d2 = json.loads(b)
+        check("access=1 时连访问行一起给", s == 200 and d2.get("ok") is True,
+              (s, (d2.get("lines") or [])[:1]))
+
         s, b = req("/api/link/run", "POST", {})
         d = json.loads(b)
         check("立即处理一批可用", s == 200 and d.get("ok") is True, (s, b[:100]))

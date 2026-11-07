@@ -47,7 +47,7 @@ global.document = {
   createElementNS(ns, tag){ return mkEl(tag || "svg"); },
   addEventListener(){},
   documentElement:{ dataset:{} },
-  body:{ appendChild(){}, classList:{ add(){}, remove(){}, toggle(){} } }
+  body:{ appendChild(){}, classList:{ add(){}, remove(){}, toggle(){}, contains(){ return false; } } }
 };
 global.window = {
   matchMedia: ()=>({ matches:false, addEventListener(){}, addListener(){} }),

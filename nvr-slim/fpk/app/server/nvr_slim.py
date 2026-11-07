@@ -322,6 +322,123 @@ def log_clear():
         pass
 
 
+# --------------------------------------------------------- 历史日志（文件尾读）
+# 0.9.117：内存环只有 800 条，真机也就覆盖两三个小时。想查「昨天凌晨为什么断」时
+# 面板里什么都没有，只能登 NAS 去 tail 文件 —— 而大多数用户根本进不去 shell。
+# 这里从文件尾**按字节倒着读**，不整份加载：日志跑一个月能到几十 MB，
+# readlines() 会把整个文件读进内存并切成一堆字符串，在 NAS 上等于一次自杀。
+LOG_TAIL_LINES = 800          # 每请求默认给多少行
+LOG_TAIL_MAX = 4000           # 单请求上限（防 ?lines=999999 把内存打满）
+LOG_TAIL_BYTES = 8 * 1024 * 1024   # 单次最多倒读多少字节
+
+
+def _log_block(path, max_lines, end=None, chunk=65536):
+    """从文件尾（或 end 指定的字节位置）往前读一段。
+
+    返回 (lines, start, end, size)：
+      lines  按文件顺序（旧 → 新）
+      start  第一行在文件里的起始字节，用作下一页的 end
+      end    本次读到的结束字节（不含）
+      size   文件当前大小
+
+    半行必须丢掉：起点落在某行中间时，那一段只是后半截，直接显示会得到
+    一条缺头少尾的日志。判断方法不是"猜"，而是回头看一眼 pos-1 是不是换行。
+
+    返回 (lines, offsets, start, end, size)：offsets 是每行在文件里的起始字节。
+    调用方要按内容过滤（丢访问行）时必须靠它算下一页的边界，否则过滤掉几行之后
+    start 就和真正返回的第一行对不上，翻页会出现重复或跳行。
+    """
+    size = os.path.getsize(path)
+    end = size if end is None else max(0, min(int(end), size))
+    if end <= 0:
+        return [], [], 0, 0, size
+    pos = end
+    buf = b""
+    with open(path, "rb") as fh:
+        while pos > 0 and buf.count(b"\n") <= max_lines and (end - pos) < LOG_TAIL_BYTES:
+            step = min(chunk, pos)
+            pos -= step
+            fh.seek(pos)
+            buf = fh.read(step) + buf
+        boundary = True
+        if pos > 0:
+            fh.seek(pos - 1)
+            boundary = (fh.read(1) == b"\n")
+    parts = buf.split(b"\n")
+    if parts and parts[-1] == b"":       # 文件以换行结尾 → 末尾多一个空串
+        parts.pop()
+    start = pos
+    # 起点不在行首：丢掉前半截（只有一段时宁可留着，否则前端会一直"加载更早"）
+    if pos > 0 and not boundary and len(parts) > 1:
+        start = pos + len(parts[0]) + 1
+        parts = parts[1:]
+    if len(parts) > max_lines:
+        drop = len(parts) - max_lines
+        start += sum(len(x) + 1 for x in parts[:drop])
+        parts = parts[drop:]
+    offs, cur = [], start
+    for x in parts:
+        offs.append(cur)
+        cur += len(x) + 1
+    # 只剥行尾的 \r：文件被 Windows 侧工具碰过（拷出来看、或打包机上跑过）会变成 CRLF
+    return ([x.decode("utf-8", "replace").rstrip("\r") for x in parts],
+            offs, start, end, size)
+
+
+def log_file_payload(n=None, end=None, access=False):
+    """落盘日志的一段（默认最新，且**只给业务行**）。
+
+    文件里业务行和 HTTP 访问行是混着写的（同一个 _emit）。访问行在真机上占绝大多数
+    —— 光是浏览器拖一次进度条就是上百条 Range 请求。不过滤的话「800 行历史」可能
+    只覆盖几分钟，翻历史就失去意义了。要看访问行传 access=1。
+    凭据在写盘前已脱敏，这里直接返回。
+    """
+    p = _log_path()
+    try:
+        n = int(n) if n not in (None, "") else LOG_TAIL_LINES
+    except (TypeError, ValueError):
+        n = LOG_TAIL_LINES
+    n = max(1, min(n, LOG_TAIL_MAX))
+    try:
+        e = int(end) if end not in (None, "") else None
+    except (TypeError, ValueError):
+        e = None
+    if not os.path.exists(p):
+        return {"ok": True, "exists": False, "lines": [], "start": 0,
+                "end": 0, "size": 0, "more": False, "path": p}
+    try:
+        out, offs, cur, endpos, size = [], [], e, 0, 0
+        for _ in range(3):               # 最多往回翻三批，避免访问行极密时无上限地扫
+            need = n - len(out)
+            if need <= 0:
+                break
+            # 过滤模式下按 8 倍余量取原始行：一段里访问行占九成是常态
+            raw = n if access else min(LOG_TAIL_MAX * 4, max(need * 8, 400))
+            lines, off, bstart, endpos, size = _log_block(p, raw, cur)
+            if access:
+                kept, kee = lines, off
+            else:
+                pairs = [(x, o) for x, o in zip(lines, off) if x.startswith("[nvr] ")]
+                kept = [x for x, _ in pairs]
+                kee = [o for _, o in pairs]
+            out = kept + out
+            offs = kee + offs
+            cur = bstart
+            if len(out) > n:             # 多取的部分从最旧的裁掉，起点跟着后移
+                cut = len(out) - n
+                out = out[cut:]
+                offs = offs[cut:]
+                break
+            if bstart == 0:
+                break
+    except OSError as ex:
+        return {"ok": False, "reason": "读取日志文件失败：%s" % _fmt_exc(ex),
+                "lines": [], "start": 0, "end": 0, "size": 0, "more": False}
+    start = offs[0] if offs else (cur or 0)
+    return {"ok": True, "exists": True, "lines": out, "start": start,
+            "end": endpos or size, "size": size, "more": start > 0, "path": p}
+
+
 def log_export_text():
     """诊断导出：内存里的全量日志 + 关键运行时状态，凭据统一脱敏。"""
     cfg = runtime.load_config(STATE["var_dir"])
@@ -2325,6 +2442,15 @@ class Handler(BaseHTTPRequestHandler):
                                     "warn": cnt["warn"], "err": cnt["err"],
                                     "access": acc_lines,
                                     "access_total": acc_total})
+        if path == "/api/log/file":
+            # 落盘日志的回溯：内存环只覆盖最近两三小时，这里按需往前翻。
+            # lines 每页多少行，end 上一页返回的 start（不传就是最新一页），
+            # access=1 连 HTTP 访问行一起给（默认只给业务行，否则一页顶不了几分钟）。
+            q = parse_qs(urlparse(self.path).query)
+            return self._send(200, log_file_payload(
+                (q.get("lines") or [None])[0],
+                (q.get("end") or [None])[0],
+                (q.get("access") or [""])[0] in ("1", "true", "yes")))
         if path == "/api/log/export":
             # 诊断导出：一次下载整份（状态摘要 + 全量日志），凭据已脱敏。
             # 以前这个按钮只弹一个 toast，什么都没发生。

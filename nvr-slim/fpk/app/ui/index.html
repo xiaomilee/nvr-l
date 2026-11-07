@@ -505,6 +505,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
 .logbtn.danger{color:var(--warn-fg);background:#fdf3e0;border-color:transparent}
 /* 筛选按下态用主色蓝，不借归档紫 —— 紫色在本产品里已经专指「归档」，混用会误导 */
 .logbtn.on{color:var(--primary);background:var(--primary-soft2);border-color:var(--primary)}
+/* 0.9.117：翻到底 / 已到行数上限时按钮要看得出来点不动了 */
+.logbtn[disabled]{opacity:.4}
+html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .diagwarn{margin-top:10px;padding:10px 11px;border-radius:10px;background:#fdf3e0;
   border:1px solid #f0d9a8;color:#8a5a12;font-size:12px;line-height:1.6}
 .diagwarn b{color:#7a4a08}
@@ -5450,7 +5453,13 @@ async function restartDiag(){
    日志里 283 行「处理失败」和启动横幅长得一模一样，出问题时人眼筛不出来。
    现在逐行建 <span>、逐行 textContent —— 日志里的 < > & 一律当字面量，不存在
    拼 HTML 的转义风险；复制的还是 pre.textContent，行间用文本节点换行保留。 */
-const LOGP = { lines: [], warn: 0, err: 0, only: false };
+const LOGP = { lines: [], warn: 0, err: 0, only: false,
+               /* 0.9.117：内存环只有 800 条（真机两三小时），翻昨天的事得读落盘文件。
+                  file=true 表示当前看的是文件，fStart 是已载入部分在文件里的起始字节，
+                  「加载更早」就把它当下一页的 end 传回去。 */
+               file: false, fStart: 0, fSize: 0, fMore: false };
+const LOG_FILE_PAGE = 800;      // 每次从文件取多少行
+const LOG_FILE_CAP  = 6000;     // 面板里最多堆多少行，再多手机端会卡
 
 function logLineClass(t){
   if(t.indexOf("[ERR] ") >= 0) return "le";
@@ -5458,9 +5467,28 @@ function logLineClass(t){
   return "";
 }
 
-function renderLog(){
+function logLevelCount(rows){
+  let w = 0, e = 0;
+  rows.forEach(t=>{
+    if(t.indexOf("[ERR] ") >= 0) e++;
+    else if(t.indexOf("[WARN] ") >= 0) w++;
+  });
+  return { w: w, e: e };
+}
+
+function logSizeText(n){
+  if(!n) return "0 KB";
+  if(n >= 1048576) return (n/1048576).toFixed(1) + " MB";
+  return Math.max(1, Math.round(n/1024)) + " KB";
+}
+
+/* anchor=true：往前翻页时把视口钉在原处。不钉的话每翻一页屏幕都跳到底部，
+   人眼刚扫到的那一行直接跑掉，翻历史就没法用了。 */
+function renderLog(anchor){
   const pre = document.getElementById("diagLogText");
   if(!pre) return;
+  const box = pre.parentElement;
+  const stick = (anchor && box) ? (box.scrollHeight - box.scrollTop) : 0;
   const rows = LOGP.only
     ? LOGP.lines.filter(t=>t.indexOf("[WARN] ") >= 0 || t.indexOf("[ERR] ") >= 0)
     : LOGP.lines;
@@ -5468,9 +5496,13 @@ function renderLog(){
   if(!rows.length){
     const sp = document.createElement("span");
     sp.className = "empty";
-    sp.textContent = LOGP.only
-      ? "没有警告或错误 —— 本次启动以来没出现异常"
-      : "（暂无日志）";
+    if(LOGP.only){
+      sp.textContent = LOGP.file
+        ? "已载入的这段里没有警告或错误（可以继续「加载更早」）"
+        : "没有警告或错误 —— 本次启动以来没出现异常";
+    }else{
+      sp.textContent = LOGP.file ? "日志文件是空的（「清除日志」会清空它）" : "（暂无日志）";
+    }
     pre.appendChild(sp);
   }else{
     const frag = document.createDocumentFragment();
@@ -5483,19 +5515,81 @@ function renderLog(){
     });
     pre.appendChild(frag);
   }
-  const bad = LOGP.warn + LOGP.err;
+  /* 内存环的计数是服务端从启动起累计的；文件模式只能数「已载入的这段」，
+     两者口径不同，所以标题上必须写清是「警告 X」还是「本页警告 X」。 */
+  const cnt = LOGP.file ? logLevelCount(LOGP.lines) : { w: LOGP.warn, e: LOGP.err };
+  const bad = cnt.w + cnt.e;
   const meta = document.getElementById("diagLogMeta");
   if(meta){
-    meta.textContent = (LOGP.lines.length ? "最近 " + LOGP.lines.length + " 行" : "无日志")
-      + (bad ? " · 警告 " + LOGP.warn + " / 错误 " + LOGP.err : "");
+    meta.textContent = LOGP.file
+      ? ("历史日志 · 已载入 " + LOGP.lines.length + " 行 · 文件 " + logSizeText(LOGP.fSize)
+         + (bad ? " · 本页警告 " + cnt.w + " / 错误 " + cnt.e : ""))
+      : ((LOGP.lines.length ? "最近 " + LOGP.lines.length + " 行" : "无日志")
+         + (bad ? " · 警告 " + LOGP.warn + " / 错误 " + LOGP.err : ""));
   }
   const btn = document.getElementById("btnLogWarn");
   if(btn){
     btn.textContent = LOGP.only ? "显示全部" : (bad ? "只看警告 (" + bad + ")" : "只看警告");
     btn.classList.toggle("on", LOGP.only);
   }
-  const box = pre.parentElement;
-  box.scrollTop = box.scrollHeight;      // 滚动到底部，最新的在最下面
+  const hist = document.getElementById("btnLogHist");
+  if(hist){
+    hist.textContent = LOGP.file ? "回到实时" : "历史日志";
+    hist.classList.toggle("on", LOGP.file);
+  }
+  const more = document.getElementById("btnLogMore");
+  if(more){
+    /* 到上限也禁用：否则按钮写着「已到上限」却还点得动，点下去什么也不发生 */
+    const cap = LOGP.lines.length >= LOG_FILE_CAP;
+    more.style.display = LOGP.file ? "" : "none";
+    more.disabled = !(LOGP.file && LOGP.fMore) || cap;
+    more.textContent = cap ? "已到上限" : "加载更早";
+  }
+  if(!box) return;
+  if(anchor) box.scrollTop = Math.max(0, box.scrollHeight - stick);
+  else box.scrollTop = box.scrollHeight;    // 滚动到底部，最新的在最下面
+}
+
+/* 读落盘日志的一段。more=true 表示「接着往上翻」：把当前已载入部分的起始
+   字节当作下一页的 end，后端从那里往前再取一批。 */
+async function loadLogFile(more){
+  const pre = document.getElementById("diagLogText");
+  if(!pre) return;
+  if(!more){
+    LOGP.fStart = 0; LOGP.fMore = false; LOGP.fSize = 0;
+  }
+  const endQ = (more && LOGP.fStart > 0) ? ("&end=" + LOGP.fStart) : "";
+  try{
+    const r = await fetch("/api/log/file?lines=" + LOG_FILE_PAGE + endQ + "&_t=" + Date.now(),
+                          { mode:"same-origin", cache:"no-store" });
+    const d = await r.json();
+    if(!d || !d.ok){
+      toast("toast2", (d && d.reason) || "读取日志文件失败");
+      return;
+    }
+    const rows = Array.isArray(d.lines) ? d.lines : [];
+    /* 成功之后才切换模式：失败时保持原样（还能再点一次），不至于把面板清空成
+       「暂无日志」让人以为日志没了 */
+    LOGP.file = true;
+    LOGP.fSize = d.size | 0;
+    LOGP.fStart = d.start | 0;
+    LOGP.lines = more ? rows.concat(LOGP.lines) : rows;
+    /* 到上限就收手：DOM 里堆上万行会把手机卡死，那时候该用「导出诊断」而不是翻页 */
+    LOGP.fMore = !!d.more && LOGP.lines.length < LOG_FILE_CAP;
+    renderLog(!!more);
+    if(more && !rows.length) toast("toast2", "没有更早的记录了");
+  }catch(e){
+    toast("toast2", "读取日志文件失败：" + e);
+  }
+}
+
+function toggleLogSource(){
+  if(LOGP.file){                        // 回到实时：重新拉内存环（这期间可能又写了新日志）
+    LOGP.file = false; LOGP.fStart = 0; LOGP.fMore = false;
+    loadDiagLog();
+  }else{
+    loadLogFile(false);
+  }
 }
 
 async function loadDiagLog(){
@@ -5514,6 +5608,7 @@ async function loadDiagLog(){
     LOGP.lines = (d && Array.isArray(d.lines)) ? d.lines : [];
     LOGP.warn = (d && d.warn) | 0;
     LOGP.err = (d && d.err) | 0;
+    LOGP.file = false;
     renderLog();
   }catch(e){
     pre.textContent = "无法读取日志：" + e;
@@ -5537,6 +5632,7 @@ async function copyDiagLog(){
 }
 async function clearDiagLog(){
   try{ await apiPost("/api/log/clear", {}); }catch(e){}
+  LOGP.file = false; LOGP.fStart = 0; LOGP.fMore = false;   // 文件被清空，历史模式没意义了
   await loadDiagLog();
   toast("toast2", "日志已清除");
 }
@@ -6803,11 +6899,16 @@ function cardLog(){
     + '<div class="dh">运行日志<span class="tg">密码已脱敏</span><span class="rt" id="diagLogMeta">正在读取…</span></div>'
     + '<div class="hint" style="margin:0 0 8px">画面出不来 / 录像中断 / 反复重连时先看这里 —— '
       + '快照失败、ffmpeg 报错、调度异常都记在这儿。带 <b style="color:#c98a12">[WARN]</b> 的是'
-      + '「能跑但不对」，带 <b style="color:#c9432b">[ERR]</b> 的是「这块功能已经没了」。</div>'
+      + '「能跑但不对」，带 <b style="color:#c9432b">[ERR]</b> 的是「这块功能已经没了」。'
+      + '面板默认只看最近两三小时，查更早的点「历史日志」。</div>'
     + '<div class="logbox" id="diagLog" style="margin-top:0"><pre id="diagLogText"><span class="empty">正在读取…</span></pre></div>'
     + '<div class="logbtns">'
       + '<button class="logbtn" id="btnLogWarn">只看警告</button>'
+      + '<button class="logbtn" id="btnLogHist">历史日志</button>'
       + '<button class="logbtn" id="btnLogRefresh">刷新</button>'
+    + '</div>'
+    + '<div class="logbtns" style="margin-top:8px">'
+      + '<button class="logbtn" id="btnLogMore" style="display:none" disabled>加载更早</button>'
       + '<button class="logbtn" id="btnLogCopy">复制日志</button>'
     + '</div>'
     + '<div class="logbtns" style="margin-top:8px">'
@@ -6948,7 +7049,16 @@ function bindSettings(body){
 
   /* 诊断日志：直接看 / 复制 / 清除 */
   const lr = body.querySelector("#btnLogRefresh");
-  if(lr) lr.onclick = ()=>{ loadDiagLog(); toast("toast2", "日志已刷新"); };
+  if(lr) lr.onclick = ()=>{
+    /* 看历史时刷新＝重新读文件最新一页；看实时时才是拉内存环 */
+    if(LOGP.file) loadLogFile(false); else loadDiagLog();
+    toast("toast2", "日志已刷新");
+  };
+  /* 历史日志 ⇄ 回到实时：内存环只有最近两三小时，查「昨天凌晨为什么断」得读文件 */
+  const lh = body.querySelector("#btnLogHist");
+  if(lh) lh.onclick = toggleLogSource;
+  const lm = body.querySelector("#btnLogMore");
+  if(lm) lm.onclick = ()=>{ if(LOGP.file && LOGP.fMore) loadLogFile(true); };
   const lc = body.querySelector("#btnLogCopy");
   if(lc) lc.onclick = copyDiagLog;
   const lx = body.querySelector("#btnLogClear");

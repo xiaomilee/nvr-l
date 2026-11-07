@@ -60,6 +60,9 @@ if [ -n "$NODE" ]; then
   # 运行日志：分级着色 + 只看警告 + 逐行 textContent（0.9.116）
   echo "== 运行日志分级 =="
   "$NODE" "$ROOT/test/ui/log_level.test.js" || exit 1
+  # 历史日志：翻页取文件、顺序不能反、到底/到上限要禁用（0.9.117）
+  echo "== 历史日志翻页 =="
+  "$NODE" "$ROOT/test/ui/log_tail.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi
