@@ -181,6 +181,14 @@ def main():
         check("诊断导出可下载且脱敏",
               s == 200 and b"==== NVR " in b and b"u:p@" not in b, b[:60])
 
+        # 0.9.116 日志分级：前端靠 lines 里的 [WARN]/[ERR] 上色，靠 warn/err 显示计数
+        s, b = req("/api/log")
+        d = json.loads(b)
+        check("日志接口带分级字段",
+              s == 200 and isinstance(d.get("lines"), list)
+              and isinstance(d.get("warn"), int) and isinstance(d.get("err"), int),
+              (s, list(d)[:8]))
+
         s, b = req("/api/link/run", "POST", {})
         d = json.loads(b)
         check("立即处理一批可用", s == 200 and d.get("ok") is True, (s, b[:100]))

@@ -489,6 +489,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
   font-size:11px;line-height:1.6}
 .logbox pre{margin:0;font:inherit;white-space:pre-wrap;word-break:break-all}
 .logbox .empty{color:var(--faint)}
+/* 分级着色（0.9.116）：日志框本身就是固定深色底，所以用亮色而不是主题色，
+   浅色主题下也不会糊成一片。行内标记由后端写入，前端只按标记上色。 */
+.logbox pre .lw{color:#ffb454}
+.logbox pre .le{color:#ff7b72;font-weight:600}
 .diagenv{margin-top:10px;padding:9px 11px;border-radius:10px;background:var(--primary-soft);
   font-size:12px;line-height:1.7;color:var(--text2);word-break:break-all}
 .diagenv .ok{color:#1a9c4c}
@@ -499,6 +503,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;heigh
   font-size:12.5px;color:var(--text2)}
 .logbtn:active{opacity:.65}
 .logbtn.danger{color:var(--warn-fg);background:#fdf3e0;border-color:transparent}
+/* 筛选按下态用主色蓝，不借归档紫 —— 紫色在本产品里已经专指「归档」，混用会误导 */
+.logbtn.on{color:var(--primary);background:var(--primary-soft2);border-color:var(--primary)}
 .diagwarn{margin-top:10px;padding:10px 11px;border-radius:10px;background:#fdf3e0;
   border:1px solid #f0d9a8;color:#8a5a12;font-size:12px;line-height:1.6}
 .diagwarn b{color:#7a4a08}
@@ -5439,6 +5445,59 @@ async function restartDiag(){
     toast("toast2", "重启接口不可用——请在应用中心手动停止→启动");
   }
 }
+/* 运行日志：分级 + 只看警告（0.9.116）
+   以前整块是一个 <pre>，一次 textContent 铺完，所有行一个颜色。真机 2 小时
+   日志里 283 行「处理失败」和启动横幅长得一模一样，出问题时人眼筛不出来。
+   现在逐行建 <span>、逐行 textContent —— 日志里的 < > & 一律当字面量，不存在
+   拼 HTML 的转义风险；复制的还是 pre.textContent，行间用文本节点换行保留。 */
+const LOGP = { lines: [], warn: 0, err: 0, only: false };
+
+function logLineClass(t){
+  if(t.indexOf("[ERR] ") >= 0) return "le";
+  if(t.indexOf("[WARN] ") >= 0) return "lw";
+  return "";
+}
+
+function renderLog(){
+  const pre = document.getElementById("diagLogText");
+  if(!pre) return;
+  const rows = LOGP.only
+    ? LOGP.lines.filter(t=>t.indexOf("[WARN] ") >= 0 || t.indexOf("[ERR] ") >= 0)
+    : LOGP.lines;
+  pre.textContent = "";
+  if(!rows.length){
+    const sp = document.createElement("span");
+    sp.className = "empty";
+    sp.textContent = LOGP.only
+      ? "没有警告或错误 —— 本次启动以来没出现异常"
+      : "（暂无日志）";
+    pre.appendChild(sp);
+  }else{
+    const frag = document.createDocumentFragment();
+    rows.forEach(t=>{
+      const sp = document.createElement("span");
+      sp.className = logLineClass(t);
+      sp.textContent = t;
+      frag.appendChild(sp);
+      frag.appendChild(document.createTextNode("\n"));
+    });
+    pre.appendChild(frag);
+  }
+  const bad = LOGP.warn + LOGP.err;
+  const meta = document.getElementById("diagLogMeta");
+  if(meta){
+    meta.textContent = (LOGP.lines.length ? "最近 " + LOGP.lines.length + " 行" : "无日志")
+      + (bad ? " · 警告 " + LOGP.warn + " / 错误 " + LOGP.err : "");
+  }
+  const btn = document.getElementById("btnLogWarn");
+  if(btn){
+    btn.textContent = LOGP.only ? "显示全部" : (bad ? "只看警告 (" + bad + ")" : "只看警告");
+    btn.classList.toggle("on", LOGP.only);
+  }
+  const box = pre.parentElement;
+  box.scrollTop = box.scrollHeight;      // 滚动到底部，最新的在最下面
+}
+
 async function loadDiagLog(){
   const pre = document.getElementById("diagLogText");
   if(!pre) return;
@@ -5446,17 +5505,16 @@ async function loadDiagLog(){
     const r = await fetch("/api/log?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" });
     const ct = (r.headers.get("content-type") || "");
     if(!ct.includes("json")){
+      LOGP.lines = []; LOGP.warn = 0; LOGP.err = 0;
       pre.textContent = "无法读取日志：服务端返回的不是日志接口（" + (ct || "未知类型") + "）。\n"
         + "后台跑的还是旧版服务进程——请点上方「重启服务」按钮，或在飞牛应用中心里「停止 → 启动」本应用。";
-      pre.classList.remove("empty");
       return;
     }
     const d = await r.json();
-    const txt = (d && typeof d.text === "string") ? d.text : "";
-    pre.textContent = txt || "（暂无日志）";
-    pre.classList.toggle("empty", !txt);
-    const box = pre.parentElement;
-    box.scrollTop = box.scrollHeight;      // 滚动到底部，最新的在最下面
+    LOGP.lines = (d && Array.isArray(d.lines)) ? d.lines : [];
+    LOGP.warn = (d && d.warn) | 0;
+    LOGP.err = (d && d.err) | 0;
+    renderLog();
   }catch(e){
     pre.textContent = "无法读取日志：" + e;
   }
@@ -6742,13 +6800,17 @@ function cardDetectDiag(){
 
 function cardLog(){
   return '<div class="dcard">'
-    + '<div class="dh">运行日志<span class="tg">密码已脱敏</span><span class="rt">最近 200 行</span></div>'
+    + '<div class="dh">运行日志<span class="tg">密码已脱敏</span><span class="rt" id="diagLogMeta">正在读取…</span></div>'
     + '<div class="hint" style="margin:0 0 8px">画面出不来 / 录像中断 / 反复重连时先看这里 —— '
-      + '快照失败、ffmpeg 报错、调度异常都记在这儿。</div>'
+      + '快照失败、ffmpeg 报错、调度异常都记在这儿。带 <b style="color:#c98a12">[WARN]</b> 的是'
+      + '「能跑但不对」，带 <b style="color:#c9432b">[ERR]</b> 的是「这块功能已经没了」。</div>'
     + '<div class="logbox" id="diagLog" style="margin-top:0"><pre id="diagLogText"><span class="empty">正在读取…</span></pre></div>'
     + '<div class="logbtns">'
+      + '<button class="logbtn" id="btnLogWarn">只看警告</button>'
       + '<button class="logbtn" id="btnLogRefresh">刷新</button>'
       + '<button class="logbtn" id="btnLogCopy">复制日志</button>'
+    + '</div>'
+    + '<div class="logbtns" style="margin-top:8px">'
       + '<button class="logbtn danger" id="btnLogClear">清除日志</button>'
     + '</div>'
     + '</div>';
@@ -6891,6 +6953,9 @@ function bindSettings(body){
   if(lc) lc.onclick = copyDiagLog;
   const lx = body.querySelector("#btnLogClear");
   if(lx) lx.onclick = clearDiagLog;
+  /* 只看警告：纯前端过滤，不重新请求（日志量大的时候点一下就要有反应） */
+  const lw = body.querySelector("#btnLogWarn");
+  if(lw) lw.onclick = ()=>{ LOGP.only = !LOGP.only; renderLog(); };
   const rs = body.querySelector("#btnRestart");
   if(rs) rs.onclick = restartDiag;
   if(body.querySelector("#diagEnv")) loadDiagEnv();

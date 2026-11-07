@@ -8,6 +8,8 @@ function mkEl(id){
     width:0, height:0, value:"", textContent:"", onclick:null, oninput:null, onchange:null,
     childNodes:[{ nodeValue:"", textContent:"", style:{} }],
     children:[], firstChild:{ nodeValue:"", textContent:"" }, parentNode:null,
+    /* 滚动容器：日志面板铺完要滚到底（box = pre.parentElement） */
+    parentElement:{ scrollTop:0, scrollHeight:0, clientHeight:0 },
     appendChild(){}, removeChild(){}, insertBefore(){}, remove(){},
     setAttribute(){}, getAttribute(){ return null; },
     addEventListener(){}, removeEventListener(){},
@@ -35,6 +37,12 @@ global.document = {
   querySelectorAll(){ return []; },
   querySelector(){ return mkEl("qs"); },
   createElement(){ return mkEl("tmp"); },
+  /* 日志行之间的换行用文本节点挂，复制（pre.textContent）时换行才不丢 */
+  createTextNode(t){ return { nodeValue: String(t), textContent: String(t) }; },
+  /* 运行日志改为逐行 <span> 渲染（0.9.116），走 DocumentFragment 一次性挂载 */
+  createDocumentFragment(){
+    return { _kids:[], appendChild(n){ this._kids.push(n); } };
+  },
   /* SVG 元素（0.9.90 起 renderVtl 会建一张 <svg> 承载「事件线 → 气泡」的曲线） */
   createElementNS(ns, tag){ return mkEl(tag || "svg"); },
   addEventListener(){},

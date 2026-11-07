@@ -57,6 +57,9 @@ if [ -n "$NODE" ]; then
   # 文件页日期条：今天用本地日历、按源分色、默认落点（0.9.113）
   echo "== 文件页日期条 =="
   "$NODE" "$ROOT/test/ui/dates.test.js" || exit 1
+  # 运行日志：分级着色 + 只看警告 + 逐行 textContent（0.9.116）
+  echo "== 运行日志分级 =="
+  "$NODE" "$ROOT/test/ui/log_level.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

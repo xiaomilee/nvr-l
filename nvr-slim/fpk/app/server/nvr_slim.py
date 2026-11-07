@@ -112,6 +112,63 @@ def _fmt_exc(e):
     return "%s: %s" % (type(e).__name__, e)
 
 
+# ---------------------------------------------------------------- 日志分级
+# 0.9.116：以前所有业务日志一视同仁。真机 2 小时日志里 283 行「处理失败」、
+# 192 行「取流断开/重连」和「录制启动完成」是同一个级别、同一个颜色，出问题
+# 时只能在几百行里用眼睛捞，而用户贴过来的截图往往正好没有那几行。
+#
+# 为什么按关键词判而不是给每个调用点加参数：detect / ingest / link / notify /
+# recorder / snapshots / frames 八处的 log= 回调都是单参数签名（lambda m: ...），
+# 改成 (msg, lvl) 要动 30 多个调用点，改动量大且必然漏几个 —— 漏掉的那个恰好
+# 就是线上出事时不亮红灯的那个。关键词法对已有代码零改动、全覆盖；判错一个
+# 词的最坏后果只是少一个颜色，不影响功能。nvr_slim 自己的调用点可显式覆盖。
+_LVL_ERR = re.compile(
+    r"无法启动|启动失败|不可写|崩溃|致命|worker error|cleanup error"
+    r"|磁盘已满|空间不足|未找到 ffmpeg")
+_LVL_WARN = re.compile(
+    r"失败|异常|超时|断开|断流|中断|卡住|重连|兜底|降级|不可用|未找到"
+    r"|拒绝|无响应|已满|占用|残片|丢失")
+# 「重启」刻意不进 warn：改目录/改分片长度后的「按新参数重启」是正常动作，
+# 把它染成黄色只会让真正的断流重连淹没在一片黄里。
+_LVL_TOK = {"warn": "[WARN] ", "err": "[ERR] "}
+_LVL_COUNT = {"warn": 0, "err": 0}
+_LVL_LOCK = threading.Lock()
+# 只在时间戳之后插标记，前缀格式不动 —— 前端按行切分、复制、粘贴都还一样
+_LVL_PREFIX = re.compile(r"^\[nvr\] \d\d:\d\d:\d\d ")
+
+
+def log_level(msg):
+    """按内容判级：err / warn / info。"""
+    if _LVL_ERR.search(msg):
+        return "err"
+    if _LVL_WARN.search(msg):
+        return "warn"
+    return "info"
+
+
+def _tag_level(line, lvl):
+    tok = _LVL_TOK.get(lvl)
+    if not tok:
+        return line
+    m = _LVL_PREFIX.match(line)
+    if m:
+        return m.group(0) + tok + line[m.end():]
+    return tok + line
+
+
+def _count_level(lvl):
+    if lvl not in _LVL_COUNT:
+        return
+    with _LVL_LOCK:
+        _LVL_COUNT[lvl] += 1
+
+
+def level_counts():
+    """本次启动累计的警告/错误条数（清空日志时归零）。"""
+    with _LVL_LOCK:
+        return {"warn": _LVL_COUNT["warn"], "err": _LVL_COUNT["err"]}
+
+
 def _emit(line):
     """落盘 + stdout。内存缓冲放哪个环由调用方决定（业务 / 访问分开，见上）。"""
     print(line, flush=True)
@@ -145,9 +202,16 @@ _LOG_FH = None
 _LOG_FH_PATH = None
 
 
-def _record(line):
-    """业务日志：进 800 条主环（诊断页与 /api/log 只读它）。"""
+def _record(line, lvl=None):
+    """业务日志：进 800 条主环（诊断页与 /api/log 只读它）。
+
+    lvl 为 None 时按内容自动判级；显式传 "info"/"warn"/"err" 可覆盖。
+    """
     line = _CRED.sub(r'\1***@', line)
+    if lvl not in ("info", "warn", "err"):
+        lvl = log_level(line)
+    _count_level(lvl)
+    line = _tag_level(line, lvl)
     _LOG.append(line)
     _emit(line)
 
@@ -214,9 +278,9 @@ def _record_access(line):
         _ACCESS_AGG.update({"path": path, "n": 1, "shown": 1})
 
 
-def log_line(msg):
-    """业务日志入口：统一加 [nvr] 前缀与时间戳。"""
-    _record("[nvr] %s %s" % (time.strftime("%H:%M:%S"), msg))
+def log_line(msg, lvl=None):
+    """业务日志入口：统一加 [nvr] 前缀与时间戳，并按内容判级。"""
+    _record("[nvr] %s %s" % (time.strftime("%H:%M:%S"), msg), lvl)
 
 
 def _log_line(msg):
@@ -235,6 +299,9 @@ def log_clear():
     """清空内存缓冲与落盘文件（用户点「清除日志」时用）。"""
     global _LOG_FH, _LOG_FH_PATH
     _LOG.clear()
+    with _LVL_LOCK:
+        _LVL_COUNT["warn"] = 0
+        _LVL_COUNT["err"] = 0
     with _ACCESS_LOCK:
         _ACCESS.clear()
         _ACCESS_TOTAL[0] = 0
@@ -272,6 +339,8 @@ def log_export_text():
         "分片长度  : %s 秒" % cfg.get("record_segment_sec"),
         "衔接模式  : %s" % cfg.get("link_mode"),
         "并发      : %s" % cfg.get("concurrency"),
+        "日志分级  : 警告 %d 条 / 错误 %d 条（本次启动累计，行内标 [WARN] / [ERR]）"
+        % (level_counts()["warn"], level_counts()["err"]),
         "==== 通道 ====",
     ]
     for c in cameras():
@@ -283,8 +352,7 @@ def log_export_text():
             c.get("segment_sec") or "默认",
             c.get("full_days"), c.get("clip_days"),
             len((c.get("masks") or {}).get("ignore") or [])))
-    body = ["==== 日志（最近 %d 条业务日志）====" % len(_LOG)] + list(_LOG)
-    # HTTP 访问行单独一段（0.9.73 之前它和业务日志抢同一个 800 条缓冲，
+    body = ["==== 日志（最近 %d 条业务日志）====" % len(_LOG)] + list(_LOG)    # HTTP 访问行单独一段（0.9.73 之前它和业务日志抢同一个 800 条缓冲，
     # 一次手机回放就能把「录制 X 中断」挤干净）。这里放最近若干条 + 总请求数，
     # 需要看某次播放到底拉了多少分片时，靠他判断是不是浏览器分段下载。
     acc_total, acc_lines = _access_snapshot()
@@ -2250,9 +2318,11 @@ class Handler(BaseHTTPRequestHandler):
             if acc_total:
                 body += ("\n\n（另有 %d 次 HTTP 访问请求未在此列出 —— 看具体请求"
                          "请用「导出诊断」，那份带 HTTP 访问段）" % acc_total)
+            cnt = level_counts()
             return self._send(200, {"ok": True, "version": runtime.VERSION,
                                     "lines": list(_LOG),
                                     "text": body,
+                                    "warn": cnt["warn"], "err": cnt["err"],
                                     "access": acc_lines,
                                     "access_total": acc_total})
         if path == "/api/log/export":
