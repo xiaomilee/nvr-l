@@ -76,6 +76,9 @@ class Box:
         self.c.connect(host, port=port, username=user, password=pwd,
                        timeout=15, allow_agent=False, look_for_keys=False)
         self.sudo_pwd = pwd
+        # 0.9.120 起 /api/* 要凭证。这里存一份，ssh_http 自动带上；
+        # 空串表示目标还是老版本（那时接口不设防，多带一个头也无害）。
+        self.token = ""
 
     def run(self, cmd, timeout=60, sudo=False, check=False):
         if sudo:
@@ -189,10 +192,40 @@ def start_app(box, port, var_dir):
     return real_port(box, var_dir, port)
 
 
+def read_token(box, var_dir):
+    """读测试机上的 API 凭证（var/secret.json）。读不到返回空串。
+
+    为什么由部署工具读：0.9.120 起所有 /api/* 都要凭证，而凭证是服务第一次启动
+    时自己生成的。工具要自检，就必须自己拿到这枚 token —— 让用户手工粘一次
+    会变成"每轮都要人守着"，等于把自动化废掉。
+    """
+    rc, o, _ = box.run("cat %s/secret.json 2>/dev/null" % var_dir)
+    if rc != 0 or not o.strip():
+        return ""
+    try:
+        return str(json.loads(o).get("api_token") or "").strip()
+    except (ValueError, AttributeError):
+        return ""
+
+
+def wait_token(box, var_dir, limit=25):
+    """新版本起来后才会有 secret.json，等它出现再取。"""
+    t0 = time.time()
+    while time.time() - t0 < limit:
+        tok = read_token(box, var_dir)
+        if tok:
+            return tok
+        time.sleep(1)
+    return ""
+
+
 def ssh_http(box, port, path, timeout=15):
     # %% 是给 Python 的 % 格式化转义：curl 的 -w 里 %{http_code} 必须原样传过去
-    rc, o, e = box.run("curl -s -m %d -w '\\n%%{http_code}' http://127.0.0.1:%d%s"
-                       % (timeout, port, path), timeout=timeout + 10)
+    hdr = ""
+    if box.token:
+        hdr = " -H " + shquote("Authorization: Bearer " + box.token)
+    rc, o, e = box.run("curl -s -m %d%s -w '\\n%%{http_code}' http://127.0.0.1:%d%s"
+                       % (timeout, hdr, port, path), timeout=timeout + 10)
     if "\n" not in o:
         return 0, o
     body, _, code = o.rpartition("\n")
@@ -239,6 +272,10 @@ def deploy(args):
     try:
         # 用 port.txt 里的真实端口探活：应用在端口被占时会顺延，命令行那个不一定准
         cur_port = real_port(box, var_dir, args.port)
+        # 先拿旧凭证：目标机器如果已经是 0.9.120+，没这枚 token 连"部署前版本"都读不到
+        box.token = read_token(box, var_dir)
+        print("凭证：%s" % ("已读到（%s…）" % box.token[:4] if box.token
+                            else "无（目标为 0.9.120 之前，接口不设防）"))
         code, before = ssh_http(box, cur_port, "/api/health", timeout=5)
         cur = ""
         if code == 200:
@@ -295,6 +332,11 @@ def deploy(args):
         live_port = start_app(box, args.port, var_dir)
         if live_port != args.port:
             print("    端口顺延：%d → %d（port.txt 为准）" % (args.port, live_port))
+        # 新版本第一次启动才会生成 secret.json。不先取到它，下面每一步自检都会 401，
+        # 而 401 看起来像"部署失败"，实际上只是工具还空着手。
+        box.token = wait_token(box, var_dir) or box.token
+        if not box.token:
+            print("    未读到凭证（老版本或生成失败），按不设防接口继续")
 
         print("[6/6] 等新版本上线（最多 75 秒）...")
         ok, got, cost = wait_version(box, live_port, version)
@@ -319,6 +361,22 @@ def deploy(args):
             print("    %-22s %s  %s" % (label, "OK  " if ok2 else "FAIL", detail))
             if not ok2:
                 bad.append("%s %s" % (label, detail))
+
+        # 凭证是否真的生效：故意不带 token 打一次 /api/status，必须 401。
+        # 不放进 CHECKS 是因为它的判定口径与其余六项相反 —— 那六项要求"通"，
+        # 这一项要求"被拦住"。少了它，"所有人都能读状态"这件事永远不会被发现。
+        if box.token:
+            keep = box.token
+            box.token = ""
+            code, _b = ssh_http(box, live_port, "/api/status", timeout=10)
+            box.token = keep
+            good = (code == 401)
+            report["checks"].append({"path": "/api/status(无凭证)", "label": "凭证设防",
+                                     "ok": good, "detail": "http=%s（应为 401）" % code})
+            print("    %-22s %s  http=%s（应为 401）"
+                  % ("凭证设防", "OK  " if good else "FAIL", code))
+            if not good:
+                bad.append("凭证设防 http=%s（应当 401，说明接口仍在裸奔）" % code)
 
         if bad:
             raise RuntimeError("校验不通过：" + "；".join(bad))

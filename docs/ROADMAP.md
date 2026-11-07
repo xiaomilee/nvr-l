@@ -21,7 +21,7 @@
 |----|----|----|----|----|
 | 1 | 0.9.118 | 录像可信度：真实状态 + 缺口报告 | done | 64aa8ee |
 | 1.5 | 0.9.119 | 实测修复：状态原因不自相矛盾 + 测试机部署工具 | done | 8fbe09f |
-| 2 | 0.9.120 | 安全：API Token / 凭据收敛 / 前端统一请求层 | todo | - |
+| 2 | 0.9.120 | 安全：API Token / 凭据收敛 / 前端统一请求层 | doing | - |
 | 3 | 0.9.121 | 事件中心：统一事件模型 + 跨摄像头检索 + 点击定位 | todo | - |
 | 4 | 0.9.122 | 检测治理：有界并发 + 时间窗确认 + 诊断完整 | todo | - |
 | 5 | 0.9.123 | 前端拆分 + 文档重构 + 按钮验收自动化 | todo | - |
@@ -46,6 +46,7 @@
 |----|----|----|----|----|
 | 1 | 11-08 02:30 | 批次 1 全量（health.py / status 语义 / 缺口接口 / 诊断卡） | 64aa8ee | done，0.9.118 已打包 |
 | 2 | 11-08 03:42 | 打通测试平台部署链路（`tools/deploy_test.py`）、两路 RTSP 接入、修「上游 0 秒没数据」文案 | 8fbe09f | 0.9.119 部署 152 自检六项全绿，两路 recording |
+| 3 | 11-08 04:5x | 批次 2 切片一：安装级 token（`auth.py`）、统一鉴权闸、登录/cookie/轮换接口、页面粘贴引导 | 待填 | 未出包（批次未收尾，按规则不 bump） |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -139,17 +140,24 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 
 清单：
 
-- [ ] `var/secret.json`：首次启动生成 `api_token`（`secrets.token_urlsafe(32)`，0600 权限），
+- [x] `var/secret.json`：首次启动生成 `api_token`（`secrets.token_urlsafe(32)`，0600 权限），
       另存 `created_at`；支持 `POST /api/auth/rotate` 轮换。
-- [ ] 统一鉴权：除 `/`、`/index.html`、静态资源、`/api/auth/*` 外，所有 `/api/*` 与录像/导出下载
+- [x] 统一鉴权：除 `/`、`/index.html`、静态资源、`/api/auth/*` 外，所有 `/api/*` 与录像/导出下载
       要求 `Authorization: Bearer <token>`，用 `hmac.compare_digest` 比对；保留 `X-NVR-Request`（CSRF 是另一层）。
-- [ ] 首次访问 `/api/auth/status` 返回 `{need_token: true}`，页面弹出「粘贴 token」引导，存 localStorage；
+- [x] 首次访问 `/api/auth/status` 返回 `{need_token: true}`，页面弹出「粘贴 token」引导，存 localStorage；
       401 时自动回到引导。
+      *（实现补充：`<img>/<video>` 带不了请求头，登录时另签一枚 HttpOnly 会话 cookie —— 签名密钥就是
+      token 本身、服务端无状态，主 token 因此永远不进 URL。轮换 token 即让所有旧 cookie 失效。）*
 - [ ] RTSP 凭据收敛：GET 配置一律脱敏；编辑时密码框留空 = 保留原密码（服务端合并）；前端不再把明文写 localStorage。
 - [ ] 日志/诊断统一脱敏（token、RTSP 密码、URL query）。
 - [ ] 前端统一请求层 `API.get/post`（超时 + 401 + JSON + CSRF 头），替掉散落的 `fetch`。
-- [ ] 测试：`test_auth.py`（401/放行/常量时间/白名单/轮换 12+ 条）、`test/ui/auth.test.js`。
+- [x] 测试：`test_auth.py`（401/放行/常量时间/白名单/轮换 12+ 条）、`test/ui/auth.test.js`。
+      *实际 38 条 + 11 条；另 `test_http_smoke.py` 补 4 条 HTTP 级断言（本地 52 项全绿）。*
 - [ ] 版本 0.9.120。
+
+> 批次 2 进度（11-08 第 3 轮）：鉴权主干已落地并通过本地真 HTTP 验证，剩余 4/5/6/8 五项。
+> 本批未收尾，所以**没有 bump 版本、没有出包**（同一版本号对应两份不同字节是更危险的事）。
+> 下一轮把凭据收敛 + 脱敏 + 前端统一请求层做完，再一起 bump 0.9.120、打包、部署到 152。
 
 **验收**：`curl http://nas:port/api/status` 无 token 得 401；带正确 token 得 200；
 手机浏览器首次打开出现引导，填 token 后一切功能正常；旧配置升级后摄像头密码不丢。
@@ -226,3 +234,9 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 
 评审 P3 明确不建议投入：人脸识别、车牌识别、自定义模型训练、复杂多用户权限、实时滤镜。
 理由：模型依赖、硬件兼容、隐私与维护成本远超收益，现阶段先把「事件发生 → 找到录像」做透。
+
+批次 2 期间另有三件**故意不做**的：
+- 设置页「轮换凭证」按钮：`POST /api/auth/rotate` 已可用，但页面上按一下就把自己锁在门外，
+  要等前端统一请求层（本批第 6 项）落地时一起做，才好统一处理"轮换后重新登录"。
+- 用户名/密码登录：单机单人，多用户权限属 P3；再叠一层密码只会多一个可忘记的东西。
+- 向导里播报 token：安装时用户还看不到页面，等真的打开页面引导层会说清楚去哪找。

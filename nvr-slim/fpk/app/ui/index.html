@@ -1358,6 +1358,23 @@ body.fsmode.rail #fsTools button span{display:none}
 /* 旋转态的原生滚动方向按屏幕坐标判定，浏览器不认这层 rotate 变换：
    时间轴的"竖向"在屏幕上其实是横向，会被 touch-action:pan-y 拦掉 → 交给 JS 换算 */
 body.rot .vtlscroll{touch-action:none}
+/* 凭证引导（0.9.120）：唯一一层要在"页面还没有任何数据"时就能盖住的界面。
+   盖满全屏而不是弹 toast，是因为此时所有数据请求都是 401，露出底下只能看到
+   一片"加载失败"，反而让人以为服务坏了。 */
+.authgate{position:fixed;inset:0;display:none;place-items:center;z-index:90;
+  background:rgba(10,12,16,.55);padding:18px}
+.authgate.on{display:grid}
+.ag-card{width:100%;max-width:340px;background:var(--surface);border:1px solid var(--line);
+  border-radius:14px;padding:18px 16px;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+.ag-t{font-size:16px;font-weight:600;margin-bottom:8px}
+.ag-p{margin:0 0 12px;font-size:13px;line-height:1.6;color:var(--text2)}
+.ag-p code{background:var(--fill);border-radius:4px;padding:1px 4px;font-size:12px}
+.ag-in{width:100%;height:40px;border:1px solid var(--line);border-radius:10px;
+  background:var(--bg);color:var(--text);padding:0 10px;font-size:13px}
+.ag-btn{width:100%;height:40px;margin-top:10px;border-radius:10px;background:var(--primary);
+  color:#fff;font-weight:600}
+.ag-err{min-height:18px;margin-top:6px;color:var(--danger);font-size:12px}
+.ag-hint{margin:6px 0 0;font-size:11px;color:var(--faint);line-height:1.5}
 </style>
 </head>
 <body>
@@ -1670,8 +1687,69 @@ body.rot .vtlscroll{touch-action:none}
   </nav>
 </div>
 
+<!-- 凭证引导（0.9.120）：服务不再接受无凭证的请求，首次打开（或换设备/清缓存）
+     会盖在这一层上。token 在数据目录的 secret.json 里，服务端只回路径不给值。 -->
+<div class="authgate" id="authGate">
+  <div class="ag-card">
+    <div class="ag-t">需要 API 凭证</div>
+    <p class="ag-p">这台 NAS 上的 NVR 只接受带凭证的请求。在 NAS 上打开
+      <code class="mono" id="agPath">数据目录/secret.json</code>，把
+      <code class="mono">api_token</code> 的值复制到下面。</p>
+    <input class="ag-in mono" id="agTok" type="password" placeholder="粘贴 api_token"
+           autocomplete="off" spellcheck="false">
+    <button class="ag-btn" id="agGo">进入</button>
+    <div class="ag-err" id="agErr"></div>
+    <p class="ag-hint">粘过一次就记在本机浏览器里；换设备、清缓存或轮换过凭证要再粘一次。</p>
+  </div>
+</div>
+
 <script>
 "use strict";
+
+/* ================= API 凭证（0.9.120） =================
+   服务监听 0.0.0.0（手机直连才通），"同网段就能调接口"原本是默认状态。现在所有
+   /api/* 都要凭证，这里负责三件事：
+     1) 把 token 存在本机浏览器（换设备/清缓存最多再粘一次）；
+     2) 一处包住 fetch，让 17 个散落调用自动带 Authorization —— 逐个去改调用点
+        迟早会漏掉一个，而漏掉的那个看起来只是"这个页面加载失败"；
+     3) 401 时统一回到粘贴框，而不是让某个页面自己显示"加载失败"。
+   注意 <img>/<video> 带不了请求头，撤给它们的是登录时服务端签出的 HttpOnly
+   cookie（前端拿不到也删不掉，正合适）。 */
+const AUTH = { token: "", on: false };
+function authLoad(){ try{ return localStorage.getItem("nvr_api_token") || ""; }catch(e){ return ""; } }
+function authSave(t){ try{ t ? localStorage.setItem("nvr_api_token", t)
+                              : localStorage.removeItem("nvr_api_token"); }catch(e){} }
+AUTH.token = authLoad();
+
+function authGate(show, msg){
+  AUTH.on = !!show;
+  const g = document.getElementById("authGate");
+  if(!g) return;
+  g.classList.toggle("on", !!show);
+  const e = document.getElementById("agErr");
+  if(e) e.textContent = msg || "";
+  if(show){ const i = document.getElementById("agTok"); if(i && i.focus) i.focus(); }
+}
+
+/* 全局拦截：只在真浏览器里装（node 测试桩没有 window.fetch，跳过即可）。 */
+(function(){
+  if(typeof window === "undefined" || typeof window.fetch !== "function") return;
+  if(window.__nvrAuth) return;
+  window.__nvrAuth = true;
+  const raw = window.fetch.bind(window);
+  window.fetch = function(input, init){
+    const opt = Object.assign({}, init || {});
+    if(AUTH.token && typeof Headers === "function"){
+      const h = new Headers(opt.headers || {});
+      if(!h.has("Authorization")) h.set("Authorization", "Bearer " + AUTH.token);
+      opt.headers = h;
+    }
+    return raw(input, opt).then(r=>{
+      if(r && r.status === 401) authGate(true, "凭证已失效，请重新粘贴 api_token");
+      return r;
+    });
+  };
+})();
 
 /* ================= 数据 =================
    摄像头只留「身份 + 码流」两类字段：不区分品牌、不存账号密码（要认证就直接写进
@@ -9655,6 +9733,65 @@ if(_liveWrap) _liveWrap.addEventListener("click", e=>{
   mountLiveStream(card, c, true);
   toast("toast2", "正在重连 " + c.name);
 });
+
+/* ================= 凭证启动顺序（0.9.120） =================
+   先确认凭证，页面再去拉数据：没有凭证时每个 /api 都是 401，越早盖住引导层，
+   首屏越不会先闪一片"加载失败"再弹框。 */
+function authSubmit(){
+  const i = document.getElementById("agTok");
+  const t = (i && i.value ? i.value : "").trim();
+  if(!t){ authGate(true, "先粘贴 api_token"); return; }
+  const b = document.getElementById("agGo");
+  if(b) b.disabled = true;
+  apiPost("/api/auth/login", { token: t }).then(d=>{
+    if(b) b.disabled = false;
+    if(d && d.ok){
+      authSave(t); AUTH.token = t;
+      authGate(false);
+      /* 重新走一遍首屏：此刻登录响应已经把 cookie 种上了，实时流/快照/回放
+         才能跟着通。只关掉遮罩不重载的话，已经失败的图片不会自己重来。 */
+      location.reload();
+      return;
+    }
+    authGate(true, (d && d.error) || "token 不正确");
+  }).catch(err=>{
+    if(b) b.disabled = false;
+    authGate(true, "无法连接服务：" + ((err && err.message) || err));
+  });
+}
+
+function authBoot(){
+  /* node 测试桩里没有 window.fetch：直接跳过，别让测试去发真请求 */
+  if(typeof window === "undefined" || typeof window.fetch !== "function") return;
+  const go = document.getElementById("agGo");
+  if(go) go.onclick = authSubmit;
+  const inp = document.getElementById("agTok");
+  if(inp) inp.onkeydown = e=>{ if(e.key === "Enter") authSubmit(); };
+
+  if(AUTH.token){
+    /* 存着 token：先用它换一枚新 cookie。cookie 只有 30 天而 token 一直留在本地，
+       只带 Bearer 能读接口，但 <img>/<video> 会 401 —— 表现是"页面正常、画面全黑"。 */
+    apiPost("/api/auth/login", { token: AUTH.token }).then(d=>{
+      if(d && d.ok){ authGate(false); return; }
+      authSave(""); AUTH.token = "";
+      authGate(true, "保存的凭证已失效，请重新粘贴");
+    }).catch(()=> authGate(true, "无法连接服务"));
+    return;
+  }
+  fetch("/api/auth/status", { cache:"no-store" })
+    .then(r=>r.json())
+    .then(d=>{
+      if(d && d.authed){ authGate(false); return; }   // 同一浏览器已登录过
+      /* 把凭证文件路径写到引导层上：用户得知道去哪找那串 token */
+      if(d && d.token_file){
+        const p = document.getElementById("agPath");
+        if(p) p.textContent = d.token_file;
+      }
+      authGate(true, "");
+    })
+    .catch(()=>{});
+}
+authBoot();
 </script>
 </body>
 </html>

@@ -102,7 +102,17 @@ port="$(cat "$VAR/port.txt" 2>/dev/null | tr -dc '0-9')"
 port="${port:-18081}"
 if command -v curl >/dev/null 2>&1; then
   echo "  http://127.0.0.1:$port/api/health"
-  curl -s -m 3 -o /dev/null -w "  -> HTTP %{http_code}\n" "http://127.0.0.1:$port/api/health" 2>&1
+  # 0.9.120 起接口要凭证。这里不是"验证权限"而是"验证服务活着"，所以把 token
+  # 带上；读不到就退化成不带 —— 401 在这里同样能证明进程在应答，不算失败。
+  tok="$(sed -n 's/.*"api_token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+         "$VAR/secret.json" 2>/dev/null | head -1)"
+  if [ -n "$tok" ]; then
+    curl -s -m 3 -H "Authorization: Bearer $tok" -o /dev/null \
+         -w "  -> HTTP %{http_code}\n" "http://127.0.0.1:$port/api/health" 2>&1
+  else
+    curl -s -m 3 -o /dev/null -w "  -> HTTP %{http_code}（未读到凭证，401 属正常）\n" \
+         "http://127.0.0.1:$port/api/health" 2>&1
+  fi
 else
   echo "  无 curl，跳过"
 fi

@@ -85,7 +85,7 @@ find_server_pids() {
 wait_health() {
   local py="$1" timeout="${2:-30}"
   "$py" - "$PORT" "$timeout" "$VAR_DIR/port.txt" <<'PYEOF'
-import os, sys, time, urllib.request
+import os, sys, time, urllib.error, urllib.request
 port, deadline, pfile = int(sys.argv[1]), time.time() + int(sys.argv[2]), sys.argv[3]
 # 服务可能在端口被占时顺延，真实端口写在 port.txt 里；等它出现（最多 5 秒）
 probe_until = min(deadline, time.time() + 5)
@@ -103,6 +103,13 @@ while time.time() < deadline:
         with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port, timeout=1) as r:
             if r.status == 200:
                 sys.exit(0)
+    except urllib.error.HTTPError as e:
+        # 0.9.120 起 /api/health 也要凭证。401/403 说明进程已经起来了、只是在
+        # 等凭证——这恰恰是"启动成功"。把它当失败会让 start 一直等到超时，
+        # 然后判定"服务没起来"并把刚起好的进程收掉。
+        if e.code in (401, 403):
+            sys.exit(0)
+        time.sleep(0.3)
     except Exception:
         time.sleep(0.3)
 sys.exit(1)

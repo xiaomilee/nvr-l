@@ -82,8 +82,18 @@ def main():
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     try:
         ok = False
+        tok = ""
         for _ in range(60):
             time.sleep(0.25)
+            # 0.9.120 起所有 /api/* 要凭证，凭证是服务启动时自己写下来的。
+            # 先读它再探活：不读的话每一步都是 401，"服务没起来"是假象。
+            try:
+                with open(os.path.join(var, "secret.json"), encoding="utf-8") as f:
+                    tok = json.load(f).get("api_token") or ""
+            except (OSError, ValueError):
+                tok = ""
+            if tok:
+                HDR["Authorization"] = "Bearer " + tok
             try:
                 s, _b = req("/api/health")
                 if s == 200:
@@ -94,6 +104,20 @@ def main():
         check("服务起来了 /api/health", ok)
         if not ok:
             return 1
+
+        # 凭证本身：错的一律 401，对的放行，登录能换到 cookie
+        s, b = req("/api/status", headers={"Authorization": "Bearer wrong-token"})
+        check("错误凭证访问 /api/status 得 401", s == 401, (s, b[:80]))
+        s, b = req("/api/auth/status")
+        d = json.loads(b)
+        check("凭证文件存在时 auth.status 不再要求粘贴",
+              s == 200 and d.get("need_token") is False and tok, (s, b[:80]))
+        s, b = req("/api/auth/rotate", "POST", {}, headers={
+            "Content-Type": "application/json", "X-NVR-Request": "1",
+            "Authorization": "Bearer wrong-token"})
+        # 这里只验证"轮换不是谁都能按"；真按下去的副作用是让手上的 token 立刻失效，
+        # 会把后面所有断言变成一串 401，所以这一条用错凭证打，不触发真轮换。
+        check("轮换接口要求正确凭证（错凭证 401）", s == 401, (s, b[:80]))
 
         s, b = req("/api/config")
         d = json.loads(b)

@@ -45,6 +45,7 @@ import detect  # noqa: E402
 import notify  # noqa: E402
 import archive  # noqa: E402
 import health  # noqa: E402
+import auth  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
 # 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
@@ -87,6 +88,9 @@ _ACCESS_PATH = re.compile(r"\s(/\S*?)(?:\?\S*)?(?:\s|$)")
 # deque.append 本身原子，但 n += 1 不是 —— 丢几次计数不影响判断，可要是
 # 计数看起来比实际少一半，还不如不统计。RLock 是因为 flush 与 record 会互相调用。
 _ACCESS_LOCK = threading.RLock()
+# 凭证校验失败的日志节流（上一次写日志的时刻）。验证码猜错是用户手滑的常态，
+# 每次满写会把 800 条业务环冲干净；但完全不写，真被扫的时候又看不出来。
+_AUTH_FAIL = {"t": 0.0}
 
 
 def _log_path():
@@ -2476,6 +2480,59 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    # ---- 访问凭证 ---------------------------------------------------
+    # 上面那两道（Host / X-NVR-Request）挡的是"别的网站借用户的浏览器发请求"，
+    # 挡不住"局域网里有人直接 curl"。所以再加一层凭证：Authorization: Bearer，
+    # 或者登录时签出的 HttpOnly cookie（<img>/<video> 带不了自定义头，只能靠它）。
+    # 凭证文件在 var/secret.json，规则见 auth.py 顶部说明。
+    AUTH_PUBLIC = auth.PUBLIC_PATHS
+
+    def _authed(self):
+        try:
+            tok = auth.bearer(self.headers.get("Authorization"))
+            if tok and auth.verify(STATE["var_dir"], tok):
+                return True
+            return auth.cookie_ok(STATE["var_dir"], self.headers.get("Cookie"))
+        except Exception:
+            # 凭证层自己出错时按"没通过"处理。绝不能因为读不到文件就放行 ——
+            # 那正好是攻击者最容易制造的状态（比如把 secret.json 弄坏）。
+            return False
+
+    def _auth_gate(self, path):
+        if auth.is_public(path) or self._authed():
+            return True
+        self._send(401, {"ok": False, "need_token": True,
+                         "error": "需要 API 凭证：请求头 Authorization: Bearer <token>，"
+                                  "或在页面上粘贴 token 登录"})
+        return False
+
+    def _auth_login(self, body):
+        """粘贴 token 换一枚会话 cookie。
+
+        为什么还要 cookie：实时流、快照、回放都是 `<img src>` / `<video src>`，
+        浏览器不会给它们加自定义头，只能靠同源自动携带的 cookie 过鉴权。
+        cookie 是 HttpOnly，页面脚本读不到，也就偷不走。
+        """
+        tok = str(body.get("token") or "").strip()
+        if not auth.verify(STATE["var_dir"], tok):
+            # 稍微慢一点：32 字节的 token 本来就猜不出来，这里只是不给"高速试错"的便利
+            time.sleep(0.4)
+            now = time.time()
+            if now - _AUTH_FAIL["t"] > 30:
+                _AUTH_FAIL["t"] = now
+                _record("凭证校验失败（来源 %s）" % (self.client_address[0] if
+                                                   self.client_address else "-"))
+            return self._send(401, {"ok": False, "need_token": True,
+                                    "error": "token 不正确"})
+        ck = auth.cookie_value(STATE["var_dir"])
+        if not ck:
+            return self._send(503, {"ok": False,
+                                    "error": "凭证尚未生成，请稍后重试"})
+        return self._send(200, {"ok": True, "version": runtime.VERSION},
+                          headers=[("Set-Cookie",
+                                    "%s=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Strict"
+                                    % (auth.COOKIE_NAME, ck, auth.COOKIE_TTL))])
+
     def log_message(self, fmt, *args):
         try:
             line = fmt % args
@@ -2487,7 +2544,7 @@ class Handler(BaseHTTPRequestHandler):
         _record_access("%s %s" % (time.strftime("%H:%M:%S"), line))
 
 
-    def _send(self, code, body, ctype="application/json; charset=utf-8"):
+    def _send(self, code, body, ctype="application/json; charset=utf-8", headers=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False).encode("utf-8")
         elif isinstance(body, str):
@@ -2500,6 +2557,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        # 附加头（目前只有登录时那枚 Set-Cookie）：拆成参数而不是各处手写
+        # send_header，是为了保证上面那几个安全头一条都不会被漏掉。
+        for k, v in (headers or ()):
+            self.send_header(k, v)
         try:
             # end_headers 也会真正写 socket（flush 头缓冲）：页面刷新时浏览器
             # 会掐掉十几个还没发完的 /api/recordings 响应，这里不接住的话
@@ -2530,6 +2591,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_get(self):
         path = urlparse(self.path).path
+        if not self._auth_gate(path):
+            return
+        if path == "/api/auth/status":
+            # 页面在加载时先问这里：要不要弹"粘贴 token"的引导。
+            # 只回"是否需要"和凭证文件位置，绝不回 token 本身。
+            need = not self._authed()
+            return self._send(200, {"ok": True, "need_token": need, "authed": not need,
+                                    "version": runtime.VERSION,
+                                    "token_file": auth.secret_path(STATE["var_dir"])})
         if path == "/api/health":
             # cams 一起给：设置页顶部的版本徽标已经在这里取数，
             # 首页想看「几路真在录」就不必再打一次 /api/status（那份重得多）。
@@ -3009,6 +3079,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _do_post(self):
         path = urlparse(self.path).path
+        # 凭证先于写法校验：没凭证的人连"这个接口要哪些头"都不该知道
+        if not self._auth_gate(path):
+            return
         if not self._write_ok():
             return
         try:
@@ -3029,6 +3102,21 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"ok": False, "error": "invalid json"})
         if not isinstance(body, dict):
             return self._send(400, {"ok": False, "error": "body must be an object"})
+
+        if path == "/api/auth/login":
+            return self._auth_login(body)
+
+        if path == "/api/auth/rotate":
+            # 轮换：旧 token 与所有已签出的 cookie 一起作废（签名密钥就是 token 本身）。
+            # 不在这里顺手把新 token 写进页面 —— 调用方自己决定怎么存。
+            try:
+                fresh = auth.rotate(STATE["var_dir"])
+            except (OSError, RuntimeError) as e:
+                return self._send(400, {"ok": False, "error": "轮换失败：%s" % e})
+            log_line("API 凭证已轮换（新凭证 %s）：旧 token 与已登录会话立即失效"
+                     % auth.mask(fresh["api_token"]))
+            return self._send(200, {"ok": True, "token": fresh["api_token"],
+                                    "created_at": fresh["created_at"]})
 
         if path == "/api/config":
             cfg = runtime.load_config(STATE["var_dir"])
@@ -3352,6 +3440,16 @@ def main():
     cfg = runtime.load_config(a.var)
     if not os.path.isfile(runtime.config_path(a.var)):
         runtime.save_config(a.var, cfg)
+
+    # 凭证必须在开始接请求之前就位：/api/* 全靠它设防。没有就现在生成一枚，
+    # 并把"去哪找"写进日志 —— 用户在页面上只会看到"需要 token"，得能自己找到。
+    _tok = auth.token(a.var)
+    if _tok:
+        log_line("API 凭证就绪（%s）：首次访问页面需粘贴其中的 api_token"
+                 % auth.secret_path(a.var))
+    else:
+        log_line("API 凭证不可用：%s 既写不进也没有环境变量 %s；接口将一律 401"
+                 % (auth.secret_path(a.var), auth.ENV_TOKEN))
 
     # 端口由 cmd/main 解析（配置 > TRIM_SERVICE_PORT > 18081）后传进来，这里只认参数
     want = runtime.clamp_port(a.port)

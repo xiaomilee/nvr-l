@@ -66,6 +66,9 @@ if [ -n "$NODE" ]; then
   # 录像可信度：细分状态不撒谎 + 缺口卡说人话（0.9.118）
   echo "== 录像可信度 =="
   "$NODE" "$ROOT/test/ui/health.test.js" || exit 1
+  # 凭证引导：引导层能开合、token 存得住清得掉（0.9.120）
+  echo "== 凭证引导 =="
+  "$NODE" "$ROOT/test/ui/auth.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi
