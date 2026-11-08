@@ -72,6 +72,10 @@ if [ -n "$NODE" ]; then
   # 凭据不出本机：明文地址不落 localStorage、留空=保留、清空要显式动作（0.9.120）
   echo "== 凭据不出本机 =="
   "$NODE" "$ROOT/test/ui/cred.test.js" || exit 1
+  # 统一请求层：超时真的 abort、401 归引导、非 JSON 必须抛、写操作必带 CSRF 头，
+  # 并守住"页面里不许再有裸 fetch"（0.9.120）
+  echo "== 统一请求层 =="
+  "$NODE" "$ROOT/test/ui/api.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

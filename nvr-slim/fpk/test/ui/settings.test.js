@@ -321,6 +321,10 @@ ck("诊断·刷新/复制/清除齐全", h.includes("btnLogRefresh") && h.includ
 ck("诊断·读/复制/清函数就绪",
    typeof get('loadDiagLog') === "function" && typeof get('copyDiagLog') === "function" && typeof get('clearDiagLog') === "function");
 ck("诊断·旧版警告条 + 重启按钮", h.includes("diagWarn") && h.includes("btnRestart"));
+/* 旧版进程会把 /api/log 当静态文件交回 HTML（HTTP 200）。请求层会抛 status=200 的
+   错误，这里要把它翻成"去重启"的指引，而不是一句"读取失败"。 */
+ck("日志·读到 HTML 时说清是旧版进程，并给出重启指引",
+   src.includes("e.status === 200") && src.includes("旧版服务进程"));
 ck("诊断·重启/环境自检函数就绪",
    typeof get('restartDiag') === "function" && typeof get('loadDiagEnv') === "function");
 ck("全屏·切换函数就绪", typeof get('toggleFull') === "function");
@@ -365,7 +369,10 @@ ck("回放·只剩全时/归档两通道（缩时通道下线）",
    src.includes('realSegs(state.camId, curDay(), "archive")')
    && !src.includes('realSegs(state.camId, curDay(), "clip")')
    && !src.includes("rec.clips"));
-ck("回放·录像清单防缓存", src.includes('"/api/recordings?_t=" + Date.now()'));
+/* 0.9.120：?_t 不再由调用点拼，改由统一请求层加（拼漏一处就是一个查不出来的
+   旧数据）。这里守两件事：清单请求确实走请求层，且请求层真的会加 _t。 */
+ck("回放·录像清单防缓存", src.includes('API.get(force ? "/api/recordings?force=1" : "/api/recordings"')
+   && src.includes('url += (url.indexOf("?") < 0 ? "?" : "&") + "_t=" + Date.now();'));
 ck("设置·归档存放位置提示", src.includes("_archive/&lt;摄像头&gt;/&lt;日期&gt;/"));
 
 /* ---- 17. 资源栏随页面滚动 + 齿轮调刷新率 + 配置真的推上去（0.9.11） ---- */
@@ -384,7 +391,7 @@ ck("配置·分片长度随 pushCfg 上送", src.includes("record_segment_sec: L
    && src.includes("link_mode: LK.mode") && src.includes("link_interval_h: LK.intervalH"));
 ck("配置·改分片立即保存并推送", /data-linkseg[\s\S]{0,320}saveCfgSoon\(\)/.test(src));
 ck("配置·启动时以服务端为准", typeof get('syncFromServer') === "function"
-   && /syncFromServer\(\)/.test(src) && src.includes('apiGet("/api/config")'));
+   && /syncFromServer\(\)/.test(src) && src.includes('API.get("/api/config")'));
 /* ---- 分片 MP4 封装（0.9.111 起固定）----
    0.9.71 开始是个开关，0.9.111 把“整片 MP4”选项下线：被强杀就整段打不开，
    没有需要回退的场景，留着只会误选。但字段仍需上送（ffmpeg 的 -movflags 靠它），
@@ -397,7 +404,7 @@ ck("录影·整片 MP4 选项已下线", !src.includes("data-linkfrag")
    && !src.includes("只有在老播放器播不动时才需要切回"));
 ck("诊断·残片清单卡就绪（0.9.71）", typeof get('cardParts') === "function"
    && typeof get('loadDiagParts') === "function"
-   && src.includes('fetch("/api/record/parts?_t=" + Date.now()'));
+   && src.includes('API.get("/api/record/parts")'));
 ck("诊断·残片列表区分 待重建/可封口/已放弃",
    src.includes("待重建") && src.includes("可封口") && src.includes("已放弃"));
 
@@ -1051,13 +1058,13 @@ ck("归档·开启态文案明确并存代价与补救缓冲",
 ck("归档·摘要标注未提前时的候选口径",
    src.includes("只算今天要删的（未提前）"));
 ck("归档·立即归档两段式（预览→确认执行）",
-   src.includes('await apiPost("/api/archive/run", {dry_run:true})')
-   && src.includes('await apiPost("/api/archive/run", {dry_run:false})')
+   src.includes('await API.post("/api/archive/run", {dry_run:true}')
+   && src.includes('await API.post("/api/archive/run", {dry_run:false})')
    && src.includes("预览已过期，请重新预览"));
 ck("归档·执行后强制重拉存储占用",
    src.includes("STORAGE.data = null; STORAGE.at = 0;"));
 ck("归档·候选摘要从 /api/archive 节流拉取",
-   src.includes('apiGet("/api/archive")') && src.includes("Date.now() - ARCH.at > 10*60*1000"));
+   src.includes('API.get("/api/archive")') && src.includes("Date.now() - ARCH.at > 10*60*1000"));
 ck("三层·保留策略文本含台账永久",
    src.includes('return "全时 " + rng(ps.map(p=>p.fullDays)) + " / 归档 " + (LK.archDays || 7)')
    && src.includes("+ \" 天 / 台账永久\""));
@@ -1230,6 +1237,10 @@ ck("检测·矩阵说明点出「记录进台账 / 算活动进事件 / 通知�
 ck("检测·通知块只剩投递参数（类别已上移）",
    h.includes("通知通道") && h.includes('id="ntWebhook"')
    && !h.includes("人员检测通知") && !h.includes("车辆检测通知"));
+/* 0.9.120：这处 POST 以前自己拼头，漏了 X-NVR-Request —— 服务端 _write_ok 一律 403，
+   于是一个完全能用的 Webhook 地址永远只回"发送失败"。走请求层后才不会再漏。 */
+ck("通知·测试发送走请求层（不再手拼请求头）",
+   src.includes('API.post("/api/notify/test", { webhook: url }'));
 
 
 /* 每路检测段（手风琴第四段）——先把总闸打开、本路回到 follow，
@@ -1432,7 +1443,7 @@ ck("回放·视口高度变化（全屏/转屏/切页）自动重算并锚住线
 ck("版本·顶部徽标在页面标题里", src.includes('<span class="verbadge" id="verTop">'));
 ck("版本·进页就拉一次 /api/health", typeof get('loadTopVersion') === "function"
    && /loadTopVersion\(\);/.test(src)
-   && /function loadTopVersion\(\)[\s\S]{0,400}fetch\("\/api\/health/.test(src));
+   && /function loadTopVersion\(\)[\s\S]{0,400}API\.get\("\/api\/health"\)/.test(src));
 ck("版本·拿不到时标警告色而不弹 toast",
    /el\.classList\.add\("bad"\)/.test(src) && !/loadTopVersion[\s\S]{0,600}toast\(/.test(src));
 

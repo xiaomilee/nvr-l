@@ -268,6 +268,7 @@ def deploy(args):
     stamp = time.strftime("%Y%m%d-%H%M%S")
     stage = "/tmp/nvr-deploy-%s" % stamp
     bak = posixpath.join(var_dir, "backup", "app-%s" % stamp)
+    cmd_bak = ""
 
     try:
         # 用 port.txt 里的真实端口探活：应用在端口被占时会顺延，命令行那个不一定准
@@ -327,6 +328,28 @@ def deploy(args):
         if version not in (o or ""):
             raise RuntimeError("覆盖后版本号没变（%s），rsync 没有真正替换文件"
                                % (o or "").strip()[:60])
+
+        # 生命周期脚本（cmd/）不在程序目录里：fnOS 把它装在 /var/apps/<app>/cmd，
+        # "启动成功没有"正是由那里的 main 拿 /api/health 判的。只覆盖 app/ 的话，
+        # 0.9.120 第一次部署就撞了：新服务的 /api/health 要凭证、回 401，
+        # 而机器上那个 2023 年装的 main 把 401 当失败 —— 进程明明起来了、明明在录，
+        # 工具却判"启动超时"，接着回滚，回滚走同一段判定，于是"回滚也失败"。
+        # 真升级会整体替换 cmd/，所以这里也替换，测试机才算"装过一次新版本"。
+        cmd_dir = args.cmd_dir
+        if cmd_dir and box.run("test -d %s" % cmd_dir)[0] == 0:
+            cmd_bak = posixpath.join(var_dir, "backup", "cmd-%s" % stamp)
+            box.run("cp -a %s %s" % (cmd_dir, cmd_bak), sudo=True, check=True)
+            box.run("rsync -a --checksum --chown=root:root %s/root/cmd/ %s/"
+                    % (stage, cmd_dir), timeout=120, sudo=True, check=True)
+            # 这个目录曾经压根没被覆盖过，所以必须自己核一遍换进去的是什么
+            _, want_md5, _ = box.run("md5sum %s/root/cmd/main | cut -d' ' -f1" % stage)
+            _, got_md5, _ = box.run("md5sum %s/main | cut -d' ' -f1" % cmd_dir)
+            if (want_md5 or "").strip() != (got_md5 or "").strip():
+                raise RuntimeError("生命周期脚本没换成新的（%s → %s）"
+                                   % ((want_md5 or "?").strip(), (got_md5 or "?").strip()))
+            print("    生命周期脚本已同步 → %s（备份 %s）" % (cmd_dir, cmd_bak))
+        else:
+            print("    跳过生命周期脚本同步（%s 不存在）" % cmd_dir)
 
         print("[5/6] 启动服务 ...")
         live_port = start_app(box, args.port, var_dir)
@@ -423,6 +446,9 @@ def deploy(args):
         try:
             box.run("rm -rf %s && cp -a %s %s" % (app_dir, bak, app_dir),
                     timeout=300, sudo=True, check=True)
+            if cmd_bak and box.run("test -d %s" % cmd_bak)[0] == 0:
+                box.run("rsync -a --checksum --delete --chown=root:root %s/ %s/"
+                        % (cmd_bak, args.cmd_dir), timeout=120, sudo=True, check=True)
             back_port = start_app(box, args.port, var_dir)
             if cur:
                 ok, got, _ = wait_version(box, back_port, cur, limit=60)
@@ -449,6 +475,8 @@ def main():
     p.add_argument("--app-dir", default="/vol1/@appcenter/nvr")
     p.add_argument("--var-dir", default="/vol1/@appdata/nvr")
     p.add_argument("--ctl", default="/var/apps/nvr/cmd/main")
+    p.add_argument("--cmd-dir", default="/var/apps/nvr/cmd",
+                   help="fnOS 安装的生命周期脚本目录；真升级会替换它，这里也替换")
     p.add_argument("--report", default="")
     args = p.parse_args()
     sys.exit(deploy(args))

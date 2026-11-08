@@ -51,8 +51,12 @@ global.fetch = function(url){
   let next = { ok: true };
   if(u.indexOf("/api/log/file") === 0) next = fileResp || { ok: true, lines: [], start: 0, end: 0, size: 0, more: false };
   else if(u.indexOf("/api/log?") === 0) next = memResp || { ok: true, lines: [], warn: 0, err: 0 };
+  /* 桩要装成 Response 的样子：统一请求层读 r.status / r.text()，
+     只有 json() 的桩会让「非 JSON 响应」这条分支永远测不到。 */
   return Promise.resolve({
+    status: 200, ok: true,
     headers: { get: () => "application/json" },
+    text: () => Promise.resolve(JSON.stringify(next)),
     json: () => Promise.resolve(next)
   });
 };

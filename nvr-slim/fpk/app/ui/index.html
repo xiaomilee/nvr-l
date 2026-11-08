@@ -1710,8 +1710,8 @@ body.rot .vtlscroll{touch-action:none}
    服务监听 0.0.0.0（手机直连才通），"同网段就能调接口"原本是默认状态。现在所有
    /api/* 都要凭证，这里负责三件事：
      1) 把 token 存在本机浏览器（换设备/清缓存最多再粘一次）；
-     2) 一处包住 fetch，让 17 个散落调用自动带 Authorization —— 逐个去改调用点
-        迟早会漏掉一个，而漏掉的那个看起来只是"这个页面加载失败"；
+     2) 一处包住 fetch，让所有请求自动带 Authorization —— 页面里的请求现在都
+        走统一请求层（API.get/post），凭证只在这一处加，调用点一个都不用管；
      3) 401 时统一回到粘贴框，而不是让某个页面自己显示"加载失败"。
    注意 <img>/<video> 带不了请求头，撤给它们的是登录时服务端签出的 HttpOnly
    cookie（前端拿不到也删不掉，正合适）。 */
@@ -2048,8 +2048,7 @@ const RES = {
    把服务端 os.statvfs / disk_usage 读到的真实容量拿回来。
    CPU / 内存 / 核显不再展示，也不再往 RES 里塞没人读的字段。 */
 function refreshRes(){
-  return fetch("/api/status?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" })
-    .then(r=> r.json())
+  return API.get("/api/status")
     .then(d=>{
       if(!d || d.ok === false) throw new Error((d && d.error) || "status 失败");
       /* AI 检测 / 通知状态快照：设置页状态行与诊断卡吃这份 */
@@ -2166,8 +2165,8 @@ function applyLink(ls){
 }
 function syncLink(){
   if(typeof fetch !== "function") return;
-  fetch("/api/link?_t=" + Date.now(), { cache:"no-store", mode:"same-origin" })
-    .then(r=>r.json()).then(d=>{ if(d && d.ok) applyLink(d); }).catch(()=>{});
+  API.get("/api/link")
+    .then(d=>{ if(d && d.ok) applyLink(d); }).catch(()=>{});
 }
 /* 0.9.111：判定时机固定为「即刻判定」（定时压制那条路已随选项一起下线），
    所以这里不再有分支。原「攒够 N 小时批量处理」的文案一并删掉，
@@ -4076,32 +4075,97 @@ function pullSnap(camId, img, onDone){
   img.src = "/api/live/snapshot/" + encodeURIComponent(camId) + ".jpg?t=" + token;
 }
 
-/* ================= 与服务端对话的统一入口 =================
-   所有写操作都必须带 X-NVR-Request 头：服务端靠它区分"页面发起的操作"和
-   "别的网页偷偷发的请求"（浏览器跨站发自定义头会先做预检，而本服务不应答
-   CORS，于是写入类接口天然免疫 CSRF）。别在这里省掉头，否则一律 403。 */
-function apiPost(path, body){
-  return fetch(path, {
-    method: "POST", mode: "same-origin", cache: "no-store",
-    headers: { "Content-Type": "application/json", "X-NVR-Request": "1" },
-    body: JSON.stringify(body == null ? {} : body)
-  }).then(r => r.text().then(txt => {
-    /* 服务端已经保证错误也是 JSON（403/413/500 都带 {ok:false,error}）。
-       解析不出来说明中间层出了事（代理返回 HTML 错误页等），必须让调用方
-       知道"这次真的失败了"，而不是拿到 null 当成"成功但没有数据"。 */
-    let d = null;
-    try{ d = txt ? JSON.parse(txt) : null; }catch(e){ d = null; }
-    if(d === null){
-      throw new Error("HTTP " + r.status + " " + (txt || "").slice(0, 80));
-    }
-    if(!r.ok && d.error === undefined){ d.error = "HTTP " + r.status; }
-    return d;
-  }));
+/* ================= 统一请求层（0.9.120） =================
+   以前 17 处裸 fetch 各自处理超时、错误、CSRF 头和缓存，结果各不相同：
+   有的漏了 X-NVR-Request（写接口一律 403，界面只显示"发送失败"），绝大多数
+   没有超时（NAS 假死时页面就永远转圈——不是报错，是更糟的沉默），还有几处
+   把旧版进程吐出的 HTML 错误页当 JSON 解析。现在所有请求都从这里出去，
+   四条语义只写一遍：
+
+     超时   AbortController，默认 15 秒；试录/像素自检/归档这类慢接口自己放宽。
+     401    整台设备都不认这份凭证，不是"这个页面加载失败" → 统一回粘贴框。
+            登录接口自身除外（allow401）：那里的 401 恰好是"你粘错了 token"，
+            调用点要给出的是这句话，不是"凭证已失效"。
+     JSON  解析不出来就抛 ApiError（带 HTTP 状态），绝不返回 null 冒充成功。
+     CSRF  写操作一律带 X-NVR-Request，服务端 _write_ok 的硬门槛。
+
+   凭证头不在这里拼：上面那处全局 fetch 包装已经统一加 Authorization，
+   两件事分开才不会出现第三个地方去拼请求头。 */
+const API = { timeout: 15000 };
+
+class ApiError extends Error {
+  constructor(msg, status, payload){
+    super(msg);
+    this.name = "ApiError";
+    this.status = status | 0;      // 0 = 没拿到响应（超时/网络层），其余是真实 HTTP 码
+    this.payload = payload || null;
+  }
 }
-function apiGet(path){
-  return fetch(path + (path.indexOf("?") < 0 ? "?_t=" + Date.now() : ""),
-    { mode: "same-origin", cache: "no-store" }).then(r => r.json());
-}
+
+/* 底层传输留一个可替换的口子：单测要在不联网的前提下验证上面四条语义
+   （否则每条断言都得先起一个真服务）。默认就是全局 fetch，浏览器里因此
+   仍然会经过凭证包装。 */
+API.transport = function(url, init){ return fetch(url, init); };
+
+API.req = function(path, opt){
+  const o = opt || {};
+  const method = String(o.method || "GET").toUpperCase();
+  let url = String(path || "");
+  if(method === "GET" && url.indexOf("_t=") < 0){
+    /* 破坏缓存的 _t：WebView 曾把空录像清单缓存住，回放页永远"无视频文件"。
+       放在这一层，调用点不必每次自己拼（拼漏一处就是一个查不出来的旧数据）。 */
+    url += (url.indexOf("?") < 0 ? "?" : "&") + "_t=" + Date.now();
+  }
+  const init = { method: method, mode: "same-origin", cache: "no-store" };
+  if(method !== "GET"){
+    /* 写操作必须带自定义头：服务端靠"跨站发不了自定义头"挡 CSRF，
+       漏一个的表现是"这个按钮点了没反应"，所以统一放这里。 */
+    init.headers = { "Content-Type": "application/json", "X-NVR-Request": "1" };
+    init.body = JSON.stringify(o.body == null ? {} : o.body);
+  }
+  const ms = o.timeout || API.timeout;
+  let ctl = null, timer = 0;
+  if(typeof AbortController === "function"){
+    ctl = new AbortController();
+    init.signal = ctl.signal;
+    /* fetch 不会因为"对方不回"而失败，NAS 卡住时能挂到浏览器默认的几分钟。 */
+    timer = setTimeout(()=>{ try{ ctl.abort(); }catch(e){} }, ms);
+  }
+  const done = ()=>{ if(timer) clearTimeout(timer); };
+  /* 包一层 Promise.resolve()：传输层若同步抛出（相对 URL 在 node 桩里就是这样），
+     也要走 reject 通道，否则调用点拿到的是一句同步异常。 */
+  return Promise.resolve()
+    .then(()=> API.transport(url, init))
+    .then(r=>{
+      if(r && r.status === 401 && !o.allow401){
+        authGate(true, "凭证已失效，请重新粘贴 api_token");
+        const e = new ApiError("凭证已失效（401）", 401);
+        e.unauthorized = true;
+        throw e;
+      }
+      return r.text().then(txt=>{
+        let d = null;
+        try{ d = txt ? JSON.parse(txt) : null; }catch(e){ d = null; }
+        if(d === null){
+          /* 服务端保证错误也是 JSON；解析不出来说明中间层出了事（旧版进程把
+             接口当静态文件交回 HTML、反代 502 页面）。必须让调用方知道这次
+             真的失败了，而不是拿 null 当"成功但没有数据"。 */
+          throw new ApiError("HTTP " + r.status + " " + String(txt || "").slice(0, 80), r.status, txt);
+        }
+        if(!r.ok && d && d.error === undefined) d.error = "HTTP " + r.status;
+        return d;
+      });
+    })
+    .catch(e=>{
+      if(e && (e.unauthorized || e instanceof ApiError)) throw e;
+      const aborted = e && (e.name === "AbortError" || e.code === 20);
+      throw new ApiError(aborted ? ("请求超时（" + Math.round(ms / 1000) + " 秒没响应）")
+                                 : ((e && e.message) || "网络错误"), 0);
+    })
+    .then(d=>{ done(); return d; }, e=>{ done(); throw e; });
+};
+API.get  = (path, opt)=> API.req(path, Object.assign({ method: "GET" }, opt || {}));
+API.post = (path, body, opt)=> API.req(path, Object.assign({ method: "POST", body: body }, opt || {}));
 
 /* 把摄像头与通用设置推给后端：快照 worker、录制、衔接吃的都是这份配置。
    内容没变就不发（签名去重），变了静默 POST，失败也不打扰用户。 */
@@ -4178,7 +4242,7 @@ function pushCfg(){
   const sig = JSON.stringify(body);
   if(sig === lastPushSig) return;
   lastPushSig = sig;
-  apiPost("/api/config", body).then(d=>{
+  API.post("/api/config", body).then(d=>{
     if(d && d.ok){
       /* 服务端把配置收敛过（比如端口/并发被夹取），以它回来的为准重新对齐一次 */
       lastPushedAt = Date.now();
@@ -4697,8 +4761,7 @@ window.addEventListener("pageshow", ()=> refreshLiveSnapsNow());
 let livePollAcc = 0;
 function pollLive(){
   if(typeof fetch !== "function") return;
-  fetch("/api/live?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" })
-    .then(r=>r.json())
+  API.get("/api/live")
     .then(d=>{
       if(!d || !Array.isArray(d.cameras)) return;
       let changed = false;
@@ -5125,8 +5188,9 @@ async function runProbe(cid, btn){
   box.innerHTML = '<div class="h">正在诊断：读流信息 + 试录 8 秒，约 10~20 秒…</div>';
   if(btn) btn.disabled = true;
   try{
-    const r = await fetch("/api/record/probe?id=" + encodeURIComponent(cid), {cache:"no-store"});
-    const j = await r.json();
+    /* 试录 8 秒 + 读流信息，服务端自己就要十几秒：默认超时会把正常请求掐断，
+       于是"诊断失败"看起来像摄像头有问题，其实是前端等不及。 */
+    const j = await API.get("/api/record/probe?id=" + encodeURIComponent(cid), { timeout: 90000 });
     box.innerHTML = probeHtml(j);
   }catch(e){
     box.innerHTML = '<div class="h" style="color:var(--warn)">诊断请求失败：'
@@ -5449,8 +5513,7 @@ async function loadTopVersion(){
   const el = document.getElementById("verTop");
   if(!el) return;
   try{
-    const r = await fetch("/api/health?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" });
-    const d = await r.json();
+    const d = await API.get("/api/health");
     if(!d || typeof d.version !== "string" || !d.version){
       el.textContent = "v未知";
       el.classList.add("bad");
@@ -5468,8 +5531,7 @@ async function loadDiagEnv(){
   const warn = document.getElementById("diagWarn");
   if(!el) return;
   try{
-    const r = await fetch("/api/health?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" });
-    const d = await r.json();
+    const d = await API.get("/api/health");
     const stale = !d || typeof d.version !== "string" || !d.version;
     if(stale){
       // 服务端没返回 version → 磁盘上是新代码，但后台进程仍是旧版
@@ -5499,9 +5561,8 @@ async function loadDiagEnv(){
         const st = document.getElementById("pixState");
         if(st) st.textContent = "检测中…";
         try{
-          const rr = await fetch("/api/diag/pixel?_t=" + Date.now(),
-                                 { mode:"same-origin", cache:"no-store" });
-          const dd = await rr.json();
+          /* 像素自检要在服务端跑一遍 ffmpeg 解帧并与参考帧比差，几十秒是常态 */
+          const dd = await API.get("/api/diag/pixel", { timeout: 60000 });
           if(!st) return;
           st.innerHTML = dd.ok
             ? "<b class='ok'>✓ 可用</b>（" + dd.frames + " 帧 · 峰值 "
@@ -5519,10 +5580,8 @@ async function loadDiagEnv(){
 async function restartDiag(){
   const btn = document.getElementById("btnRestart");
   try{
-    const r = await fetch("/api/restart", { method:"POST", mode:"same-origin",
-      headers:{ "Content-Type":"application/json", "X-NVR-Request":"1" }, body:"{}" });
-    const d = await r.json().catch(()=>null);
-    if(r.ok && d && d.ok){
+    const d = await API.post("/api/restart", {});
+    if(d && d.ok){
       if(btn){ btn.disabled = true; btn.textContent = "正在重启…"; }
       toast("toast2", "服务正在重启，3 秒后自动刷新");
       setTimeout(()=>{ location.reload(); }, 3000);
@@ -5645,9 +5704,7 @@ async function loadLogFile(more){
   }
   const endQ = (more && LOGP.fStart > 0) ? ("&end=" + LOGP.fStart) : "";
   try{
-    const r = await fetch("/api/log/file?lines=" + LOG_FILE_PAGE + endQ + "&_t=" + Date.now(),
-                          { mode:"same-origin", cache:"no-store" });
-    const d = await r.json();
+    const d = await API.get("/api/log/file?lines=" + LOG_FILE_PAGE + endQ);
     if(!d || !d.ok){
       toast("toast2", (d && d.reason) || "读取日志文件失败");
       return;
@@ -5681,21 +5738,22 @@ async function loadDiagLog(){
   const pre = document.getElementById("diagLogText");
   if(!pre) return;
   try{
-    const r = await fetch("/api/log?_t=" + Date.now(), { mode:"same-origin", cache:"no-store" });
-    const ct = (r.headers.get("content-type") || "");
-    if(!ct.includes("json")){
-      LOGP.lines = []; LOGP.warn = 0; LOGP.err = 0;
-      pre.textContent = "无法读取日志：服务端返回的不是日志接口（" + (ct || "未知类型") + "）。\n"
-        + "后台跑的还是旧版服务进程——请点上方「重启服务」按钮，或在飞牛应用中心里「停止 → 启动」本应用。";
-      return;
-    }
-    const d = await r.json();
+    const d = await API.get("/api/log");
     LOGP.lines = (d && Array.isArray(d.lines)) ? d.lines : [];
     LOGP.warn = (d && d.warn) | 0;
     LOGP.err = (d && d.err) | 0;
     LOGP.file = false;
     renderLog();
   }catch(e){
+    /* 旧版服务进程会把 /api/log 当静态文件交回 HTML：解析不出 JSON，请求层抛的
+       就是"HTTP 200 <!doctype…>"。这种情形必须给出"去重启"的具体指引，
+       而不是一句"读取失败"——那会让人去查网络和端口。 */
+    if(e && e.status === 200){
+      LOGP.lines = []; LOGP.warn = 0; LOGP.err = 0;
+      pre.textContent = "无法读取日志：服务端返回的不是日志接口（HTTP 200 但内容不是 JSON）。\n"
+        + "后台跑的还是旧版服务进程——请点上方「重启服务」按钮，或在飞牛应用中心里「停止 → 启动」本应用。";
+      return;
+    }
     pre.textContent = "无法读取日志：" + e;
   }
 }
@@ -5716,7 +5774,7 @@ async function copyDiagLog(){
   }
 }
 async function clearDiagLog(){
-  try{ await apiPost("/api/log/clear", {}); }catch(e){}
+  try{ await API.post("/api/log/clear", {}); }catch(e){}
   LOGP.file = false; LOGP.fStart = 0; LOGP.fMore = false;   // 文件被清空，历史模式没意义了
   await loadDiagLog();
   toast("toast2", "日志已清除");
@@ -5724,7 +5782,7 @@ async function clearDiagLog(){
 
 async function loadRetention(){
   try{
-    const d = await apiGet("/api/retention");
+    const d = await API.get("/api/retention");
     if(!d || d.ok === false) return;
     if(d.last && d.last.at){
       REC.lastClean = {
@@ -5760,7 +5818,7 @@ async function runScan(btn){
   if(btn) btn.disabled = true;
   toast("toast2", "正在扫描录像目录…");
   try{
-    const d = await apiPost("/api/scan", {});
+    const d = await API.post("/api/scan", {});
     if(!d || !d.ok){ toast("toast2", "扫描失败：服务端无响应"); return; }
     const rows = d.channels || [];
     const empty = rows.filter(r => !r.files).map(r => r.name);
@@ -6713,9 +6771,10 @@ function loadStorageUsage(force){
   STORAGE.loading = true;
   STORAGE.err = "";
   const url = force ? "/api/storage/usage/refresh" : "/api/storage/usage";
+  /* 强制重算是真要扫盘（du 走一遍录像目录），15 秒默认超时对几万个分片不够 */
   const req = force
-    ? apiPost(url, {})
-    : apiGet(url);
+    ? API.post(url, {}, { timeout: 300000 })
+    : API.get(url, { timeout: 60000 });
   return req.then(d=>{
     if(d && d.ok){
       STORAGE.data = d;
@@ -6825,7 +6884,7 @@ function loadGaps(force){
   GAPS.err = "";
   const day = (typeof jsToday === "function") ? jsToday() : "";
   const url = "/api/health/gaps" + (day ? ("?date=" + encodeURIComponent(day) + (force ? "&force=1" : "")) : "");
-  return apiGet(url).then(d=>{
+  return API.get(url).then(d=>{
     if(d && d.ok){
       GAPS.data = d;
       GAPS.at = Date.now() / 1000;
@@ -6976,9 +7035,7 @@ async function loadDiagParts(){
   const el = document.getElementById("diagParts");
   if(!el) return;
   try{
-    const r = await fetch("/api/record/parts?_t=" + Date.now(),
-                          { mode:"same-origin", cache:"no-store" });
-    const d = await r.json();
+    const d = await API.get("/api/record/parts");
     if(!d || !d.ok) throw new Error((d && d.error) || "接口无响应（服务端可能还是旧版本）");
     if(!d.count){
       el.innerHTML = "<b class='ok'>✓</b> 没有残片，所有分片都正常封口了";
@@ -7142,7 +7199,7 @@ function renderCamTabs(){
   if(SET.open === "generic" && LK.condenseMode === "virtual"
      && Date.now() - ARCH.at > 10*60*1000 && !ARCH.loading){
     ARCH.at = Date.now(); ARCH.loading = true;
-    apiGet("/api/archive").then(d=>{
+    API.get("/api/archive").then(d=>{
       ARCH.loading = false;
       if(!d || !d.ok) return;
       ARCH.sum = "待归档 <b>" + d.todo_count + " 天</b> / " + d.segments
@@ -7226,7 +7283,7 @@ function bindSettings(body){
     ds.disabled = true; ds.textContent = "正在检测…";
     if(out) out.textContent = "正在检测目录是否存在、是否可写…";
     try{
-      const d = await apiPost("/api/dir/check", { path: p, create: true });
+      const d = await API.post("/api/dir/check", { path: p, create: true });
       if(d && d.ok){
         REC.dir = d.path || p;
         saveCfgSoon();
@@ -7423,10 +7480,10 @@ function bindSettings(body){
     if(!url){ if(out) out.textContent = "先填 Webhook 地址再测试"; return; }
     if(out) out.textContent = "发送中…";
     try{
-      const r = await fetch("/api/notify/test", { method:"POST", mode:"same-origin",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ webhook: url }) });
-      const d = await r.json();
+      /* 这处以前自己拼请求头，漏了 X-NVR-Request —— 服务端 _write_ok 直接 403，
+         于是一个能用的 Webhook 地址永远只回"发送失败"。走请求层后由它统一带。
+         要等对端 webhook 回应，20 秒是给慢端点的（默认 15 秒偏紧）。 */
+      const d = await API.post("/api/notify/test", { webhook: url }, { timeout: 20000 });
       if(out) out.textContent = d && d.ok
         ? ("测试发送成功" + (d.ms ? "（" + d.ms + "ms）" : ""))
         : ("发送失败：" + ((d && d.error) || "未知原因"));
@@ -7442,7 +7499,8 @@ function bindSettings(body){
       bArch.disabled = true;
       if(ao) ao.textContent = "正在扫描候选日期…";
       try{
-        const r = await apiPost("/api/archive/run", {dry_run:true});
+        /* 预览要扫台账、算出候选日期与预计产出，慢盘上十几秒很常见 */
+        const r = await API.post("/api/archive/run", {dry_run:true}, { timeout: 120000 });
         if(!r || !r.ok){
           if(ao) ao.textContent = "预览失败：" + ((r && r.error) || "未知错误");
           return;
@@ -7479,7 +7537,7 @@ function bindSettings(body){
     let poll = null;
     const finished = new Promise((resolve)=>{
       poll = setInterval(()=>{
-        apiGet("/api/archive/progress").then(a=>{
+        API.get("/api/archive/progress").then(a=>{
           const run = a && a.running;
           if(run){
             if(!ao) return;
@@ -7499,7 +7557,7 @@ function bindSettings(body){
       }, 1500);
     });
     try{
-      const s = await apiPost("/api/archive/run", {dry_run:false});
+      const s = await API.post("/api/archive/run", {dry_run:false});
       if(!s || !s.ok) throw new Error((s && s.error) || "归档任务未能启动");
       const r = await finished;
       ARCH.arm = null;
@@ -7532,7 +7590,7 @@ function bindSettings(body){
   const lkRun = body.querySelector("#btnLinkRun");
   if(lkRun) lkRun.onclick = ()=>{
     lkRun.disabled = true; lkRun.textContent = "正在触发…";
-    apiPost("/api/link/run", {}).then(d=>{
+    API.post("/api/link/run", {}).then(d=>{
         if(d && d.ok && d.link) applyLink(d.link);
         const n = (d && d.link && d.link.pending) || 0;
         toast("toast2", n ? "已入队，待处理 " + n + " 项" : "本轮没有新的已封口分片");
@@ -8037,10 +8095,10 @@ function fetchRecordings(done, force){
     state.recLoading = true;
     try{ applyPlaybackVisibility(); }catch(e){}
   }
-  /* ?_t + no-store 双保险：WebView 曾把空录像清单缓存住，导致回放页永远「无视频文件」。
-     force=1 绕过服务端 3 秒短缓存：归档刚跑完这类「必须立刻看见」的场合用。 */
-  fetch("/api/recordings?_t=" + Date.now() + (force ? "&force=1" : ""),
-        { mode:"same-origin", cache:"no-store" }).then(r=>r.json()).then(d=>{
+  /* force=1 绕过服务端 3 秒短缓存：归档刚跑完这类「必须立刻看见」的场合用。
+     缓存破坏参数由请求层统一加，这里不再自己拼 ?_t。 */
+  API.get(force ? "/api/recordings?force=1" : "/api/recordings", { timeout: 60000 })
+    .then(d=>{
     state.recLoading = false;
     if(!d || !d.ok){ if(done) done(); return; }
     state.rec = d;
@@ -8319,9 +8377,8 @@ function renderPlay(autoStart){
   if(autoStart) pvAutoEnter(true);
   const day = curDay();
   if(!state.camId || !day) return;   // 空态由时间轴摘要兜住
-  fetch("/api/ledger?cam=" + encodeURIComponent(state.camId) + "&date=" + day,
-        {mode:"same-origin", cache:"no-store"})
-    .then(r=>r.json()).then(d=>{
+  API.get("/api/ledger?cam=" + encodeURIComponent(state.camId) + "&date=" + day)
+    .then(d=>{
       if(!d || !d.ok) throw new Error((d && d.error) || "台账读取失败");
       renderVtl(d, day);
       const sum = d.summary || {count:0, active_sec:0};
@@ -9227,9 +9284,8 @@ function pvFinish(){
 function pvRefreshLedger(done){
   const day = curDay();
   if(!state.camId || !day){ if(done) done(); return; }
-  fetch("/api/ledger?cam=" + encodeURIComponent(state.camId) + "&date=" + day,
-        {mode:"same-origin", cache:"no-store"})
-    .then(r=>r.json()).then(d=>{
+  API.get("/api/ledger?cam=" + encodeURIComponent(state.camId) + "&date=" + day)
+    .then(d=>{
       if(d && d.ok){ vtlData = d; vtlDay = day; }
       if(done) done();
     }).catch(()=>{ if(done) done(); });
@@ -9617,7 +9673,7 @@ document.addEventListener("click", ()=>{
    recorder 实际按 5 分钟切，两边各说各话。 */
 function syncFromServer(){
   if(typeof fetch !== "function") return;
-  return apiGet("/api/config").then(d=>{
+  return API.get("/api/config").then(d=>{
     const c = (d && (d.config || d)) || null;
     if(!c || d.ok === false) return;
     let dirty = false;
@@ -9796,7 +9852,9 @@ function authSubmit(){
   if(!t){ authGate(true, "先粘贴 api_token"); return; }
   const b = document.getElementById("agGo");
   if(b) b.disabled = true;
-  apiPost("/api/auth/login", { token: t }).then(d=>{
+  /* allow401：这里是"你粘错了 token"，不是"会话过期"——别让请求层抢先把
+     引导层改成"凭证已失效"，那会让用户以为凭证坏了，反复去轮换。 */
+  API.post("/api/auth/login", { token: t }, { allow401: true }).then(d=>{
     if(b) b.disabled = false;
     if(d && d.ok){
       authSave(t); AUTH.token = t;
@@ -9824,15 +9882,14 @@ function authBoot(){
   if(AUTH.token){
     /* 存着 token：先用它换一枚新 cookie。cookie 只有 30 天而 token 一直留在本地，
        只带 Bearer 能读接口，但 <img>/<video> 会 401 —— 表现是"页面正常、画面全黑"。 */
-    apiPost("/api/auth/login", { token: AUTH.token }).then(d=>{
+    API.post("/api/auth/login", { token: AUTH.token }, { allow401: true }).then(d=>{
       if(d && d.ok){ authGate(false); return; }
       authSave(""); AUTH.token = "";
       authGate(true, "保存的凭证已失效，请重新粘贴");
     }).catch(()=> authGate(true, "无法连接服务"));
     return;
   }
-  fetch("/api/auth/status", { cache:"no-store" })
-    .then(r=>r.json())
+  API.get("/api/auth/status")
     .then(d=>{
       if(d && d.authed){ authGate(false); return; }   // 同一浏览器已登录过
       /* 把凭证文件路径写到引导层上：用户得知道去哪找那串 token */
