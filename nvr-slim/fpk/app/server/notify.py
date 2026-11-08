@@ -6,9 +6,10 @@
 2. **cooldown 双键**（cam + 类别）：移动侦测没有冷却能把手机炸掉，默认 60 秒；
 3. **失败指数退避**（2s→4s→8s，最多 3 次）后丢弃并记日志，不阻塞主链路。
 
-消息体是「胖 JSON」——一个 body 同时带 msg_type/content.text（飞书）、
-msgtype/text.content（钉钉 / 企业微信）、title/desp（Server酱）四套键，
-主流群机器人开箱即显示，不用为每个平台写一套发送逻辑。
+0.9.124 起消息体交给 `notify_tpl.render()` 按目标平台出最小 body，认不出来的
+目标仍回退原来的「胖 JSON」（四套键齐全），保证升级不会让已有机器人收不到。
+发送结果同时落到 `notify_history.jsonl`：内存 recent 重启即丢，排障时
+「昨晚到底发没发出去」不能只靠界面上那 5 行绿字。
 """
 import json
 import queue
@@ -16,12 +17,15 @@ import threading
 import time
 import urllib.request
 
+import notify_history
+import notify_tpl
+
 CAT_LABEL = {"person": "人员", "two_wheeler": "两轮车", "vehicle": "车辆",
              "motion": "移动侦测"}
 
 
 class Notifier:
-    def __init__(self, cfg_fn, log=None, timeout=8):
+    def __init__(self, cfg_fn, log=None, timeout=8, var_dir=None):
         self.cfg_fn = cfg_fn            # 返回完整 cfg（读 notify 块）
         self.log = log or (lambda m: None)
         self.timeout = int(timeout)
@@ -32,6 +36,13 @@ class Notifier:
         self._fail_streak = {}          # (cam, cat) -> 连续失败次数
         self.recent = []                # 最近 20 条 [{cam,cat,ok,at,ms}]
         self._lock = threading.Lock()
+        # var_dir 为空时不落盘：单测直接 new 一个 Notifier 不该往工作区写文件。
+        # 计数在启动时读一次文件，之后靠 append 的返回值累加，/api/status
+        # 每几秒被轮询一次，绝不能在那个路径上扫盘。
+        self.var_dir = var_dir
+        self._hist = (notify_history.stats(var_dir) if var_dir else
+                      {"total": 0, "last_at": None,
+                       "file": notify_history.FILE_NAME})
 
     # ------------------------------------------------------------ 生命周期
     def start(self):
@@ -98,7 +109,9 @@ class Notifier:
         url = str(nt.get("webhook") or "").strip()
         if not url:
             return
-        msg = self._message(item)
+        # 模板按目标平台选；nt 里没有 template 键时拿 None，走默认文案。
+        # 配置入口（下一轮）只要往 notify 块放一个键，这里不用再改。
+        msg, platform = notify_tpl.render(url, item, nt.get("template"))
         key = (item["cam"], item["cat"])
         delay = 2.0
         for attempt in range(3):
@@ -109,6 +122,7 @@ class Notifier:
                 with self._lock:
                     self._fail_streak[key] = 0
                     self._record(item, True, ms)
+                self._persist(item, True, ms, "", attempt + 1, platform)
                 return
             if attempt < 2:
                 time.sleep(delay)      # 最后一次失败不再空等，直接落日志
@@ -116,18 +130,34 @@ class Notifier:
         with self._lock:
             self._fail_streak[key] = self._fail_streak.get(key, 0) + 1
             self._record(item, False, 0, err)
+        self._persist(item, False, 0, err, 3, platform)
         self.log("通知发送失败（已重试 3 次）：%s %s · %s"
                  % (item["cam"], CAT_LABEL.get(item["cat"], item["cat"]), err))
 
     @staticmethod
     def _message(item):
-        label = CAT_LABEL.get(item["cat"], item["cat"])
-        when = time.strftime("%H:%M:%S", time.localtime(item.get("t") or time.time()))
-        text = "【NVR · %s】检测到%s · %s" % (item["cam"], label, when)
-        # 胖 JSON：飞书 / 钉钉 / 企业微信 / Server酱 四套键一次带齐
-        return {"msg_type": "text", "content": {"text": text},
-                "msgtype": "text", "text": {"content": text},
-                "title": "NVR 检测通知", "desp": text}
+        """兼容入口：不认平台时就是原来那份四套键齐全的胖 JSON。
+
+        保留它是因为设置页「测试发送」与既有单测都按这个形状断言；
+        真正的平台适配走 notify_tpl.render(url, item)。
+        """
+        body, _p = notify_tpl.render("", item)
+        return body
+
+    def _persist(self, item, ok, ms, err, tries, platform):
+        """落盘只做一次 append，失败也吞掉 —— 通知发没发出去不该被磁盘状况改写。"""
+        if not self.var_dir:
+            return
+        written, total = notify_history.append(self.var_dir, {
+            "at": item.get("t") or time.time(), "cam": item["cam"],
+            "cat": item["cat"], "ok": ok, "ms": ms, "err": err,
+            "tries": tries, "platform": platform})
+        if not written:
+            self.log("通知历史落盘失败（不影响发送结果）：var 目录不可写？")
+            return
+        with self._lock:
+            self._hist["total"] = total
+            self._hist["last_at"] = item.get("t") or time.time()
 
     def _post(self, url, payload):
         t0 = time.time()
@@ -146,12 +176,19 @@ class Notifier:
 
     # ------------------------------------------------------------ 测试发送
     def test(self, url):
-        """设置页「测试发送」：同步发一条，返回 (ok, ms, err)。"""
+        """设置页「测试发送」：同步发一条，返回 (ok, ms, err)。
+
+        测试发送也按目标平台出 body，否则「测试成功、真实通知却被拒收」
+        会变成一个查不出来的假象。测试同样记一笔历史，方便事后对账。
+        """
         url = str(url or "").strip()
         if not url:
             return False, 0, "Webhook 地址为空"
-        ok, ms, err = self._post(url, self._message(
-            {"cam": "测试", "cat": "person", "t": time.time()}))
+        item = {"cam": "测试", "cat": "person", "t": time.time()}
+        msg, platform = notify_tpl.render(url, item,
+                                          self._notify_cfg().get("template"))
+        ok, ms, err = self._post(url, msg)
+        self._persist(item, ok, ms, err, 1, platform)
         return ok, ms, err
 
     # ------------------------------------------------------------ 状态
@@ -163,8 +200,18 @@ class Notifier:
 
     def status(self):
         with self._lock:
+            # history 是启动读一次 + 每次 append 累加的缓存值，不是当场扫盘：
+            # /api/status 被前端几秒轮询一次，扫盘会把通知线程拖进 IO 等待。
             return {"recent": list(self.recent),
-                    "pending": self.q.qsize()}
+                    "pending": self.q.qsize(),
+                    "history": {"file": self._hist.get("file"),
+                                "total": self._hist.get("total", 0),
+                                "last_at": self._hist.get("last_at"),
+                                "persisted": bool(self.var_dir)}}
+
+    def history(self, **kw):
+        """只读查询入口；真正的读盘只在有人显式查历史时发生。"""
+        return notify_history.query(self.var_dir, **kw)
 
 
 if __name__ == "__main__":

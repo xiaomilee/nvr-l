@@ -2959,6 +2959,33 @@ class Handler(BaseHTTPRequestHandler):
                                         runtime.load_config(STATE["var_dir"]))})
         if path == "/api/status":
             return self._send(200, status_payload())
+        if path == "/api/notify/history":
+            # 通知发送历史：内存 recent 只有 20 条且重启即丢，这里读的是落盘事实。
+            # 只在有人显式查时读盘；/api/status 的轮询走 Notifier 的内存计数。
+            qs = parse_qs(urlparse(self.path).query)
+
+            def one(k):
+                return (qs.get(k) or [None])[0]
+
+            def num(k):
+                v = one(k)
+                try:
+                    return float(v) if v not in (None, "") else None
+                except (TypeError, ValueError):
+                    return None
+
+            ok_raw = one("ok")
+            ok = None
+            if ok_raw in ("1", "true", "yes"):
+                ok = True
+            elif ok_raw in ("0", "false", "no"):
+                ok = False
+            ntf = STATE.get("notifier")
+            rows = ntf.history(since=num("from"), until=num("to"),
+                               cam=one("cam"), cat=one("cat"), ok=ok,
+                               limit=one("limit") or 100) if ntf else []
+            return self._send(200, {"ok": True, "items": rows, "count": len(rows),
+                                    "file": "notify-history.jsonl"})
         if path == "/api/gpu":
             return self._send(200, gpu(force=True))
         if path == "/api/slots":
@@ -3915,7 +3942,9 @@ def main():
     STATE["recorder"] = rec
     STATE["link"] = lk
     # 通知分发器（AI 检测 / 移动侦测 → Webhook）：独立线程 + 队列 + cooldown
-    ntf = notify.Notifier(cfg_fn=lambda: runtime.load_config(a.var), log=_log_line)
+    # var_dir 传进去才能把发送历史落盘；内存 recent 重启即丢，排障要能查昨天的。
+    ntf = notify.Notifier(cfg_fn=lambda: runtime.load_config(a.var), log=_log_line,
+                          var_dir=a.var)
     ntf.reconfigure(cfg)
     ntf.start()
     STATE["notifier"] = ntf
@@ -4011,6 +4040,14 @@ def main():
             pass
         try:
             STATE.get("detect_worker").stop()
+        except Exception:
+            pass
+        # 通知线程重试里有 2s/4s 的 sleep，不显式 set 就只能靠 daemon 硬退；
+        # 停服时那条通知会连「发没发出去」的历史都来不及记。
+        try:
+            _ntf = STATE.get("notifier")
+            if _ntf is not None:
+                _ntf.stop()
         except Exception:
             pass
         try:

@@ -105,6 +105,25 @@
 HTTP 访问汇总、录制失败时的命令行与 stderr，全文再过一次 `redact.mask_text()`。
 排障时优先把这份贴出来，比截图有用。
 
+**通知发送历史**：诊断卡的「最近 5 条」来自 `/api/status` 的 `notify.recent`，
+那是进程内的 20 条内存环，**重启就清空**，不能用来回答「昨晚到底发没发出去」。
+真正的事实落在 `<var>/notify-history.jsonl`，用只读接口查：
+
+```
+GET /api/notify/history?from=&to=&cam=&cat=&ok=&limit=100
+```
+
+`from` / `to` 是 epoch 秒，`ok=1|0` 只挑成功或失败，最新在前，单次最多 500 条。
+每条给 `at`（epoch 秒）、`cam`、`cat`、`ok`、`ms`、`err`、`tries`（第几次才成功）、
+`platform`（feishu / dingtalk / wecom / serverchan / bark / generic）。
+**文件里不存 webhook 地址**——地址常带 `?key=`，只记平台名；所有字符串落盘前
+统一过 `redact.mask_text()`。`/api/status` 的 `notify.history` 只给缓存的条数与
+最后一条时间，几秒一次的轮询不会去扫盘。
+
+消息体按 Webhook 的域名自动选平台（填 URL 即生效，不需要选模板）：
+认不出来的自建钩子 / 内网转发仍收到旧的「四套键齐全」通用 body，升级不会让
+已有机器人突然收不到。目前**设置页还没有历史查看入口**，查历史请用上面的接口。
+
 ## 3. 状态怎么读
 
 ### 每路录制：7 种 `hstate`

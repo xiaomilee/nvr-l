@@ -60,7 +60,9 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `archive.py` | 归档裁剪：按台账活动窗口裁出浓缩片段、夜间连跑到待办清空 | `run_archive` `archive_sweep` |
 | `retention.py` | 每日定点清理：按日期整目录删、归档未完成硬闸门 | `run_cleanup` `parse_hhmm` |
 | `health.py` | 录像可信度：七态状态机、缺口四种洞位置 / 五条原因文案、覆盖率 | `state_of` `gaps_of` `gap_reason` `summarize` |
-| `notify.py` | Webhook 通知：冷却、失败历史 | `Notifier.status()` |
+| `notify.py` | Webhook 通知分发：入队 / cooldown / 三次指数退避 / 内存 recent | `Notifier.status()` `offer()` |
+| `notify_tpl.py` | 通知模板：按 webhook host 出各平台最小 body、变量插值、坏模板回退 | `render()` `platform_of()` |
+| `notify_history.py` | 通知发送历史落盘：jsonl 追加、脱敏、裁剪、过滤查询 | `append()` `query()` `stats()` |
 | `sysinfo.py` | 系统信息（CPU / 内存 / 磁盘） | 状态快照 |
 <!-- /table:modules -->
 
@@ -87,7 +89,8 @@ LAN IP / `.local` / `.lan` / `.fnos.net`）。服务**不处理 CORS 预检**，
 | GET | `/api/health` | 轻量存活探针与版本徽标 | 内联，`version` / `uptime` / `cams` |
 | GET | `/api/health/gaps` | 某日录像缺口与覆盖率 | `health_gaps_payload()` → `health.py` |
 | GET | `/api/config` | 拉运行时配置（脱敏） | `runtime.load_config` + `redact_cfg` |
-| GET | `/api/status` | 总状态看板 | `status_payload()`（2612） |
+| GET | `/api/status` | 总状态看板（含 `notify.history` 落盘计数，缓存不扫盘） | `status_payload()`（2612） |
+| GET | `/api/notify/history` | 通知发送历史（`from/to/cam/cat/ok/limit`），只读落盘事实 | `Notifier.history()` → `notify_history.query()` |
 | GET | `/api/gpu` | 核显探测 | `gpu(force=True)` |
 | GET | `/api/slots` | 并发槽位 | `SlotPool.status()` |
 | GET | `/api/live` | 直播快照态 | `live_payload()` |

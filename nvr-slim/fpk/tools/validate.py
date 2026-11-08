@@ -218,7 +218,10 @@ for f in ["app/server/nvr_slim.py", "app/server/runtime.py", "app/server/params.
           # 时间窗确认（0.9.122）：detect 在模块级 import 它，同一条理由。
           "app/server/confirm.py",
           # 前端合成器（0.9.123）：打包前的第一步就是它，语法错等于整个构建闸门失效。
-          "tools/compose_ui.py"]:
+          "tools/compose_ui.py",
+          # 通知模板与发送历史：notify.py 在模块级直接 import 这两个，
+          # 语法错同样是启动即崩，别等装到 NAS 上才发现。
+          "app/server/notify_tpl.py", "app/server/notify_history.py"]:
     try:
         py_compile.compile(os.path.join(ROOT, f), doraise=True)
     except py_compile.PyCompileError as e:

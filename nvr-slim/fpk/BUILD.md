@@ -38,7 +38,7 @@ fpk/
 │   │   ├── images/
 │   │   ├── css/           样式源：theme/base/components/pages/player（构建时合成，**不进包**）
 │   │   └── js/            脚本源：core/ 8 + components/ 3 + pages/ 10 + player/ 1 共 22 份（**不进包**）
-│   ├── server/            23 个后端模块；nvr_slim.py 是唯一 HTTP 入口（约 4000 行）
+│   ├── server/            25 个后端模块；nvr_slim.py 是唯一 HTTP 入口（约 4000 行）
 │   ├── bin/               可选静态 ffmpeg（见 app/bin/README.md）
 │   ├── share/             随包模型 yolo11n.onnx
 │   ├── tools/doctor.sh    装完的一次性只读体检

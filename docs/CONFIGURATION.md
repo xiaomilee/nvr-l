@@ -133,6 +133,14 @@
 `norm_notify()` 把 `webhook` 截到 500 字符、`cooldown` 夹到 `30~600`。
 分发器 `Notifier` 用 `cfg_fn` 每轮读盘，所以改冷却时间不需要重启。
 
+**模板与发送历史不占配置键**：消息体由 `notify_tpl.render()` 按 webhook 的
+host 自动选平台（飞书 / 钉钉 / 企业微信 / Server酱 / Bark，其余回退通用胖 JSON），
+填 URL 即生效；发送结果落在 `<var>/notify-history.jsonl`，保留最近 2000 条，
+用 `GET /api/notify/history` 查。这么做是刻意的：`pushCfg()` 每次保存都会把
+整个 `notify` 块推回来，多一个键就多一处「用户改了却被前端整块打回默认」的
+风险（§4.1 的 `detect.confirm` 就栽过）。真正需要自定义文案时，应给模板单独
+设计一个写入口，而不是塞进这个块。
+
 ### 4.3 已知「假设置」
 
 `test/button_matrix.py` 的 `KNOWN_GAPS` 照出四处界面上看得见、后端却永远收不到的
