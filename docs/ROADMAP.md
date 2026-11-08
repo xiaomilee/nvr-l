@@ -63,6 +63,7 @@
 | 17 | 11-08 21:04 | 批次 5 切片八：按钮功能验收表落地（`test/test_btn_effect.py`，真起本地服务，5 个衔接/录制设置项 × 四层证据，9 项进闸门）；**首跑抓到并修掉两个「改了不生效」缺口**：`Link.reconfigure` 漏 `max_queue`、`_ENUM_KEYS` 漏 `link_mode` | fc3b5b9 | 未出包（清单第 2 项还剩多组设置项、文档重构、nvr_slim.py 头注释、版本收尾）；validate 81 项、后端 **1031** 条（1022+9）、前端全绿；本地临时服务与 152 同构，**未连测试机改配置**；152 只读 0.9.122、两路 recording（age 1/0） |
 | 18 | 11-08 21:23 | 批次 5 切片九：按钮验收表第二组（`record_enable` 进 `CASES`、`test_90` 禁用顶层同名回读字段、新增 `test_93` 验第二条写入口）；**首跑抓到并修掉第三个热生效缺口**：`set_link()` 改 `record_enable` / `record_segment_sec` 只通知 Link，Recorder 仍按旧参数录制 | 8f1bf3a | 未出包（清单第 2 项还剩多组设置项、文档重构、nvr_slim.py 头注释、版本收尾）；validate 81 项、后端 **1033** 条（1031+2）、前端全绿，`test_btn_effect.py` 9→**11** 项；`snapshot_interval` / `record_frag` 查明非设置页按钮或非可观测，记入「不在本轮范围」；152 只读 0.9.122、两路 recording（age 2/1） |
 | 19 | 11-08 21:40 | 批次 5 切片十：清单第 2 项第三组，第 18 轮留下的「两张表归属」定案——声明式验收矩阵 `test/button_matrix.py`（20 行覆盖 `pushCfg` 全部 key、四层判定、pass/partial/fail/unknown 四档、DEFAULTS 与源码双向覆盖守卫、照出 4 处假设置）+ 58 条单测；补「两表对齐」守卫，执行器 CASES 的 6 个 key / 7 条 effects 必须都进声明表 | 8249fd9 / 4cdfbd5 | 未出包（清单第 2 项仍未打勾，按规则不 bump/不部署）；validate 81 项、后端 **1091** 条（含新增 58）、前端全绿、0 FAIL；152 只读 0.9.122、两路 `hstate=recording`（age 1/1）、无 stalled、`detect.state=ready`、confirmed=50 |
+| 20 | 11-08 22:04 | 批次 5 切片十一：清单第 2 项第四组，收口第 18 轮挂账的输入强校缺口——`set_link()` 的 `record_enable` 从裸 `bool()` 改用 `runtime.coerce`，字符串 `"false"` 不再被判成 `True` 而把录像打开；`test_94` 单独带一条用例（磁盘 + 运行中 Recorder + 两条入口同口径三层证据），首跑复现旧行为全红、修后全绿 | 817c4c6 | 未出包（清单第 2 项仍未打勾：采集器与第一份端到端报告未接，按规则不 bump/不部署）；validate 81 项、后端 **1092** 条（1091+1）、51 个测试文件、前端 16 文件全绿、0 FAIL；`test_btn_effect.py` 11→**12** 项，并发路的 `test_button_matrix.py` 58 项未受影响；152 只读 0.9.122、端口 18085、两路 `hstate=recording`（age 3/0）、`record.enabled=True`、无 stalled、`detect.state=ready`、confirmed=51 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -674,6 +675,30 @@ CSS 831 条规则按 `(媒体查询上下文, 选择器)` 归并后声明序列�
 > 一次完整的端到端跑分。下一轮先接采集器并产出第一份报告，把 `partial` 项
 > 逐条消化或写明免验；之后才是文档重构（六份）、`nvr_slim.py` 头注释、
 > 0.9.123 五处 bump + 出包 + 部署 152 + 真机验收。
+>
+> **进度（第 20 轮，执行器侧收口第 18 轮挂账）**：并发路做完第 19 轮后，
+> 我这一路按第 18 轮台账与「不在本轮范围」共同挂着的那条账开工：
+> `set_link()` 的 `record_enable` 用 `bool(body.get(...))`，字符串 `"false"`
+> 会被判成 `True`；`/api/config` 走 `runtime.coerce` 却收敛成 `False`。
+> **实际后果比台账记的更重**：不是「关不掉」，而是从这条 policy 入口点
+> 「关录像」反而把 `record_enable` 落盘成 `True`、`Recorder.enabled` 也变
+> `True` —— 接口照回 ok、配置照落盘，界面完全看不出两条入口给了相反结论。
+> 录制总闸是 P0 里最不能有歧义的开关，所以统一交给 `coerce`，值怎么进来
+> 都给同一个结果。**只改这一行 + 单独一条用例**（第 18 轮写明「别捎带进
+> 别的改动」），不动声明表/守卫/采集器（并发路拥有），不碰 `recorder.py`
+> 的录制链路。
+>
+> `test_94` 的起手先把总闸设成"开"再传字符串 `"false"`，因为 `CASES` 里
+> 有一项会把它改成 `False`、`test_93` 又会取反 —— 不自己铺状态就会变成
+> 「同值没变化」的假绿。证据取磁盘与运行中 `Recorder`，不读 `/api/link`
+> 顶层那个同名回读字段（第 18 轮 `test_90` 已把它列为禁用证据）。
+> **先临时把产品代码退回 `bool()` 跑了一次**：磁盘与 Recorder 两层都红
+> （`True is not False`），确认用例真能挡住旧行为，再恢复修复版跑绿。
+> 新用例不引入 `key="..."` / `effects=[...]` 字面量、不动 `CASES`，
+> 所以并发路的 `TestTwoTablesAgree` 正则扫描不受影响（58 项复跑仍全绿）。
+>
+> 闸门：validate 81 项、后端 **1092** 条（1091+1）、51 个测试文件、
+> 前端 16 文件全绿、0 FAIL。未出包、未部署、未 bump（清单第 2 项仍在做）。
 
 ---
 
@@ -720,9 +745,12 @@ CSS 831 条规则按 `(媒体查询上下文, 选择器)` 归并后声明序列�
   启动时读一次且没有 `reconfigure`。补热生效要动已稳定的取流链路（每路一条 RTSP
   连接、录制与取帧都挂在它下面），明确不做 —— 它是现场回退开关，重启一次即可生效。
 
-另有一处**记下但未修**：`set_link()` 里 `record_enable` 用 `bool(body.get(...))`，
-若前端误传字符串 `"false"` 会被判成 `True`（与 `runtime.coerce` 的口径不一致）。
-本轮只修「有没有通知 Recorder」，不捎带改输入强校；留给下一轮单独带用例来修。
+~~另有一处记下但未修~~ → **第 20 轮已修**：`set_link()` 里 `record_enable`
+原用 `bool(body.get(...))`，前端误传字符串 `"false"` 会被判成 `True`
+（与 `runtime.coerce` 口径相反）。第 18 轮只修「有没有通知 Recorder」，
+按约定把输入强校留给下一轮单独带用例来修；第 20 轮已改为
+`runtime.coerce("record_enable", ...)` 并由 `test_94` 钉住（见台账第 20 行）。
+修前实测后果是「关录像反而落成开录像」，不是单纯关不掉。
 
 批次 5 声明表期间**故意不修**的两件（第 19 轮）：
 - **4 处「假设置」只照现、不接线**：`night_only` / `low_priority`（控件被
