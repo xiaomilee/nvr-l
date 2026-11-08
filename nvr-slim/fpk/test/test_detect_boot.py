@@ -116,6 +116,18 @@ class DetectBootTest(unittest.TestCase):
         return detect.DetectWorker(
             None, None, self.tmp, lambda: self.tmp, lambda: [], lambda: ({}, []))
 
+    def _win(self, now, cat="person"):
+        """造一条"这一帧命中"的窗口，喂给 `_write_ledger(cam, wins, now)`。
+
+        0.9.122 起窗口不再由 _write_ledger 自己从 dets 算（那是每帧一条、
+        碎片化的根源），改由确认层给出。这里等价复现旧口径：以 now 为中心
+        前后各留 1 秒 —— 下面几条守的是**落账坐标系**，不是确认策略，
+        确认策略在 test_event_confirm.py 里单独守。
+        """
+        lt = time.localtime(now)
+        tod = float(lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+        return [(tod - 1.0, tod + 1.0, {cat: 1})]
+
     def _day_events(self):
         d = ledger.load(self.tmp, CAM["id"], self.date) or {}
         return d, ledger.events_of(d)
@@ -164,8 +176,7 @@ class DetectBootTest(unittest.TestCase):
     def test_b6_write_ledger_lands_events(self):
         """AI 命中必须落成带 cls 的台账事件（修复前 events_of 为空）。"""
         w = self._worker()
-        w._write_ledger(CAM, [{"c": "person", "b": [0.1, 0.1, 0.2, 0.2]}],
-                        self.now)
+        w._write_ledger(CAM, self._win(self.now), self.now)
         d, ev = self._day_events()
         srcs = d.get("sources") or {}
         self.assertIn("ai:23-00-00.mp4", srcs, "桶名应与 5 分钟对齐")
@@ -180,10 +191,9 @@ class DetectBootTest(unittest.TestCase):
     def test_b7_same_bucket_merges_old_windows(self):
         """同桶二次命中：与文件里的旧窗口按同一坐标系合并（gap 内并窗）。"""
         w = self._worker()
-        w._write_ledger(CAM, [{"c": "person", "b": [0.1, 0.1, 0.2, 0.2]}],
-                        self.now)
-        w._write_ledger(CAM, [{"c": "person", "b": [0.3, 0.3, 0.4, 0.4]}],
-                        self.now + 2.0)          # 23:00:02，同桶、间隔 2 秒
+        w._write_ledger(CAM, self._win(self.now), self.now)
+        # 23:00:02，同桶、间隔 2 秒
+        w._write_ledger(CAM, self._win(self.now + 2.0), self.now + 2.0)
         d, ev = self._day_events()
         srcs = d.get("sources") or {}
         wins = (srcs.get("ai:23-00-00.mp4") or {}).get("windows") or []
@@ -196,8 +206,7 @@ class DetectBootTest(unittest.TestCase):
         """桶末（23:04:59）命中不丢；桶名 MM 必须是 5 的倍数。"""
         w = self._worker()
         edge = self.now + 4 * 60 + 59            # 23:04:59，仍在 23:00 桶
-        w._write_ledger(CAM, [{"c": "vehicle", "b": [0.5, 0.5, 0.9, 0.9]}],
-                        edge)
+        w._write_ledger(CAM, self._win(edge, "vehicle"), edge)
         d, ev = self._day_events()
         srcs = d.get("sources") or {}
         self.assertIn("ai:23-00-00.mp4", srcs,
@@ -224,10 +233,9 @@ class DetectBootTest(unittest.TestCase):
             [[100, 102, {"vehicle": 1}], [120, 122, {"vehicle": 1}]]),
             [[100.0, 122.0, {"vehicle": 1}]])
         w = self._worker()
-        w._write_ledger(CAM, [{"c": "vehicle", "b": [0.5, 0.5, 0.9, 0.9]}],
-                        self.now)
-        w._write_ledger(CAM, [{"c": "vehicle", "b": [0.5, 0.5, 0.9, 0.9]}],
-                        self.now + 20.0)         # 23:00:20，同桶、间隔 18 秒
+        w._write_ledger(CAM, self._win(self.now, "vehicle"), self.now)
+        # 23:00:20，同桶、间隔 18 秒
+        w._write_ledger(CAM, self._win(self.now + 20.0, "vehicle"), self.now + 20.0)
         d, ev = self._day_events()
         wins = ((d.get("sources") or {}).get("ai:23-00-00.mp4") or {}).get("windows") or []
         self.assertEqual(len(wins), 1, "间隔 18s ≤ 30s：应并成一个窗口")

@@ -214,7 +214,9 @@ for f in ["app/server/nvr_slim.py", "app/server/runtime.py", "app/server/params.
           "app/server/recorder.py", "app/server/condense.py", "app/server/link.py",
           # 事件中心（0.9.121）：nvr_slim 直接 import 这两个模块，
           # 语法错就是启动即崩，必须在打包前编译一遍。
-          "app/server/event.py", "app/server/event_index.py"]:
+          "app/server/event.py", "app/server/event_index.py",
+          # 时间窗确认（0.9.122）：detect 在模块级 import 它，同一条理由。
+          "app/server/confirm.py"]:
     try:
         py_compile.compile(os.path.join(ROOT, f), doraise=True)
     except py_compile.PyCompileError as e:

@@ -48,6 +48,13 @@ try:
 except ImportError:                    # 单独跑本文件自检时可能不在 sys.path 上
     _ledger = None
 
+try:
+    # 时间窗确认（0.9.122）。同目录模块，跟着 app/server 一起打包；
+    # 单独跑本文件时可能不在 sys.path 上，缺了只是退回旧口径（每帧一条），不崩。
+    import confirm as _confirm
+except ImportError:
+    _confirm = None
+
 # ---------------------------------------------------------------- 类别体系
 
 # COCO 80 类里本项目关心的 6 类 → 内部三分类。
@@ -222,6 +229,12 @@ def norm_detect(cfg):
     if not ok:
         notes.append("detect.trigger 全未勾选，已恢复默认（至少保留一项）")
     out["trigger"] = trig
+    # 时间窗确认（0.9.122）：整块交给 confirm.norm 强校。它必须进 norm_detect
+    # 的输出，否则每次保存设置都会把它丢掉，参数永远停在默认值上。
+    if _confirm is not None:
+        cv, cnotes = _confirm.norm(src.get("confirm"))
+        out["confirm"] = cv
+        notes.extend(cnotes)
     return out, notes
 
 
@@ -850,6 +863,9 @@ class DetectWorker:
         self._threads = []              # 工作者
         self.q = None
         self.sched = Scheduler(self.interval)
+        # 时间窗确认（0.9.122）：只决定"记不记台账/发不发通知"。
+        # 参数每一拍由 ticker 从配置快照同步（update 内部比对，没变就返回）。
+        self.confirmer = _confirm.Confirmer() if _confirm is not None else None
         # 统计：cam_id -> {total, today, cls, unknown, skip, codes, last, ...}
         self.stats = {}
         self._stats_lock = threading.Lock()
@@ -938,6 +954,10 @@ class DetectWorker:
             ready.append((c, url, classes))
         ids = [c["id"] for c, _u, _k in ready]
         self.sched.trim(ids)
+        if self.confirmer is not None:
+            # 参数跟配置走（改窗口/阈值不重启服务），并清掉已删除的路。
+            self.confirmer.update(cfg.get("confirm"))
+            self.confirmer.trim(ids)
         due = self.sched.due(ids, now)
         if not due:
             return
@@ -1036,9 +1056,46 @@ class DetectWorker:
         dets = [d for d in dets if classes.get(d["c"])
                 and not in_ignore(d["b"], rects)]
         if dets:
-            self._write_ledger(cam, dets, now)
-            self._notify(cam, dets)
+            wins = self._confirm(cam, dets, now)
+            if wins:
+                self._write_ledger(cam, wins, now)
+                self._notify(cam, {k for _s, _e, c in wins for k in c})
         self._ok_stat(cid, dets)
+
+    def _confirm(self, cam, dets, now):
+        """检出框 → 台账窗口（当天钟点秒）。**只决定记不记台账**。
+
+        没有这一层时每一帧都自成一条事件：5 秒采样下，一片树影就能在事件页
+        留下一串 2 秒碎片。时间窗确认要求「N 帧里至少 M 帧命中」，单帧误报
+        直接消失；确认之后的每一帧都会带上**整条事件的起点**，所以台账里
+        长出来的仍然是一个连续窗口，而不是逐帧的小段。
+
+        确认层关掉（confirm.enable=false）或模块缺失时退回旧口径（每帧一条），
+        这样出问题能一键回到 0.9.121 的行为，不用回滚整个包。
+        """
+        lt = time.localtime(now)
+        tod = float(lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec)
+        if self.confirmer is None or not self.confirmer.enabled:
+            return windows_from_hits([(tod, d["c"]) for d in dets])
+        # 每类只留最大置信度：确认看的是"这一帧这一类有多确定"，
+        # 同帧十个框不会因此更可信（重复框是同一个人的手和脚）。
+        confs = {}
+        for d in dets:
+            c = d.get("c")
+            if c not in CATEGORIES:
+                continue
+            try:
+                confs[c] = max(confs.get(c, 0.0), float(d.get("s") or 0.0))
+            except (TypeError, ValueError):
+                continue
+        out = []
+        for s_ts, e_ts, cls in self.confirmer.feed(cam["id"], now, confs):
+            # now（epoch）→ tod（当天钟点秒）的换算只做一次，窗口两端各自平移。
+            s = max(0.0, tod - (now - s_ts))
+            e = tod + (e_ts - now)
+            if e > s:
+                out.append((s, e, cls))
+        return out
 
     def _grab(self, cam, url):
         """取一帧 PPM：优先用取帧层的本地 jpg，没有才退回自己拉流。
@@ -1062,12 +1119,15 @@ class DetectWorker:
             return grab_ppm_image(self.ffmpeg, path, timeout=self.timeout)
         return grab_ppm(self.ffmpeg, url, timeout=self.timeout)
 
-    def _notify(self, cam, dets):
-        """检出 → 通知入队（person/vehicle 口径；two_wheeler 归 vehicle）。
-        offer 内部查 cooldown 与开关，绝不在推理线程里发请求。"""
+    def _notify(self, cam, cats):
+        """确认过的类别 → 通知入队（person/vehicle 口径；two_wheeler 归 vehicle）。
+
+        0.9.122 起入参是**类别集合**而不是原始框：通知跟着确认走。给用户推一条
+        "有人出现"而事件页里根本没有这条记录，是最容易让人不再看通知的做法。
+        offer 内部另查 cooldown 与开关，绝不在推理线程里发请求。"""
         if not self.notifier:
             return
-        cats = {d["c"] for d in dets}
+        cats = set(cats or ())
         name = cam.get("name") or cam["id"]
         for cat in ("person", "vehicle"):
             hit = cat in cats or (cat == "vehicle" and "two_wheeler" in cats)
@@ -1078,8 +1138,13 @@ class DetectWorker:
                     pass
 
     # ---------------------------------------------------------- 台账
-    def _write_ledger(self, cam, dets, now):
-        """检出 → 更新该路当前 5 分钟桶（src=ai:<分片文件名>），原子整块替换。"""
+    def _write_ledger(self, cam, wins, now):
+        """窗口 → 更新该路当前 5 分钟桶（src=ai:<分片文件名>），原子整块替换。
+
+        wins 由 `_confirm()` 给出：`[(当天钟点秒起, 止, {类别: 1})]`。
+        0.9.121 以前这里自己从 dets 逐帧算窗口，于是每一帧都落成一条事件；
+        现在时间窗确认已经把"够不够格"判完，这一层只负责落盘。
+        """
         import ledger
         try:
             root = self.record_root_fn()
@@ -1093,8 +1158,6 @@ class DetectWorker:
         # 取当前分钟，命名与 start 错位、每分钟还多出一个源。
         bucket = "%02d-%02d-00" % (start_sec // 3600, (start_sec % 3600) // 60)
         src = "ai:%s.mp4" % bucket
-        tod = lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec
-        wins = windows_from_hits([(float(tod), d["c"]) for d in dets])
         # 与桶内已有窗口合并（同 src 读-改-写，保持幂等）。
         # 坐标系：文件里存的 windows 与 wins 都是「当天钟点秒」，_merge_windows
         # 在这个坐标系里合并；而 ledger.merge 的入参契约是「分片内相对秒」
@@ -1115,8 +1178,18 @@ class DetectWorker:
                 except (TypeError, ValueError, IndexError):
                     continue
         merged = self._merge_windows(old + [[s, e, c] for s, e, c in wins])
+        rel = []
+        for s, e, c in merged:
+            # 跨桶事件：窗口起点可能早于本桶起点。源名就是「这个 5 分钟」，
+            # 把更早的时间写进这个源等于篡改别人的账；裁到桶首，跨桶的连续性
+            # 交给读侧按 AI_GAP_SEC 合并（逐帧写窗口那会儿天然也是这样）。
+            if e <= start_sec:
+                continue
+            rel.append([max(start_sec, float(s)) - start_sec, e - start_sec, c])
+        if not rel:
+            return
         ledger.merge(root, dname, date, src, start_sec,
-                     [[s - start_sec, e - start_sec, c] for s, e, c in merged],
+                     rel,
                      density=1.0, engine="ai")   # AI 检出=高置信活动
 
     @staticmethod
@@ -1270,6 +1343,10 @@ class DetectWorker:
             "last_success_at": self.last_ok_at,
             "per_cam": per_cam,
             "sched": sched,
+            # 时间窗确认实况：确认过几条、单帧误报挡掉几手。这两个数就是
+            # 「误报碎片有没有变少」的出处，界面上不必再估。
+            "confirm": (self.confirmer.snapshot() if self.confirmer is not None
+                        else confirm_blank()),
         }
 
 
@@ -1284,6 +1361,14 @@ def sched_blank():
     return {"workers": 0, "interval": 0, "queued": 0, "queue_max": 0,
             "inflight": 0, "dropped_full": 0, "dropped_stale": 0,
             "pending": 0, "round_ms": 0.0, "round_avg_ms": 0.0, "round_cams": 0}
+
+
+def confirm_blank():
+    """确认实况的空壳（没 worker 或模块缺失时），理由同 sched_blank。"""
+    if _confirm is not None:
+        return _confirm.snapshot_blank()
+    return {"enabled": False, "window": 0, "min_hits": 0,
+            "confirmed": 0, "rejected": 0, "pending": 0}
 
 
 def status_of(worker=None, det_cfg=None, ffmpeg="", runtime=None):
@@ -1339,7 +1424,7 @@ def status_of(worker=None, det_cfg=None, ffmpeg="", runtime=None):
         "error_message": msg,
         "last_success_at": detail.get("last_success_at"),
     }
-    for k in ("loaded", "error", "avg_ms", "per_cam", "sched", "alive"):
+    for k in ("loaded", "error", "avg_ms", "per_cam", "sched", "alive", "confirm"):
         if k in detail:
             out[k] = detail[k]
     out.setdefault("loaded", False)
@@ -1347,6 +1432,7 @@ def status_of(worker=None, det_cfg=None, ffmpeg="", runtime=None):
     out.setdefault("avg_ms", 0)
     out.setdefault("per_cam", {})
     out.setdefault("sched", sched_blank())
+    out.setdefault("confirm", confirm_blank())
     if runtime is not None:
         out["runtime"] = runtime
     return out

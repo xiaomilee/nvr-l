@@ -3432,6 +3432,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             cfg = runtime.load_config(STATE["var_dir"])
             changed = []
+            # 时间窗确认（confirm）这组参数暂时只在配置文件里可调，设置页没有这几项。
+            # 前端推过来的 detect 块因此不带 confirm —— 直接用 norm_detect 补默认值
+            # 会把用户手调过的窗口悄悄打回默认，看着"保存成功"，行为却变了。
+            # 没带就沿用磁盘上的那份。
+            _det = body.get("detect")
+            if isinstance(_det, dict) and "confirm" not in _det:
+                _old = (cfg.get("detect") or {}).get("confirm")
+                if isinstance(_old, dict):
+                    _det["confirm"] = _old
             for k in runtime.DEFAULTS:
                 if k not in body:
                     continue
