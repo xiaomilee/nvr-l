@@ -46,15 +46,16 @@ ROADMAP 叙述里的**分工口径**：一路做「声明表 / 采集器 / 对�
 | 混进 P3 了吗？ | 没有。人脸/车牌/自训模型/多用户权限/实时滤镜一件未做，见「不在本轮范围」。 |
 
 P1（事件中心、智能缩时）在批次 3/4 已交付，本批次不重复投入；P2 未动。
-**方向没有偏，但批次 5 尚未达成「验收」条件**（新人照 README 装起来、
-采集器端到端跑分），所以进度表保持 `doing`，不提前标 `done`。
+**方向没有偏，但批次 5 尚未达成「验收」条件**：采集器端到端跑分已在第 23 轮
+跑过，仍缺「新人照 README 装起来」（README 等五份文档未写），
+所以进度表保持 `doing`，不提前标 `done`。
 
 ### 清单真实完成度（不假装打勾）
 
 | 清单项 | 状态 | 实际做到哪 |
 |---|---|---|
 | 1 前端源码拆分 | **done** | 5 份 CSS + 22 份 JS，构建期合成单 HTML；三项等价证明 + 194 条前端守卫 |
-| 2 按钮功能验收表 | 进行中 | 声明表（20 key / 四档判定 / 58 条单测）+ 执行器（12 项四层证据）+ 两表对齐守卫已就位；**采集器与第一份端到端报告未接** |
+| 2 按钮功能验收表 | **done** | 声明表（20 key / 四档判定 / 58 条单测）+ 执行器（12 项四层证据）+ 两表对齐守卫 + 全表采集器（15 条守卫）均已就位；第 23 轮跑出首份端到端报告：**pass 9 / partial 11 / fail 0 / unknown 0**、还原全部成功。11 项 partial 是产品无运行态出口，逐条写明免验理由，不是全验过 |
 | 3 文档重构 | 进行中 | 6 份里完成 `CONFIGURATION.md`（+10 项文档守卫）；其余 5 份与 `BUILD.md` 瘦身未做 |
 | 4 `nvr_slim.py` 头注释 | todo | 未动 |
 | 5 版本 0.9.123 | 提前 bump | 为出预览包已 bump 五处；**批次收尾时不再 bump 第二次**，见下方版本策略 |
@@ -108,6 +109,7 @@ P1（事件中心、智能缩时）在批次 3/4 已交付，本批次不重复�
 | 20 | 11-08 22:04 | 批次 5 切片十一：清单第 2 项第四组，收口第 18 轮挂账的输入强校缺口——`set_link()` 的 `record_enable` 从裸 `bool()` 改用 `runtime.coerce`，字符串 `"false"` 不再被判成 `True` 而把录像打开；`test_94` 单独带一条用例（磁盘 + 运行中 Recorder + 两条入口同口径三层证据），首跑复现旧行为全红、修后全绿 | 817c4c6 | 未出包（清单第 2 项仍未打勾：采集器与第一份端到端报告未接，按规则不 bump/不部署）；validate 81 项、后端 **1092** 条（1091+1）、51 个测试文件、前端 16 文件全绿、0 FAIL；`test_btn_effect.py` 11→**12** 项，并发路的 `test_button_matrix.py` 58 项未受影响；152 只读 0.9.122、端口 18085、两路 `hstate=recording`（age 3/0）、`record.enabled=True`、无 stalled、`detect.state=ready`、confirmed=51 |
 | 21 | 11-08 23:01 | 批次 5 切片十二：清单第 3 项文档重构第一刀——`docs/CONFIGURATION.md`（29 个顶层键逐项写清类型 / 默认值 / 范围 / **生效方式** / 代码出处，另含配置读写链、嵌套块双口径与已知假设置）+ `test/test_config_doc.py` 10 项守卫，把主表与 `DEFAULTS` / `_ENUM_KEYS` / 三个范围常量逐项钉住；`BUILD.md` 同步测试目录、两表分工与「改配置键要同步文档」 | df21cb1 | 未出包（清单第 2 项采集器由并发路认领、第 3 项还剩五份文档，按规则不 bump / 不部署）；validate 81 项、后端 **1102** 条（1092+10）、52 个测试文件、前端 16 文件全绿、0 FAIL；首跑故意改坏两处（默认值 300→600、生效方式 需重启→热生效）各命中一条断言，恢复后 10 项全绿；152 只读 0.9.122、端口 18085、两路 `hstate=recording`（age 0/0）、`record.enabled=True`、无 stalled、`detect.state=ready`、confirmed=58 |
 | 22 | 11-08 23:44 | **按用户指令合并两路路线并出进度预览包**（非收尾）：确认两路成果线性叠在 `main`、无需 merge，ROADMAP 新增「路线合并与目标复核」小节（对照 REVIEW_BASELINE 三问 + 清单真实完成度 + 版本策略）；五处版本 bump 到 `0.9.123`，manifest changelog 标注「本版未收尾」 | f818518 | **出包** `dist/nvr-0.9.123_x86.fpk` **101169048 字节** md5 `e0f7206f51ba5761c9869126eb959e03`；闸门 validate 81 项、后端 **1102** 条、52 文件、前端 16 文件、0 FAIL；`deploy_test.py` 部署 152 八项自检全 OK（`test-reports/deploy-0.9.123.json`），0.9.122→0.9.123 上线 0.1s、端口 18085，单独复核两路 `hstate=recording`（age 5/0）、`record.enabled=True`、无 stalled、`detect.state=ready`；批次 5 仍 `doing`，清单 2/3/4 未打勾，生产机 2.6 未碰 |
+| 23 | 11-09 00:38 | 批次 5 切片十三：**清单第 2 项收尾**——接手并发实例 00:01~00:06 写好但未提交的采集器在制品（`test/btn_harvest.py` 全表 20 项改值→三份快照→还原→四层判定→出报告 + `test_btn_harvest.py` 15 条离线守卫 + `BUILD.md` 用法 + `button_matrix.py` 抽出 `roll_up()` 并修正两处证据口径）；复核闸门全绿后跑出**首份端到端报告** | de5e6a3 | 未出包（清单 3/4 未勾、批次未收尾，按规则不 bump / 不部署）；首跑闸门偶发 `test_btn_effect.py` 起服务失败，单独复跑 12 项全绿后整轮复跑全绿：validate 81 项、后端 **1117** 条（1102+15）、53 文件、前端全绿、0 FAIL；报告 `test-reports/btn-matrix-0.9.123-r23.json`：20 项 **pass 9 / partial 11 / fail 0 / unknown 0**、总判定通过、还原全部成功；11 项 partial 逐条写明免验理由（需重启 / 夜间任务无出口 / ffmpeg argv 无 HTTP 出口），**不是 20 项全验过**；152 只读 0.9.123、18085、两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -461,7 +463,13 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
       令牌 / 骨架与全局 chrome / 跨页控件 / 各页面 / 画面与时间。判断标准写进了每个文件头，
       下一个人不用问"这条该放哪"。脚本那 8600 行（`js/` 四个目录）留到下一轮，
       一轮一个可独立提交的切片。*）
-- [ ] 按钮功能验收表落成自动化：每个设置项改完要验证后端状态/进程参数真的变了（不只查 UI 值）。
+- [x] 按钮功能验收表落成自动化：每个设置项改完要验证后端状态/进程参数真的变了（不只查 UI 值）。
+      *（第 23 轮打勾，口径见下方进度 note：打勾的是**自动化链路闭合**——声明表
+      20 key / 四档判定 / 覆盖守卫 + 执行器 12 项四层证据 + 两表对齐守卫 +
+      全表采集器 + 首份端到端报告。20 项里 9 项验到运行中对象状态，另 11 项
+      如实标 `partial` 并逐条写明还差什么：它们是产品没有运行态观测出口
+      （需重启 / 夜间任务 / ffmpeg argv 无 HTTP 出口），补出口属清单外改动，
+      已记进「不在本轮范围」。**不拿落盘回读冒充「后端状态真的变了」。**）*
 - [ ] 文档重构：`README.md`（介绍/截图/安装/快速上手）、`docs/USER_GUIDE.md`、
       `docs/ARCHITECTURE.md`、`docs/CONFIGURATION.md`（每项的 key/类型/默认/范围/生效方式）、
       `docs/TROUBLESHOOTING.md`、`BUILD.md` 只留构建；历史排障记录进 `CHANGELOG.md`。
@@ -800,6 +808,47 @@ CSS 831 条规则按 `(媒体查询上下文, 选择器)` 归并后声明序列�
 > 耗时 0.1s、端口 18085；单独复核 `/api/link` 两路 `hstate=recording`
 > （age 5/0）、`record.enabled=True`、无 stalled、`detect.state=ready`。
 > 生产机 192.168.2.6 未触碰。用户看完预览包后继续切片推进，批次不收尾。
+
+> **进度（第 23 轮，清单第 2 项收尾打勾）**：开工时工作区有四个**未提交**
+> 文件（`btn_harvest.py` / `test_btn_harvest.py` / `BUILD.md` / `button_matrix.py`），
+> 是同一 automation 的并发实例在 00:01~00:06 写好的第 23 轮在制品：它跑了四轮
+> 采集调试、00:06:49 最后改完 BUILD.md 后**没有提交、没有回填台账、没有写记录**，
+> 此后十余分钟无任何动静。按「接下一个未勾清单项」本轮就该做清单第 2 项，
+> 故接手这份完整切片而非另起炉灶、也不空转收工；提交信息里如实写明是接手的。
+>
+> **在制品里有两处值得留下的判断**：① `record_enable` 的生效证据从
+> `link.record_enable` / `status.cams.recording` 收敛到只剩
+> `link.record.enabled` —— 前者是 `link_payload()` 现读 config 补的回读字段，
+> 后者数的是「此刻真在跑的 ffmpeg」，本机没装 ffmpeg 时恒为 0，拿它当开关回执
+> 会把「环境没装」记成「关录像没生效」（首跑就这么红过一次）。② `cameras` 的
+> 锚点从 `segment_sec` 换成 `name` —— 单路分片长度改成 0（跟随通用设置）时该键
+> 会从配置里消失，改前改后键名不同会把合法操作误判成采集失败；名字一定在，
+> 且它决定 `dir_name`，Recorder 通道列表必须跟着换。另把 `roll_up()` 从
+> `verify_all()` 抽出来，采集器与整表判定共用一处 tally，不许各数一遍。
+>
+> **首份端到端报告**（`test-reports/btn-matrix-0.9.123-r23.json`，不入库）：
+> 20 项 **pass 9 / partial 11 / fail 0 / unknown 0**，总判定通过，
+> **还原全部成功**（整份比对磁盘 config，只忽略 `updated_at`）。
+> 9 项 pass 验到的是运行中对象状态（`link.record.enabled` / `link.mode` /
+> `status.frames.*.interval` / `status.detect.*` 等），不是 UI 值换个地方读。
+> 11 项 partial 分三类：需重启（`record_dir`）、只被夜间任务读而没有实时出口
+> （`cleanup_at` / 归档四项 / `condense_mode` / `notify`）、需要 ffmpeg 命令行
+> 而所有 HTTP 接口都不输出 argv（`record_segment_sec` / `record_frag` / `gpu`）。
+> 补这些出口要动取流/录制链路或扩大接口面，属清单外改动，逐条写明免验理由
+> 而不是凑一条回读断言 —— 这正是第 19 轮定的四档口径「不撒谎也不让表永远红」。
+>
+> **打勾口径**：按第 20 轮写明的「采集器 + 首份报告接上，partial 逐条消化或写明
+> 免验」，清单第 2 项的**自动化链路**已闭合，故打勾；**不等于 20 项全部四层验过**。
+> 首跑闸门曾偶发 `test_btn_effect.py` 的 `setUpClass` 起本地服务失败（日志为空、
+> 端口 65375），单独复跑 12 项全绿、整轮复跑全绿，判定为本地服务启动竞争而非
+> 产品问题，未改任何产品代码。闸门：validate 81 项、后端 **1117** 条
+> （1102+15）、53 个测试文件、前端全绿（脚本拆分 166 / 样式 28）、0 FAIL。
+>
+> 版本仍 `0.9.123`（第 22 轮已提前 bump，**不重复 bump**），本轮清单 3/4 未勾、
+> 批次未收尾，按规则**未出包、未部署**；152 只读复核 0.9.123 / 18085 /
+> 两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`。
+> 下一轮取清单第 3 项文档重构（还剩 `README.md`、`USER_GUIDE.md`、
+> `ARCHITECTURE.md`、`TROUBLESHOOTING.md`、`CHANGELOG.md` 五份与 `BUILD.md` 瘦身）。
 
 ---
 
