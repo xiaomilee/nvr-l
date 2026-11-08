@@ -24,8 +24,9 @@ import threading
 import hashlib
 import time
 from collections import deque
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import runtime  # noqa: E402
@@ -47,6 +48,8 @@ import archive  # noqa: E402
 import health  # noqa: E402
 import auth  # noqa: E402
 import redact  # noqa: E402
+import event  # noqa: E402
+import event_index  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
 # 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
@@ -1379,6 +1382,292 @@ def ledger_payload(cam_id, date):
             "avail": {"full": full, "archive": []}}
 
 
+# ---------------------------------------------------------------- 事件中心
+# 身份/生命周期/定位在 event.py，检索在 event_index.py。这一层只做三件事：
+# 把台账喂给索引、把请求翻译成查询、把"播不了"翻译成人话。
+# 层界限不越过：这里不许出现"事件起点前几秒"之类的口径 —— 那是 event.locate。
+
+# 一次最多同步/查询多少天。一天的台账就有几百个窗口，30 天已经是"翻旧账"
+# 的上限；再大的范围应该走导出，而不是让页面等一次全量同步。
+EVENT_MAX_DAYS = 31
+
+
+def _ev_conn():
+    """打开事件索引。每请求一条连接（见 event_index.connect 的说明）。"""
+    return event_index.connect(event_index.db_path(STATE["var_dir"]))
+
+
+def _day_files(cam, date):
+    """某路某天的分片清单 → {"sealed": {起点: 文件名}, "parts": {...}, "ends": {...}}。
+
+    起点只从文件名取（ledger.src_start）：mtime 会被备份/复制/归档搅乱，
+    文件名才是唯一可靠的钟点来源。活动切片（.cNN.mp4）不算全时录像分片 ——
+    事件定位要开的是事实链上那一片，切片是压缩产物，不是证据本身。
+
+    ends 是每片的**真实结束时刻**（mtime 换成当天钟点秒）：「事件起点还在不在
+    这一片里」只能靠它判断 —— 光看文件名间隔，一片被删掉与"这段设了更长的
+    分片"完全分不开（这两种情况偏移都是 305 秒）。
+    """
+    root = record_dir()
+    sealed, parts, ends = {}, {}, {}
+    for dn in cam_storage_dirs(cam):
+        try:
+            it = os.scandir(os.path.join(root, dn, date))
+        except OSError:
+            continue
+        with it:
+            for de in it:
+                n = de.name
+                low = n.lower()
+                st = ledger.src_start(n)
+                if st is None:
+                    continue
+                if low.endswith(".mp4.part"):
+                    parts[st] = n
+                    continue
+                if not low.endswith(".mp4") or _CLIP_SLICE_RE.match(n):
+                    continue
+                try:
+                    if not de.is_file():
+                        continue
+                    m = de.stat().st_mtime
+                except OSError:
+                    continue
+                sealed[st] = n
+                cs = ledger.clock_sec_of(m, date)
+                if cs is not None:      # 跨天的 mtime 不采信（同 ledger.avail_spans）
+                    ends[st] = cs
+    return {"sealed": sealed, "parts": parts, "ends": ends}
+
+
+def _event_sig(date):
+    """某天台账的指纹（路径 + 大小 + mtime 的 md5）。一样就不重算。
+
+    只算台账、不算分片清单：新分片落盘后判定引擎会更新台账（它才是事件的
+    出处）；分片清单只影响"点开时开哪个文件"，那是每次现算的。
+    """
+    h = hashlib.md5()
+    root = record_dir()
+    for c in cameras():
+        for dn in cam_storage_dirs(c):
+            try:
+                st = os.stat(ledger.ledger_path(root, dn, date))
+            except OSError:
+                continue
+            h.update(("%s|%d|%d" % (dn, st.st_size, int(st.st_mtime))).encode("utf-8"))
+    return h.hexdigest()
+
+
+def _events_of_day(date):
+    """某天全路的台账 → 事件列表（索引同步的回填入口）。
+
+    sources 合并的写法和 ledger_payload 保持一致：升级过渡期旧 id 目录与
+    新名称目录可能都有台账，只读其中一个会漏掉一半事件。
+    """
+    root = record_dir()
+    now_sec = ledger.day_sec_now() if date == time.strftime("%Y-%m-%d") else None
+    out = []
+    for c in cameras():
+        combined = None
+        for dn in cam_storage_dirs(c):
+            d = ledger.load(root, dn, date)
+            if isinstance(d, dict) and isinstance(d.get("sources"), dict):
+                if combined is None:
+                    combined = {"sources": {}}
+                combined["sources"].update(d["sources"])
+        if not combined:
+            continue
+        starts = sorted(_day_files(c, date)["sealed"].keys())
+        out.extend(event.from_ledger(c["id"], date, combined,
+                                     now_sec=now_sec, starts=starts))
+    return out
+
+
+def _norm_when(s, default, end_of_day=False):
+    """'YYYY-MM-DD' / 'YYYY-MM-DD HH:MM[:SS]' → 'YYYY-MM-DD HH:MM:SS'。
+
+    没给 → 用默认值；给了但认不出 → None（由调用方明确报错）。为什么要分开：
+    前者是"没筛选"，后者是"筛选条件坏了"。把坏条件悄悄换成"今天"，用户会
+    以为昨天真的没有事件 —— 这类"静默降级"比直接报错难查得多。
+
+    只给日期时按端点语义补：起点补 00:00:00，终点补 23:59:59 —— 否则
+    "查 11-08 到 11-08" 会变成"查 11-08 那一瞬间"。
+    """
+    raw = str(s or "").strip().replace("T", " ")
+    if not raw:
+        return default
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+        if fmt == "%Y-%m-%d":
+            return dt.strftime("%Y-%m-%d") + (" 23:59:59" if end_of_day
+                                              else " 00:00:00")
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return None
+
+
+def _dates_between(a, b, cap=EVENT_MAX_DAYS):
+    """闭区间的日期列表；格式不对或超过 cap 返回空（由调用方给出提示）。"""
+    try:
+        d0 = datetime.strptime(a, "%Y-%m-%d").date()
+        d1 = datetime.strptime(b, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return []
+    if d1 < d0:
+        return []
+    n = (d1 - d0).days + 1
+    if n > cap:
+        return []
+    return [(d0 + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n)]
+
+
+def events_payload(frm="", to="", cam="", cat="", limit=200):
+    """事件列表：先同步涉及的日子，再查索引。
+
+    为什么要"先同步"：索引是台账的投影，而台账是判定引擎边跑边写的。
+    页面随时可能来问"今天上午有哪些人"，同步一次就能答 —— 不必等定时任务，
+    也不必让用户先按一个"重建索引"。指纹没变的日子会被跳过，代价只有几个 stat。
+    """
+    today = time.strftime("%Y-%m-%d")
+    a = _norm_when(frm, today + " 00:00:00")
+    b = _norm_when(to, today + " 23:59:59", end_of_day=True)
+    if a is None or b is None:
+        return {"ok": False,
+                "error": "from/to 无法识别（用 YYYY-MM-DD 或 YYYY-MM-DD HH:MM）"}
+    if a > b:
+        a, b = b, a
+    dates = _dates_between(a[:10], b[:10])
+    if not dates:
+        return {"ok": False,
+                "error": "时间范围无法识别，或超过 %d 天（from/to 用 YYYY-MM-DD）"
+                         % EVENT_MAX_DAYS}
+    synced = []
+    conn = _ev_conn()
+    try:
+        event_index.ensure(conn)
+        for d in dates:
+            r = event_index.sync_day(conn, d, _events_of_day, _event_sig(d))
+            if not r.get("skipped"):
+                synced.append(d)
+        evs = event_index.query(conn, a, b, cam or None, cat or None, limit)
+        st = event_index.stats(conn)
+    finally:
+        conn.close()
+    return {"ok": True, "from": a, "to": b,
+            "count": len(evs), "summary": event.summary_of(evs),
+            "synced": synced, "index": st, "events": evs}
+
+
+def event_payload(eid):
+    """单条事件。索引里没有就先同步那一天再查一次 —— 新事件刚写进台账、
+    列表还没刷新时点进来，不该得到一句"没有这条事件"。"""
+    got = event.parse_id(eid)
+    if not got:
+        return {"ok": False, "error": "事件 id 无法识别"}
+    conn = _ev_conn()
+    try:
+        event_index.ensure(conn)
+        ev = event_index.get(conn, eid)
+        if ev is None:
+            event_index.sync_day(conn, got["date"], _events_of_day,
+                                 _event_sig(got["date"]))
+            ev = event_index.get(conn, eid)
+    finally:
+        conn.close()
+    if ev is None:
+        return {"ok": False, "error": "没有这条事件（可能已被清理，或判定口径已变）"}
+    return {"ok": True, "event": ev}
+
+
+def _seg_path(cam, date, name):
+    """某路某天一个分片的实际路径；不存在返回 None（目录可能是名称，也可能是旧 id）。"""
+    for dn in cam_storage_dirs(cam):
+        cand = os.path.join(record_dir(), dn, date, name)
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _seg_nominal(cam):
+    """这一路的**配置**分片长度（秒）。
+
+    只用来判断「mtime 是否可信」：mtime 必须落在 (起点, 起点+3 片] 内才采信
+    （同 ledger.avail_spans 的口径 —— 被 rsync/解压改过的 mtime 会指向别的
+    日子，拿它判断"事件还在不在这一片里"会把能播的说成播不了）。
+    """
+    cfg = runtime.load_config(STATE["var_dir"])
+    seg = runtime.segment_sec(cfg.get("record_segment_sec"))
+    rec = STATE.get("recorder")
+    if rec is not None:
+        try:
+            seg = rec.seg_of(cam)
+        except Exception:
+            pass
+    return float(seg)
+
+
+def event_clip_payload(eid):
+    """事件 → 播放定位 {segment, offset_sec, url} 或 missing_reason。
+
+    评审点名的第二个工程问题（"事件定位靠前端拼文件名"）在这里收口：前端只
+    拿一个可播的 URL + 偏移；拿不到就拿到 missing_reason 与中文原因，
+    由页面如实显示，而不是给一个播不动的黑框。
+    """
+    got = event.parse_id(eid)
+    if not got:
+        return {"ok": False, "error": "事件 id 无法识别"}
+    cam = next((c for c in cameras() if c["id"] == got["cam"]), None)
+    if cam is None:
+        return dict(event.missing("camera_missing"), ok=True, id=eid)
+    files = _day_files(cam, got["date"])
+    sealed, parts = files["sealed"], files["parts"]
+    if not sealed and not parts:
+        return dict(event.missing("no_recording"), ok=True, id=eid)
+
+    # 未封口那一片也算进来：不然"事件落在正在写的分片里"会被算成上一片的
+    # 末尾，点进去播一秒就停（详见 event.resolve 的说明）。
+    loc = event.resolve(got["start"], sorted(sealed.keys()), sorted(parts.keys()))
+    if loc.get("missing_reason"):
+        return dict(loc, ok=True, id=eid)
+
+    name = loc["segment"]
+    path = _seg_path(cam, got["date"], name)
+    if path is None:
+        return dict(event.missing("segment_missing"), ok=True, id=eid)
+    # 这一片**真实录到哪儿**（mtime）早于事件起点 → 事件根本不在这一片里，
+    # 它自己那一片已经不在了。光看文件名分不出"一片被删"和"这段分片更长"：
+    # 两种情况的偏移都是 305 秒。所以只能靠 mtime，并且只在它落在可信窗口
+    # （起点之后、3 片以内）时才采信 —— 被备份/解压改过的 mtime 不许参与判断。
+    seg_st = ledger.src_start(name)
+    end = files["ends"].get(seg_st)
+    if end is not None and got["start"] > end + 1.0:
+        seg_t = _seg_nominal(cam)
+        if seg_st is not None and seg_st < end <= seg_st + seg_t * 3 + 5:
+            return dict(event.missing("segment_missing"), ok=True, id=eid)
+    try:
+        if os.path.getsize(path) <= 0:
+            return dict(event.missing("empty_segment"), ok=True, id=eid)
+    except OSError:
+        return dict(event.missing("segment_missing"), ok=True, id=eid)
+    # 结构不完整的 .mp4（ffmpeg 被强杀、只写了一半）：浏览器打开就是黑屏。
+    # 与其让用户对着黑屏猜，不如直接说"这片坏了"。_has_moov 只读几十个
+    # box 头，代价可以忽略。
+    if not recorder._has_moov(path):
+        return dict(event.missing("corrupt_segment"), ok=True, id=eid)
+
+    return {"ok": True, "id": eid, "segment": name,
+            "offset_sec": loc["offset_sec"],
+            "pre_sec": loc.get("pre_sec"),
+            "clamped": bool(loc.get("clamped")),
+            # 走既有下载接口：白名单、Range、鉴权都在那一处，事件中心不另开
+            # 一条读文件的路径（多一条就多一个能读到录像的入口）。
+            "url": "/api/record/file?cam=%s&day=%s&name=%s"
+                   % (got["cam"], got["date"], name),
+            "missing_reason": None, "missing_text": ""}
+
+
 def parts_payload(cam_filter=""):
     """残片诊断：列出所有未封口的 `.mp4.part` 与已放弃的 `.bad`。
 
@@ -2642,6 +2931,25 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             return self._send(200, ledger_payload(
                 (qs.get("cam") or [""])[0], (qs.get("date") or [""])[0]))
+        if path == "/api/events":
+            # 事件中心：?from=&to=&cam=&cat=&limit=
+            # from/to 接受 YYYY-MM-DD 或 YYYY-MM-DD HH:MM；不给就是今天。
+            q = parse_qs(urlparse(self.path).query)
+            return self._send(200, events_payload(
+                (q.get("from") or [""])[0], (q.get("to") or [""])[0],
+                (q.get("cam") or [""])[0], (q.get("cat") or [""])[0],
+                (q.get("limit") or ["200"])[0]))
+        if path.startswith("/api/events/"):
+            # /api/events/<id> 与 /api/events/<id>/clip。id 里不会有 /，
+            # 但 cam id 允许下划线，所以只按 / 切，不按 _ 猜。
+            rest = path[len("/api/events/"):]
+            bits = [x for x in rest.split("/") if x]
+            if not bits:
+                return self._send(404, {"ok": False, "error": "缺少事件 id"})
+            eid = unquote(bits[0])
+            if len(bits) > 1 and bits[1] == "clip":
+                return self._send(200, event_clip_payload(eid))
+            return self._send(200, event_payload(eid))
         if path == "/api/archive":
             return self._send(200, archive_payload())
         if path == "/api/archive/progress":
