@@ -368,5 +368,66 @@ class TestSourceGuard(unittest.TestCase):
             self.assertIn(k, found)
 
 
+class TestTwoTablesAgree(unittest.TestCase):
+    """两张表不许各说一套（第 18 轮台账留下的归属问题）。
+
+    分工是明确的，不合并：`test_btn_effect.py` 是**执行器**——真起本地服务、
+    逐项改值、拿运行中 Link/Recorder 对象的状态当证据；`button_matrix.py` 是
+    **声明表**——给每个配置键一个「该验什么、怎么算过」的说法，并守住全量覆盖。
+
+    但执行器加了新项而声明表没跟上，或声明表把某项判成「无运行态出口」而执行器
+    正拿它当证据，两份文档就对同一个设置项给出相反结论，比没有表更糟。
+    所以这里让执行器的 CASES 反过来成为声明表的输入，两边一漂移就红。
+    """
+
+    BTN_EFFECT = os.path.join(HERE, "test_btn_effect.py")
+
+    def executor_keys(self):
+        with open(self.BTN_EFFECT, "r", encoding="utf-8") as f:
+            text = f.read()
+        return set(re.findall(r'\bkey="([a-z_]+)"', text))
+
+    def executor_effect_paths(self):
+        """把 CASES 的 effects=[("record","segment_sec")] 翻成 link.* 点路径。"""
+        with open(self.BTN_EFFECT, "r", encoding="utf-8") as f:
+            text = f.read()
+        paths = set()
+        for block in re.findall(r"effects=\[(.*?)\]", text, re.S):
+            for tup in re.findall(r"\(([^)]*)\)", block):
+                segs = re.findall(r'"([a-z_]+)"', tup)
+                if segs:
+                    paths.add("link." + ".".join(segs))
+        return paths
+
+    def test_executor_file_present_and_parsed(self):
+        self.assertTrue(os.path.isfile(self.BTN_EFFECT))
+        self.assertTrue(self.executor_keys(), "CASES 一个 key 都没抓到，守卫失效")
+        self.assertTrue(self.executor_effect_paths(), "effects 一条都没抓到，守卫失效")
+
+    def test_every_executor_case_has_a_matrix_row(self):
+        rows = {r["key"] for r in bm.ROWS}
+        self.assertEqual(self.executor_keys() - rows, set(),
+                         "执行器实跑但声明表没给说法：%s"
+                         % sorted(self.executor_keys() - rows))
+
+    def test_executor_cases_are_runtime_observable(self):
+        by_key = {r["key"]: r for r in bm.ROWS}
+        for k in self.executor_keys():
+            with self.subTest(项=k):
+                self.assertTrue(by_key[k]["runtime"],
+                                "执行器拿它当生效证据，声明表却说没有运行态出口")
+                self.assertFalse(by_key[k]["restart_required"],
+                                 "执行器验的是热生效，声明表却说要重启")
+
+    def test_executor_effect_paths_are_in_matrix_runtime(self):
+        # 这张守卫最要紧：执行器认定的「运行中对象状态」必须在声明表里
+        # 也被登记成运行态，且是 link.* 而不是 config.* 的回读
+        all_runtime = {p for r in bm.ROWS for p in r["runtime"]}
+        paths = self.executor_effect_paths()
+        self.assertEqual(paths - all_runtime, set(),
+                         "执行器的生效证据没进声明表：%s" % sorted(paths - all_runtime))
+        self.assertTrue(all(p.startswith("link.") for p in paths))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
