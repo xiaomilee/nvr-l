@@ -59,6 +59,7 @@
 | 13 | 11-08 19:58 | 批次 5 切片四：脚本源 `pages` 三段（`clips.js` 566 / `settings_cards.js` 918 / `settings_editor.js` 655，共 2139 行）搬进 `js/pages/`，两张表 7→10（js_split 60→81 条、validate JS_REQUIRED 7→10） | d76c416 | 未出包（批次还剩 player 段、按钮验收、文档重构、nvr_slim.py 头注释、版本收尾）；validate 81 项、后端 1022 条、前端全绿；等价已证：剥标记与文件头后 **8631 行逐行相同**，index.html 39 行纯新增、0 删除 |
 | 14 | 11-08 20:18 | 批次 5 切片五：脚本源再搬 4 段共 1996 行（`core/state.js` 463 / `player/player.js` 545 / `pages/live_snap.js` 78 / `pages/live.js` 910），凑齐 core/components/pages/player 四目录；两张表 10→14 | e84dd13 | 未出包（批次还剩脚本最后两片、按钮验收、文档重构、nvr_slim.py 头注释、版本收尾）；validate 81 项、后端 1022 条、前端全绿（js_split 81→**109** 项）；等价已证：剥标记与文件头后 **8631 行逐行相同**，index.html 52 行纯新增、0 删除；152 只读 0.9.122、两路 recording（age 0/1） |
 | 15 | 11-08 20:28 | 批次 5 切片六：脚本源再搬 4 段共 2990 行（`pages/diagnostics.js` 1254 / `settings_persist.js` 161 / `playback_data.js` 296 / `timeline.js` 1279），源文件 14→18 份；两张表 14→18 | ac1fe4f | 未出包（批次还剩脚本两片、按钮验收、文档重构、nvr_slim.py 头注释、版本收尾）；validate 81 项、后端 1022 条、前端全绿（js_split 109→**137** 项）；等价已证：剥标记与文件头后 **8631 行逐行相同**，index.html 53 行纯新增、0 删除；152 只读 0.9.122、两路 recording（age 3/0） |
+| 16 | 11-08 20:44 | 批次 5 切片七（脚本拆分收口）：最后两片切成 4 段共 639 行（`pages/events.js` 334 / `core/boot.js` 160 / `core/wiring.js` 86 / `core/auth_boot.js` 59），源文件 18→22 份；**清单第 1 项打勾**；新增「标记段外无散落代码」断言 | 8b542c1 | 未出包（批次还剩按钮验收表、文档重构、nvr_slim.py 头注释、版本收尾）；validate 81 项、后端 1022 条、前端全绿（js_split 137→**166** 项）；等价已证：剥标记与文件头后 **8631 行逐行相同**，index.html 46 行纯新增、0 删除，脚本区外只剩 `"use strict";`；152 只读 0.9.122、两路 recording（age 1/0） |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -403,7 +404,7 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 
 清单：
 
-- [ ] `app/ui/` 源码拆分：`css/{base,theme,components,pages,player}.css`、
+- [x] `app/ui/` 源码拆分：`css/{base,theme,components,pages,player}.css`、
       `js/{core,components,pages,player}/*.js`，构建时由 `build.sh` 合成单文件 `index.html`
       （部署形态不变，仍是单 HTML）。
       *（第 10 轮做了**样式这一半**：1400 行 `<style>` 拆成五个源文件，`tools/compose_ui.py`
@@ -419,8 +420,12 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 - [ ] `nvr_slim.py` 头部说明重写（当前描述的"后端骨架"与实际 3000+ 行不符）。
 - [ ] 版本 0.9.123。
 
-**验收**：拆分前后 `index.html` 渲染结果逐像素一致（沿用 `test/ui/render_check.js`）；
-一个新人照 README 能在 fnOS 上装起来。
+**验收**：① 第 1 项的拆分等价**不用截图**——本机没有 puppeteer/playwright，
+`e2e_*.js` 要一台真在录的机器，截图只能盖一个视口一套主题；改用三项覆盖所有状态的证明：
+CSS 831 条规则按 `(媒体查询上下文, 选择器)` 归并后声明序列逐条相同、
+脚本 8631 行代码序列逐行相同、16 个前端测试在合成后的页面上重跑全绿；
+`js_split.test.js` 另钉住「标记段之外没有散落代码」，保证以后新功能不会又堆回单文件。
+② 批次验收：一个新人照 README 能在 fnOS 上装起来（留到文档重构与真机验收）。
 
 > **进度（第 10 轮，未收尾）**：样式源已拆完，脚本源与文档两项未动。
 > **"逐像素一致"这条用的不是截图，是层叠等价证明**：本机没有 Chrome 自动化
@@ -543,12 +548,29 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 > 缩放、气泡分组、常驻画面区预加载、pvOnTime 是同一条时钟链，按控件名分家只会
 > 让跳秒问题变成跨文件追查。段尾仍收在非空行（第 13 轮的坑，本轮四段全部核过）。
 >
-> **下一轮（第 16 轮）**：脚本拆分**只剩两片**（按本轮合成后的行号）——
-> 9971–10465（事件页 / 启动 / 齿轮，约 495 行）与 10513–10606
-> （凭证启动顺序与启动尾部，约 94 行）。两段搬完，清单第 1 项即可打勾
-> （CSS 已在第 10 轮拆完，等价证明口径沿用全脚本比对 + 前端测试全绿）。
-> 之后才轮到按钮验收表、文档重构、`nvr_slim.py` 头注释、
-> 0.9.123 五处 bump + 出包 + 部署 152。
+> **进度（第 16 轮，清单第 1 项完成）**：最后两片切成 4 段共 **639 行** ——
+> `pages/events.js`（334：事件列表 / 筛选 / 点事件直接看的定位交接）、
+> `core/boot.js`（160：启动次序 / 快照刷新率 / 与服务端配置对表）、
+> `core/wiring.js`（86：控件到函数的最后一层绑定）、
+> `core/auth_boot.js`（59：凭证引导层与 authBoot）。源文件 18→**22** 份
+> （core 8 / components 3 / pages 10 / player 1）。
+>
+> **脚本区现在只剩 `"use strict";` 在标记段之外，这一行故意不搬**：严格模式指令
+> 只有作为整个 `<script>` 的第一条语句才对整个脚本生效，放进任何一段都会退化成
+> 一句没用的字符串表达式。`js_split.test.js` 新增 H 组断言「标记段之外没有散落代码」，
+> 把"拆分完成"钉成机器保证 —— 以后往 index.html 里补一行功能，闸门立刻红，
+> 而不是等半年后又在 8000 行里翻找。js_split 137→**166** 项。
+>
+> **等价口径沿用第 12 轮的全脚本比对**（`var_jssplit/verify6.py`，快照
+> `index.before16.html`）：剥掉全部 22 组合成标记与文件头后，代码仍 **8631 行逐行相同**；
+> `index.html` 的 git diff 是 **46 行纯新增、0 行删除**。闸门两张表同步 18→22
+> （`js_split.test.js` 的 ORDER、`validate.py` 的 `JS_REQUIRED`），`BUILD.md` 目录说明同步。
+>
+> **下一轮（第 17 轮）**：清单第 2 项「按钮功能验收表落成自动化」——
+> 每个设置项改完要验证后端状态/进程参数真的变了，不只查 UI 上的值。
+> 这一项要连测试机，先摸清 `/api/config` 的写入回读与 ffmpeg 进程参数的可观测口径，
+> 一轮只做能独立提交的一小块。之后才是文档重构（六份）、`nvr_slim.py` 头注释、
+> 0.9.123 五处 bump + 出包 + 部署 152 + 真机验收。
 
 ---
 
