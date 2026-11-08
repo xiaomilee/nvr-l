@@ -25,6 +25,7 @@
 | 3 | 0.9.121 | 事件中心：统一事件模型 + 跨摄像头检索 + 点击定位 | done | 0972f1c |
 | 4 | 0.9.122 | 检测治理：有界并发 + 时间窗确认 + 诊断完整 | done | 55b3773 |
 | 5 | 0.9.123 | 前端拆分 + 文档重构 + 按钮验收自动化 | **done** | ce81b12 |
+| 6 | 0.9.124 | P2 · Webhook 通知补齐：多模板 / 发送历史落盘 / 查询接口 | doing | - |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
 
@@ -124,6 +125,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 22 | 11-08 23:44 | **按用户指令合并两路路线并出进度预览包**（非收尾）：确认两路成果线性叠在 `main`、无需 merge，ROADMAP 新增「路线合并与目标复核」小节（对照 REVIEW_BASELINE 三问 + 清单真实完成度 + 版本策略）；五处版本 bump 到 `0.9.123`，manifest changelog 标注「本版未收尾」 | f818518 | **出包** `dist/nvr-0.9.123_x86.fpk` **101169048 字节** md5 `e0f7206f51ba5761c9869126eb959e03`；闸门 validate 81 项、后端 **1102** 条、52 文件、前端 16 文件、0 FAIL；`deploy_test.py` 部署 152 八项自检全 OK（`test-reports/deploy-0.9.123.json`），0.9.122→0.9.123 上线 0.1s、端口 18085，单独复核两路 `hstate=recording`（age 5/0）、`record.enabled=True`、无 stalled、`detect.state=ready`；批次 5 仍 `doing`，清单 2/3/4 未打勾，生产机 2.6 未碰 |
 | 23 | 11-09 00:38 | 批次 5 切片十三：**清单第 2 项收尾**——接手并发实例 00:01~00:06 写好但未提交的采集器在制品（`test/btn_harvest.py` 全表 20 项改值→三份快照→还原→四层判定→出报告 + `test_btn_harvest.py` 15 条离线守卫 + `BUILD.md` 用法 + `button_matrix.py` 抽出 `roll_up()` 并修正两处证据口径）；复核闸门全绿后跑出**首份端到端报告** | de5e6a3 | 未出包（清单 3/4 未勾、批次未收尾，按规则不 bump / 不部署）；首跑闸门偶发 `test_btn_effect.py` 起服务失败，单独复跑 12 项全绿后整轮复跑全绿：validate 81 项、后端 **1117** 条（1102+15）、53 文件、前端全绿、0 FAIL；报告 `test-reports/btn-matrix-0.9.123-r23.json`：20 项 **pass 9 / partial 11 / fail 0 / unknown 0**、总判定通过、还原全部成功；11 项 partial 逐条写明免验理由（需重启 / 夜间任务无出口 / ffmpeg argv 无 HTTP 出口），**不是 20 项全验过**；152 只读 0.9.123、18085、两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`，生产机 2.6 未碰 |
 | 24 | 11-09 01:30 | **批次 5 收尾**：清单第 3 项文档重构整项（`README.md` / `docs/USER_GUIDE.md` / `docs/ARCHITECTURE.md` / `docs/TROUBLESHOOTING.md` / `CHANGELOG.md` 五份 + `BUILD.md` 只留构建、历史排障搬进 CHANGELOG）+ `test/test_doc_suite.py` 14 项守卫；清单第 4 项 `nvr_slim.py` 头注释重写；changelog 正式化、**不重复 bump**；出同名正式包并部署 152 跑真机验收 | ce81b12 | **出包** `dist/nvr-0.9.123_x86.fpk` **101169995 字节** md5 `0d3567e1678808a3fbc8c6b31497d6bd`（预览包 101169048 / `e0f7206f51ba5761c9869126eb959e03`，正式包取代预览包）；闸门 validate 81 项、后端 **1131** 条（1117+14）、54 文件、前端全绿、0 FAIL；守卫首跑故意改坏模块名与路由各命中一条断言、恢复后 14 项全绿；`deploy_test.py` 部署 152 八项自检全 OK（`test-reports/deploy-0.9.123.json`），0.9.123→0.9.123 上线 0.1s、端口 18085；按 README §3 真机验收：两路 `hstate=recording`（age 1/0）、`record.enabled=True`、无 stalled、`detect.state=ready`，程序目录含本轮新头注释（正式包实证）；`gaps` 有 1 条 61 秒缺口，原因「录像进程未运行…已恢复」，系部署停服重启所致、非产品问题；**批次 5 标 done**，生产机 2.6 未碰 |
+| 25 | 11-09 07:57 | **批次 6 立项 + 切片一**（按用户「继续、加快进度」取 P2 首项）：`notify_tpl.py` 多模板按 host 适配五平台 + 通用回退、`notify_history.py` jsonl 落盘与过滤查询、`GET /api/notify/history` 只读接口、`status.notify.history` 缓存计数、停机补 `Notifier.stop()`；文档/守卫同步 | 1a6652f | 未出包（清单 5/6 未勾、批次 未收尾，按规则不 bump / 不部署）；闸门 validate 81 项、后端 **1199** 条（1131+68）、58 文件、前端全绿、0 FAIL；四份新单测 68 条含真起本地服务的 HTTP 冒烟 10 项（401 / 落盘读取 / 五种过滤 / 坏参数不 500）；首跑抓到并修掉 「坏 UTF-8 行让整份历史作废」；文档守卫故意改坏两处各命中一条、恢复全绿；152 只读 0.9.123、18085、两路 `hstate=recording`（age 3/0）、无 stalled、`detect.state=ready`，生产机 2.6 未碰；**批次 6 保持 doing** |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -903,6 +905,77 @@ CSS 831 条规则按 `(媒体查询上下文, 选择器)` 归并后声明序列�
 > 至此批次 1 ~ 5 **全部 done**。按取活规则，下一轮若没有新批次，
 > 应「什么都不改，只回一句结论」收工；不要发明新任务。
 > 生产机 192.168.2.6 仍未升级，由用户手动操作。
+
+> **第 25 轮立项说明（用户 11-09 07:22「继续，每轮任务多做一些，加快进度」）**：
+> 用户连续第三次要求继续，且上一轮收工时已把候选池逐个列给他
+> （P2 增强 / 「不在本轮范围」挂账 / 批次 4 遗留验收）。这句「继续」是对
+> 「全部 done 就收工」的**显式覆盖**，不是让自动任务自己发明需求：
+> 本批只取候选池里 `REVIEW_BASELINE.md:42` 白纸黑字的 P2 首项
+> 「Webhook（多模板、失败重试、发送历史）」，方向仍由方向锚点管着。
+> 用户一句话即可改方向或叫停，本轮在汇报里明确声明了默认取值。
+
+## 批次 6 · 0.9.124 Webhook 通知补齐（第 25 轮立项）
+
+**为什么立这一批**：评审把「Webhook（多模板、失败重试、发送历史）」列为 P2 首项
+（`REVIEW_BASELINE.md:42`）。真机跑起来后发现三件事只做了一件半：
+`notify.py` 的**失败重试**（3 次指数退避）与 cooldown 已落地，但
+① 消息体是一份「胖 JSON」同时塞飞书 / 钉钉 / 企业微信 / Server酱 四套键，
+   不是多模板——平台各不相同，多余字段有的直接拒收，且没法自定义文案；
+② 发送历史只是进程内 20 条内存环，**重启即丢、无落盘、无时间范围查询**，
+   排障时「昨晚到底发没发出去」没有事实可查；
+③ `Notifier.stop()` 从未进停机序列，重试中的 `time.sleep` 靠 daemon 硬退。
+
+这一批不改变录制链路：`recorder.py` 一行不碰，触发点仍是 `detect.DetectWorker._notify()`
+与 `link.Link._notify_motion()` 两处入队回调，新能力全部走 `app/server/notify_tpl.py`
+与 `app/server/notify_history.py` 两个新模块挂接。
+
+**方向三问（对照 `REVIEW_BASELINE.md` 文末）**：
+1. 落在 **P2 增强首项**；其中「历史可查、失败可见」也服务 P0「最看重录像可靠性 /
+   数字必须有出处」——通知发出去没有，得有能追到的事实，不能靠界面上一行绿字。
+2. 不会让录像事实链更不可信：不碰 `recorder.py` / `ingest.py` / 取帧路径；
+   通知本来就在独立 daemon 线程，落盘只是一次 append，失败也吞掉不抛给派发循环。
+3. 没有 P3：人脸 / 车牌 / 自训模型 / 多用户权限 / 实时滤镜一件未做。
+
+### 清单
+
+- [x] 多模板：`notify_tpl.py`。按 webhook 的 host 自动适配飞书 / 钉钉 / 企业微信 /
+      Server酱 / Bark 五套最小 body + 通用胖 JSON 回退；支持自定义文本模板与
+      `{cam} {cat} {label} {time} {date}` 插值，占位符白名单、长度强校、非法回退默认。
+- [x] 发送历史落盘：`notify_history.py`。jsonl 追加写 + 原子裁剪 + 损坏行跳过（旧格式
+      兼容）+ 按时间 / 摄像头 / 类别 / 成败过滤与 limit；落盘前统一脱敏，**不记 webhook URL**。
+- [x] 只读接口 `GET /api/notify/history`；`status_payload().notify` 带落盘统计
+      （条数 / 最后一条时间，计数缓存在内存，绝不在轮询里扫盘）。
+- [x] 生命周期：`Notifier` 接 `var_dir`，`stop()` 补进 `nvr_slim.py` 停机序列。
+- [ ] 前端：设置页模板选择 + 历史查看入口（本轮不做，留下一轮；动前端会牵动
+      `js_split` 等价守卫与合成器，单独一轮更稳）。
+- [ ] 版本 0.9.124：五处 bump、出包、部署 152、真机验收（批次收尾才做）。
+
+**进度（第 25 轮，清单 1~4 已打勾，批次仍 `doing`）**：
+按第四步「批次收尾才 bump」，本轮**不 bump、不出包、不部署**；
+`VERSION` 仍是 `0.9.123`，只在 152 做只读复核。
+自定义文本模板若做成配置键，会被前端 `pushCfg()` 整块推回默认值打掉
+（第 21 轮 `detect.confirm` 踩过同一个坑），故本轮**零新增配置键**：
+模板按 URL 自动适配，自定义模板走下一轮单独设计的写入口。
+
+落地实况（数字都有出处）：两个新模块 `notify_tpl.py`（143 行）/ `notify_history.py`
+（193 行）；`notify.py` 只加不改地挂了 `var_dir`、模板渲染、`_persist()` 与
+`status()` 的缓存计数，旧的 `_message()` 静态方法保留作兼容入口（16 条老单测全绿）；
+`nvr_slim.py` 三处：构造传 `var_dir`、停机补 `Notifier.stop()`、新增只读分支
+`GET /api/notify/history`。四份新单测 68 条（模板 26 / 历史 22 / 挂接 10 /
+真起服务 HTTP 冒烟 10），闸门 validate 81 项、后端 **1199** 条（1131+68）、
+58 文件、前端全绿、0 FAIL。
+
+**首跑抓到并修掉一个真缺陷**：`notify_history._read_lines()` 原来用严格 UTF-8
+解码，文件里只要有一行坏字节就 `return []` 把整份历史作废——正好违反模块
+自己写的「损坏行跳过」。改成 `errors="replace"` 后坏行被 `json.loads` 单独跳过，
+其余行照常读出来，`test_invalid_utf8_does_not_raise` 钉住。
+文档守卫也故意改坏两处（删掉模块表里的 `notify_tpl.py`、把路由改成
+`/api/notify/history-ghost`）各命中一条断言，恢复后全绿，不是假绿。
+
+**没做的事（不假装打勾）**：前端设置页还没有模板选择与历史查看入口；
+自定义文本模板的写入口还没设计；`/api/notify/history` 未进 deploy 自检
+（部署自检仍是八项，加项要同步 TROUBLESHOOTING / BUILD 的「八项」文案，
+留到收尾轮一起做）。
 
 ---
 
