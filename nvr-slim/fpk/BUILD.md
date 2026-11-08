@@ -226,7 +226,9 @@ fpk/
     ├── test_params.py     参数体系/命令构建/快照接口（20 项）
     ├── test_retention.py  保留周期与清理边界（11 项）
     ├── test_link.py       录制封口判定/包大小判定/幂等键/两种衔接节奏（29 项）
-    └── test_btn_effect.py 按钮验收表：真起本地服务验设置项热生效（11 项）
+    ├── test_btn_effect.py 按钮验收表：真起本地服务验设置项热生效（12 项）
+    ├── test_button_matrix.py 声明式验收矩阵与两表对齐守卫（58 项）
+    └── test_config_doc.py 配置文档守卫：docs/CONFIGURATION.md 与 DEFAULTS 不漂移（10 项）
 ```
 
 ## 打包
@@ -248,6 +250,19 @@ bash build.sh --check    # 只校验不打包
 设置页有两条写入口：`/api/config` 与 `/api/link/policy`。后者同样能改
 `record_enable` / `record_segment_sec`，所以 `test_93` 单独验它会通知
 `Recorder` —— 只测一条入口的话，「换个入口按就改了不生效」会漏过去。
+`test_94` 钉住两条入口对 `record_enable` 的输入强校口径一致（字符串
+`"false"` 曾经从 policy 进来被判成开）。
+
+两张表分工不合并：`test_button_matrix.py` 是声明表（该验什么、`pass` /
+`partial` / `fail` / `unknown` 怎么算过），`test_btn_effect.py` 是执行器
+（真起服务实跑），另有一条对齐守卫钉住两表的 key 与生效证据不漂移。
+
+**改配置键要同步 `docs/CONFIGURATION.md`**：那份文档的主表由
+`test_config_doc.py` 解析，逐项比对 `runtime.DEFAULTS` 的类型、默认值、
+`_ENUM_KEYS` 白名单与三个范围常量，并逐个核实「出处」列指向的文件存在。
+加键、改默认值、改夹取区间却没改文档，2/5 会当场红。文档里的
+「生效方式」说的是**改完谁会重新读**，和「接口上有没有观测出口」是两回事
+—— `condense_mode` 热生效但没有运行态字段，声明表如实判 `partial`。
 
 **0.9.123 起第一步是「前端合成」**，排在结构校验**之前**（validate 会核对
 `index.html` 与 `app/ui/css/`、`app/ui/js/` 是否同步，放后面就变成核对上一轮的产物）：
