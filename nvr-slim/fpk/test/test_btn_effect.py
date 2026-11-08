@@ -18,7 +18,13 @@ config.json 也写进去了，但运行中的对象未必重新读过配置。�
 真起一个本地服务而不是 mock handler：这条链的价值就在「按钮按下去之后
 真的走了一遍 HTTP → 落盘 → reconfigure」，mock 掉任何一环都会把 bug mock 没。
 服务绑 127.0.0.1、端口由系统分配、临时目录跑完即删，不碰测试机与生产机；
-record_enable=False 且本机没有 ffmpeg，不会真的拉流或写录像。
+本机没有 ffmpeg，不会真的拉流或写录像（启动时 record_enable=True 也没关系）。
+
+第二组补的是「换个入口按，也要生效」：设置页还有 /api/link/policy，它同样
+写 record_enable / record_segment_sec 并落盘，但以前只通知了 Link。另外
+/api/link 顶层的 record_enable 是 link_payload() 现读 config.json 得来的，
+跟 Recorder 真在不在录没有必然关系 —— 所以生效证据只认 record.enabled，
+不认那个同名的回读字段（test_90 会把写错的证据路径挡下来）。
 """
 import io
 import json
@@ -57,6 +63,9 @@ CASES = [
     dict(label="待处理上限", key="link_max_queue", value=333,
          effects=[("max_queue",)], expect=333,
          why="背压硬闸门：队列到这个数就暂缓入队，界面改了不生效会静默堆 backlog"),
+    dict(label="录像总开关", key="record_enable", value=False,
+         effects=[("record", "enabled")], expect=False,
+         why="关掉录像后 Recorder 必须真的停；只让配置回读变成 false 等于没关"),
 ]
 
 
@@ -81,7 +90,10 @@ class BtnEffect(unittest.TestCase):
                     os.path.join(ui, "index.html"))
         rec = os.path.join(cls.var, "rec")
         os.makedirs(rec, exist_ok=True)
-        cfg = {"record_dir": rec, "record_enable": False, "cameras": [
+        # 录像总闸要从「开」改到「关」才测得出热生效；以 False 起手的话
+        # POST 同值不会进 changed，用例会变成什么都没按的假绿。
+        # 本机没有 ffmpeg，开着也只会建对象、不会真拉流写盘。
+        cfg = {"record_dir": rec, "record_enable": True, "cameras": [
             {"id": "cam-01", "name": "验收用", "url": "rtsp://u:p@127.0.0.1:1/s1",
              "sub_url": "", "enabled": True, "full_days": 4, "clip_days": 90}]}
         with io.open(os.path.join(cls.var, "config.json"), "w", encoding="utf-8") as f:
@@ -195,6 +207,12 @@ class BtnEffect(unittest.TestCase):
                     self.assertTrue(path)
                     self.assertNotIn("config", path,
                                      "配置回读不是生效证据：%s" % (path,))
+                    # /api/link 顶层的 record_enable 是 link_payload() 现读
+                    # config.json 补的，Recorder 未必跟着变过（policy 入口那个
+                    # bug 就是这样瞒过第一组验收表的）。
+                    self.assertNotEqual(
+                        tuple(path), ("record_enable",),
+                        "顶层 record_enable 是配置回读，不是生效证据")
 
     def test_91_invalid_value_does_not_leak(self):
         """非法枚举值要被收敛，且不能把运行中的对象带歪。"""
@@ -210,6 +228,32 @@ class BtnEffect(unittest.TestCase):
         self.assertIs(json.loads(body).get("ok"), True)
         self.assertEqual(self.get("/api/link").get("max_queue"), 444)
         self.assertEqual(self.disk().get("link_max_queue"), 444)
+
+    def test_93_policy_route_applies_to_recorder(self):
+        """第二条入口改录像总闸 / 分片长度，Recorder 也必须跟着变。
+
+        /api/link/policy 会写这两个键并落盘，以前只通知 Link：接口回 ok、
+        /api/config 回读也对，录制却仍按旧参数跑。分片长度尤其危险 ——
+        Link 按新秒数入队、ffmpeg 按旧秒数封口，回放按秒定位会跳错片段；
+        「关掉录像」也可能根本没关。用当前值的反面起手，不依赖前面的用例顺序。
+        """
+        before = self.get("/api/link")
+        new_on = not bool((before.get("record") or {}).get("enabled"))
+        new_seg = 180 if before.get("segment_sec") != 180 else 240
+        code, body = self.req("/api/link/policy", "POST",
+                              {"record_enable": new_on,
+                               "record_segment_sec": new_seg})
+        self.assertEqual(code, 200, body[:200])
+        self.assertIs(json.loads(body).get("ok"), True)
+        with self.subTest(层="磁盘落盘"):
+            self.assertEqual(self.disk().get("record_enable"), new_on)
+            self.assertEqual(self.disk().get("record_segment_sec"), new_seg)
+        after = self.get("/api/link")
+        with self.subTest(层="运行中 Recorder"):
+            self.assertEqual((after.get("record") or {}).get("enabled"), new_on)
+            self.assertEqual((after.get("record") or {}).get("segment_sec"), new_seg)
+        with self.subTest(层="Link 与 Recorder 同一个秒数"):
+            self.assertEqual(after.get("segment_sec"), new_seg)
 
 
 def _bind(case, idx):

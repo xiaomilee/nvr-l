@@ -2699,7 +2699,11 @@ def link_payload():
 
 
 def set_link(body):
-    """改衔接策略。只动入队节奏与分片长度，不重建队列、不打断正在处理的任务。"""
+    """改衔接策略。只动入队节奏与分片长度，不重建队列、不打断正在处理的任务。
+
+    record_enable / record_segment_sec 是例外：它们同时是录制进程的参数，
+    改了必须让 Recorder 也重新读一次（见下方 reconfigure 的注释）。
+    """
     cfg = runtime.load_config(STATE["var_dir"])
     if "link_mode" in body:
         cfg["link_mode"] = runtime.link_mode(body.get("link_mode"))
@@ -2717,6 +2721,18 @@ def set_link(body):
     runtime.save_config(STATE["var_dir"], cfg)
     if STATE.get("link"):
         STATE["link"].reconfigure(cfg)
+    # 分片长度与录像总闸不只决定入队节奏：Recorder 才是真正按秒封口、
+    # 按开关拉起 ffmpeg 的地方。这条入口以前只通知 Link，接口回 ok、
+    # 配置也落盘了，录制却仍按旧参数跑 —— Link 按新秒数入队、ffmpeg 按旧
+    # 秒数封口会让回放跳错片段，「关掉录像」也可能根本没关。
+    # 只在真动了这两个键时才同步，避免改个入队模式也去碰录制进程；
+    # reconfigure 内部还会自己判「值有没有变」，没变就直接返回。
+    if STATE.get("recorder") and ("record_enable" in body or
+                                  "record_segment_sec" in body):
+        try:
+            STATE["recorder"].reconfigure(cfg)
+        except Exception as e:
+            _record("recorder.reconfigure 失败（policy 入口）：%r" % e)
     return {"ok": True, "link": link_payload()}
 
 

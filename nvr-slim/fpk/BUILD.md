@@ -226,7 +226,7 @@ fpk/
     ├── test_params.py     参数体系/命令构建/快照接口（20 项）
     ├── test_retention.py  保留周期与清理边界（11 项）
     ├── test_link.py       录制封口判定/包大小判定/幂等键/两种衔接节奏（29 项）
-    └── test_btn_effect.py 按钮验收表：真起本地服务验设置项热生效（9 项）
+    └── test_btn_effect.py 按钮验收表：真起本地服务验设置项热生效（11 项）
 ```
 
 ## 打包
@@ -241,7 +241,13 @@ bash build.sh --check    # 只校验不打包
 `/api/link` 里运行中的对象状态」四层证据。它自动进 2/5 的 `test_*.py` 遍历，
 不用单独手动跑；`test_http_smoke.py` 仍因固定端口被排除，单独跑。
 **新增设置项时只往 `CASES` 加一行**：`effects` 必须指向运行中对象的字段路径，
-不能写配置回读 —— 否则这一项就退化成「只查 UI 值」的另一种说法。
+不能写配置回读 —— 否则这一项就退化成「只查 UI 值」的另一种说法。特别地，
+`/api/link` 顶层的 `record_enable` 是 `link_payload()` 现读 `config.json` 补的，
+不是 `Recorder` 的状态；`test_90` 会把这个写错的证据路径挡下来。
+
+设置页有两条写入口：`/api/config` 与 `/api/link/policy`。后者同样能改
+`record_enable` / `record_segment_sec`，所以 `test_93` 单独验它会通知
+`Recorder` —— 只测一条入口的话，「换个入口按就改了不生效」会漏过去。
 
 **0.9.123 起第一步是「前端合成」**，排在结构校验**之前**（validate 会核对
 `index.html` 与 `app/ui/css/`、`app/ui/js/` 是否同步，放后面就变成核对上一轮的产物）：
