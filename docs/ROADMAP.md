@@ -51,7 +51,7 @@
 | 5 | 11-08 08:06 | 批次 2 收尾：前端 18 处裸 fetch 收进 `API.get/post`（超时/401/JSON/CSRF 四处只写一遍），修「测试通知」永远 403；部署工具补同步 `/var/apps/nvr/cmd`（旧 main 把 `/api/health` 的 401 当失败，导致"装成功了却判超时还回滚"）+ `wait_health` 重读 port.txt | c113ff3 | 0.9.120 出包；152 部署七项全绿（含无凭证必须 401），两路 `hstate=recording` |
 | 6 | 11-08 09:40 | 批次 3 切片一：`event.py`（身份/生命周期/定位）+ `event_index.py`（SQLite 投影）+ 三个只读接口（`/api/events`、`/<id>`、`/<id>/clip`）；测试 111 条 | 720a7da | 未出包（批次只剩前端页与版本收尾）；后端 944 + 前端全绿，validate 73 项通过 |
 | 7 | 11-08 11:25 | 批次 3 收尾：前端「事件」页（三段筛选 / 卡片 / 点击定位 / ±30 秒）+ `test/ui/events.test.js` 70 条 + `/api/events` 进部署自检 + 五处版本 0.9.121 + `test/e2e_events.js` 端到端 | 0972f1c | 0.9.121 出包（101142027 字节，md5 f8b82be104966f53a29c118e4ceb933b）；152 部署八项全绿，两路 `hstate=recording`；真机点 11:19:52「人员」事件 814ms 起播、落点 −10.0 秒 |
-| 8 | 11-08 12:55 | 批次 4 切片一：有界并发调度（`Scheduler` + 工作者池 + 过期丢弃）+ 三态记账（hit/miss/unknown/skip）+ 统一 `detect.status_of`（七项契约 + 十个错误码）+ 前端按 state 翻译与未知单独列 | d2138c3 | 未出包（批次还剩时间窗确认与版本收尾）；后端 988 + 前端 915 全绿，validate 73 项通过 |
+| 8 | 11-08 12:55 | 批次 4 切片一：有界并发调度（`Scheduler` + 工作者池 + 过期丢弃）+ 三态记账（hit/miss/unknown/skip）+ 统一 `detect.status_of`（七项契约 + 十个错误码）+ 前端按 state 翻译与未知单独列 | d2138c3 / 5d495fc | 未出包（批次还剩时间窗确认与版本收尾）；后端 989 + 前端 915 全绿，validate 73 项通过，HTTP 冒烟 55 项全通 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -326,9 +326,10 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 - [ ] 测试：`test_detect_sched.py`、`test_event_confirm.py`、`test_detect_status.py`。
       *（第 8 轮已落地两个：`test_detect_sched.py` 20 条（并发上限、不重入、
       ticker 不阻塞、队列满/过期丢弃、8 路一轮明显短于串行、按路数自动定并发）、
-      `test_detect_status.py` 22 条（七项契约、四档 state、引擎错误码、三态记账、
-      跨零点）；另 `test_detect_boot.py` 补 2 条接线断言、`test/ui/detect.test.js`
-      44 条。`test_event_confirm.py` 随时间窗确认一起做。）*
+      `test_detect_status.py` 23 条（七项契约、四档 state、引擎错误码、三态记账、
+      跨零点、无 worker 时的全 0 形状）；另 `test_detect_boot.py` 补 2 条接线断言、
+      `test/ui/detect.test.js` 44 条、`test_http_smoke.py` 补 3 条接口契约断言。
+      `test_event_confirm.py` 随时间窗确认一起做。）*
 - [ ] 版本 0.9.122。
 
 **验收**：8 路配置下，单轮检测总耗时不再随路数线性增长（≤ 1.8 × 单路耗时）；
