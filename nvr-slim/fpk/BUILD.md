@@ -203,7 +203,8 @@ fpk/
 ├── wizard/                install 4 步（端口/录制目录/衔接方式）/ config 3 步；**必须进包**
 ├── app/
 │   ├── ui/                index.html（手机原型，明暗跟随飞牛）+ config（iframe 入口 nvr-l.main）
-│   │   └── css/           样式源：theme/base/components/pages/player，构建时合成进 index.html（不进包）
+│   │   ├── css/           样式源：theme/base/components/pages/player，构建时合成进 index.html（不进包）
+│   │   └── js/            脚本源：core/{auth,format,api,theme}.js，按标记位置合成进脚本区（不进包）
 │   ├── server/
 │   │   ├── nvr_slim.py    HTTP 服务、路由、线程编排
 │   │   ├── runtime.py     配置（带 mtime 缓存）、核显自检、槽位池、工具探测
@@ -215,8 +216,8 @@ fpk/
 │   │   └── retention.py   每日定点清理
 │   └── bin/               放静态 ffmpeg（可选，见 README.md）
 ├── tools/
-│   ├── validate.py        77 项结构/语法校验（打包前必跑）
-│   ├── compose_ui.py      样式合成：css/*.css → index.html 的样式区（幂等，可 --check）
+│   ├── validate.py        81 项结构/语法校验（打包前必跑）
+│   ├── compose_ui.py      前端合成：css/*.css 与 js/**/*.js → index.html（幂等，可 --check）
 │   ├── gen_icons.py       纯标准库生成四件图标
 │   └── pack_fpk.py        无 fnpack 的 fpk 打包器（checksum=md5(app.tgz) 自动回填）
 ├── dist/                  打包产物 nvr-l-0.3.0_x86.fpk
@@ -230,21 +231,30 @@ fpk/
 ## 打包
 
 ```bash
-bash build.sh            # 合成样式 → 结构 → 全部单测 → 打包（无 fnpack 时用 pack_fpk.py）
+bash build.sh            # 合成前端源 → 结构 → 全部单测 → 打包（无 fnpack 时用 pack_fpk.py）
 bash build.sh --check    # 只校验不打包
 ```
 
-**0.9.123 起多了一步「样式合成」**，排在结构校验**之前**（validate 会核对
-`index.html` 与 `app/ui/css/` 是否同步，放后面就变成核对上一轮的产物）：
+**0.9.123 起第一步是「前端合成」**，排在结构校验**之前**（validate 会核对
+`index.html` 与 `app/ui/css/`、`app/ui/js/` 是否同步，放后面就变成核对上一轮的产物）：
 
 ```bash
-python tools/compose_ui.py           # css/*.css → index.html 的样式区（幂等，没变化不写文件）
+python tools/compose_ui.py           # css + js → index.html（幂等，没变化不写文件）
 python tools/compose_ui.py --check    # 只查是否同步，不同步退出码 1
 ```
 
-合成顺序固定为 `theme → base → components → pages → player`（令牌在前、页面覆盖在后），
-**不要按文件名排序**。页面在设备上仍是单个 `index.html`（无 `<link>` 外链，首屏不闪白），
-`app/ui/css/` 只是仓库里的源，不进包 —— 否则会让人以为在设备上改 css 能生效。
+样式合成顺序固定为 `theme → base → components → pages → player`（令牌在前、页面覆盖在后），
+**不要按文件名排序**。
+
+脚本没法这样定顺序：`const`/`let` 不提升，声明出现的次序就是执行次序。所以脚本的
+合成顺序是**标记在 `index.html` 里的位置** —— 代码从哪儿搬走就还回哪儿去，
+`/* @@js:begin core/api.js */` … `/* @@js:end */` 之间由 `app/ui/js/core/api.js` 填。
+要调顺序就得挪标记，这件事必须被看见，`test/ui/js_split.test.js` 把顺序钉成一张表。
+
+页面在设备上仍是单个 `index.html`（无 `<link>` / `<script src>` 外链，首屏不闪白；
+更要紧的是 `test/ui/*.test.js` 全都取「最后一个 `<script>`」当脚本源，
+一旦拆成多个标签，十几个测试会静默跑错段）。`app/ui/css/` 与 `app/ui/js/`
+只是仓库里的源，不进包 —— 否则会让人以为在设备上改它们能生效。
 
 fpk 布局：包根 tar.gz，成员 `manifest`（含 `checksum=md5(app.tgz)`）、
 `app.tgz`（app/ 内容在根）、`cmd/`、`config/`、`ui/`（app/ui 副本）、

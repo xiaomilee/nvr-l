@@ -10,8 +10,8 @@ PY="${NVR_PYTHON:-}"
 NODE="${NVR_NODE:-}"
 [ -n "$NODE" ] || NODE="$(command -v node || true)"
 
-echo "== 0/5 前端合成：app/ui/css/*.css → app/ui/index.html =="
-# 必须排在结构校验之前：validate 会核对 index.html 与 css/ 是否同步，
+echo "== 0/5 前端合成：app/ui/{css,js}/* → app/ui/index.html =="
+# 必须排在结构校验之前：validate 会核对 index.html 与 css/、js/ 是否同步，
 # 合成放后面就等于核对上一轮的产物。合成幂等，内容没变不写文件。
 "$PY" "$ROOT/tools/compose_ui.py" || exit 1
 
@@ -90,6 +90,9 @@ if [ -n "$NODE" ]; then
   # 样式源拆分：五个源文件齐全、顺序固定、产物=按序拼接、部署仍是单文件（0.9.123）
   echo "== 样式源拆分 =="
   "$NODE" "$ROOT/test/ui/css_split.test.js" || exit 1
+  # 脚本源拆分：标记位置即执行顺序、产物=按序拼接、仍是单脚本标签（0.9.123）
+  echo "== 脚本源拆分 =="
+  "$NODE" "$ROOT/test/ui/js_split.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

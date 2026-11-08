@@ -51,10 +51,10 @@ FIXED_MTIME = 1700000000
 UI_ROOT_KEEP = ("config", "images")
 
 # 按归档内完整路径排除的目录（相对于包根，用 "/" 分隔）。
-# ui/css/ 是前端样式源（0.9.123 起拆分出来），页面读的是合成后的 index.html。
-# 把源一起塞进包，会让人以为在设备上改 css 能生效 —— 改了完全没用，因为
-# 浏览器拿到的是 index.html 里的内联样式。源只留在仓库里。
-PKG_SKIP_DIRS = {"ui/css"}
+# ui/css/ 与 ui/js/ 是前端源（0.9.123 起拆分出来），页面读的是合成后的 index.html。
+# 把源一起塞进包，会让人以为在设备上改 css/js 能生效 —— 改了完全没用，因为
+# 浏览器拿到的是 index.html 里内联的那一份。源只留在仓库里。
+PKG_SKIP_DIRS = {"ui/css", "ui/js"}
 
 
 def read_manifest():

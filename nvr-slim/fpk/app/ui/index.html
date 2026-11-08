@@ -1821,6 +1821,14 @@ body.fsmode.rail #fsTools button span{display:none}
 <script>
 "use strict";
 
+/* @@js:begin core/auth.js —— 本段由 build.sh 合成，请改 app/ui/js/core/auth.js；直接改这里会被下一次合成覆盖 */
+/* ================= core/auth.js =================
+   凭证：token 的存取、引导层开合，以及唯一那处全局 fetch 包装。
+   这里的共同点是**页面还没渲染就得工作** —— 首屏每个 /api 请求都经过它，
+   所以它必须排在最前面执行（合成顺序 = 标记在 index.html 里的位置）。
+   反过来，凡是"某一页才用得到"的东西，不进这个文件。
+   ================================================= */
+
 /* ================= API 凭证（0.9.120） =================
    服务监听 0.0.0.0（手机直连才通），"同网段就能调接口"原本是默认状态。现在所有
    /api/* 都要凭证，这里负责三件事：
@@ -1865,6 +1873,7 @@ function authGate(show, msg){
     });
   };
 })();
+/* @@js:end */
 
 /* ================= 数据 =================
    摄像头只留「身份 + 码流」两类字段：不区分品牌、不存账号密码（要认证就直接写进
@@ -2330,6 +2339,13 @@ function scanHint(){
     : "NVR 留 " + d + " 天，每天一次来得及，但断电一天就会丢一批。";
 }
 
+/* @@js:begin core/format.js —— 本段由 build.sh 合成，请改 app/ui/js/core/format.js；直接改这里会被下一次合成覆盖 */
+/* ================= core/format.js =================
+   纯函数：把秒数变成人看的时间与时长。没有 DOM、没有全局状态，
+   所以谁都能用，也能被 node 测试直接喂数字。
+   判断标准：函数体里出现 document / localStorage / fetch 的，不放这里。
+   =================================================== */
+
 /* ================= 工具 ================= */
 const pad = n => String(n).padStart(2,"0");
 function hms(sec){
@@ -2344,6 +2360,7 @@ function durText(sec){
   if(m) return m + " 分 " + s + " 秒";
   return s + " 秒";
 }
+/* @@js:end */
 function toast(el, text){
   const t = document.getElementById(el);
   t.textContent = text;
@@ -4196,6 +4213,15 @@ function pullSnap(camId, img, onDone){
   img.src = "/api/live/snapshot/" + encodeURIComponent(camId) + ".jpg?t=" + token;
 }
 
+/* @@js:begin core/api.js —— 本段由 build.sh 合成，请改 app/ui/js/core/api.js；直接改这里会被下一次合成覆盖 */
+/* ================= core/api.js =================
+   统一请求层：超时、401、JSON、CSRF 四条语义只写一遍，全页只从这里出去。
+   为什么值得单独成文件：这个 bug 的复发形态是"某人顺手又写了一个 fetch"，
+   藏在一万行里根本看不见，摆在独立文件里才会在 diff 里刺眼。
+   依赖 core/auth.js 的 authGate —— 它在本文件之后，靠函数声明提升没关系，
+   但别把这个方向反过来（请求层不该被凭证层依赖）。
+   ================================================== */
+
 /* ================= 统一请求层（0.9.120） =================
    以前 17 处裸 fetch 各自处理超时、错误、CSRF 头和缓存，结果各不相同：
    有的漏了 X-NVR-Request（写接口一律 403，界面只显示"发送失败"），绝大多数
@@ -4287,6 +4313,7 @@ API.req = function(path, opt){
 };
 API.get  = (path, opt)=> API.req(path, Object.assign({ method: "GET" }, opt || {}));
 API.post = (path, body, opt)=> API.req(path, Object.assign({ method: "POST", body: body }, opt || {}));
+/* @@js:end */
 
 /* 把摄像头与通用设置推给后端：快照 worker、录制、衔接吃的都是这份配置。
    内容没变就不发（签名去重），变了静默 POST，失败也不打扰用户。 */
@@ -10263,6 +10290,14 @@ function syncFromServer(){
   }).catch(()=>{});
 }
 let serverCfgStamp = null;
+/* @@js:begin core/theme.js —— 本段由 build.sh 合成，请改 app/ui/js/core/theme.js；直接改这里会被下一次合成覆盖 */
+/* ================= core/theme.js =================
+   明暗主题引擎：跟随系统 / 固定浅色 / 固定深色，桌面壳可用 postMessage 强制。
+   为什么单独成文件：它是**唯一**改 documentElement.dataset.theme 的地方，
+   连同 app/ui/css/theme.css 的 :root 令牌，构成全部主题逻辑 ——
+   排查"颜色不对"只需看这两处，不必再在八千行里搜 dataset.theme。
+   ================================================== */
+
 /* ================= 明暗主题 =================
    auto    : 跟随系统 prefers-color-scheme（飞牛桌面明暗）
    light   : 固定浅色
@@ -10301,6 +10336,7 @@ document.addEventListener("click", e=>{
 (()=>{ const q = new URLSearchParams(location.search).get("theme");
   if(q === "dark" || q === "light") THEME.mode = q;
   applyTheme(); })();
+/* @@js:end */
 
 document.getElementById("lrBack").onclick = ()=> leaveLive();
 

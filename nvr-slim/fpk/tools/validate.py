@@ -245,8 +245,32 @@ check("index.html 有且只有一个样式合成标记",
 if not missing_css:
     _sync = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "compose_ui.py"),
                             "--check"], capture_output=True, text=True)
-    check("index.html 与 css/ 已同步", _sync.returncode == 0,
+    check("index.html 与 css/、js/ 已同步", _sync.returncode == 0,
           (_sync.stderr or _sync.stdout).strip())
+
+# 7.6 前端脚本源（0.9.123 起 index.html 的脚本区按标记合成自 app/ui/js/**/*.js）
+# 脚本没法像样式那样"按文件名定顺序"：const/let 不提升，标记在 index.html 里的
+# 位置就是执行次序。所以这里只查"源文件在、标记成对、没有外链"，顺序由
+# test/ui/js_split.test.js 钉成一张表 —— 那里才是"挪一个标记就红"的地方。
+JS_DIR = os.path.join(ROOT, "app", "ui", "js")
+JS_REQUIRED = ["core/auth.js", "core/format.js", "core/api.js", "core/theme.js"]
+missing_js = [n for n in JS_REQUIRED
+              if not os.path.isfile(os.path.join(JS_DIR, n.replace("/", os.sep)))]
+check("脚本源文件齐全（core/auth·format·api·theme）", not missing_js, "缺: %s" % missing_js)
+_js_begin = len(re.findall(r"/\* @@js:begin[ ]", ui_html))
+check("index.html 的 js 合成标记成对",
+      _js_begin >= 1 and _js_begin == ui_html.count("/* @@js:end */"),
+      "begin=%d end=%d" % (_js_begin, ui_html.count("/* @@js:end */")))
+# 外链是最容易"看着更好"的改法：多一个文件、多一次 404、首屏多白一下，而
+# test/ui/*.test.js 全都取"最后一个 <script>"当脚本源，一旦多出标签就静默跑错段。
+check("页面脚本没有外链（无 <script src>）",
+      "<script src" not in ui_html.lower(), "出现了 <script src>")
+# 同一个理由的另一半：所有合成标记必须都落在最后一个 <script> 里
+_js_last = ui_html.rfind("<script")
+_js_close = ui_html.find("</script>", _js_last)
+outside = [m.start() for m in re.finditer(r"/\* @@js:begin[ ]", ui_html)
+           if not (_js_last < m.start() < _js_close)]
+check("全部 js 标记都在最后一个 <script> 里", not outside, "越界 %d 处" % len(outside))
 
 # 8. app/bin 说明与 ffmpeg 占位
 check("app/bin 有 ffmpeg 说明",
