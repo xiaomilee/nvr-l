@@ -2361,6 +2361,15 @@ function durText(sec){
   return s + " 秒";
 }
 /* @@js:end */
+/* @@js:begin components/shell.js —— 本段由 build.sh 合成，请改 app/ui/js/components/shell.js；直接改这里会被下一次合成覆盖 */
+/* ================= components/shell.js =================
+   应用外壳：一条 toast、桌面/手机两种版式的布局，以及窗口尺寸变化监听器。
+   放这里的判断标准：**不属于任何一页，但每页都看得见** —— 它管的是 #phone
+   这个壳子和全局提示，不关心页面里正在显示什么。
+   layout() 会调 isFullscreen()/syncRail()（声明在 components/fullscreen.js），
+   靠的是函数声明提升，不是依赖倒置；别把这个方向反过来理解。
+   ======================================================== */
+
 function toast(el, text){
   const t = document.getElementById(el);
   t.textContent = text;
@@ -2393,6 +2402,15 @@ function layout(){
   const s = Math.min(1, (window.innerHeight - 40) / (844 + 24), (window.innerWidth - 40) / (390 + 24));
   phone.style.transform = "scale(" + s.toFixed(3) + ")";
 }
+/* @@js:end */
+/* @@js:begin components/fullscreen.js —— 本段由 build.sh 合成，请改 app/ui/js/components/fullscreen.js；直接改这里会被下一次合成覆盖 */
+/* ================= components/fullscreen.js =================
+   全屏与横屏：Fullscreen API → orientation.lock → CSS 旋转 三级降级，
+   外加 Esc 兜底、resize 自纠、以及页面上那几个全屏/播放按钮的接线。
+   判断标准：凡是"退出路径"相关的都放这里 —— 这条链路历史上最凶的 bug 是
+   "进得去出不来"，把降级、监听、按钮拆散到三处就再也看不出还缺哪一级。
+   ============================================================== */
+
 let fsRotTimer = 0;
 window.addEventListener("resize", ()=>{
   layout(); if(state.view==="player") drawScene();
@@ -2679,6 +2697,16 @@ const _lrFull = document.getElementById("lrFull");
 if(_lrFull) _lrFull.onclick = ()=> toggleFull();
 const _lrPlay = document.getElementById("lrPlay");
 if(_lrPlay) _lrPlay.onclick = e=>{ e.stopPropagation(); toggleLiveStream(); };
+/* @@js:end */
+
+/* @@js:begin components/nav.js —— 本段由 build.sh 合成，请改 app/ui/js/components/nav.js；直接改这里会被下一次合成覆盖 */
+/* ================= components/nav.js =================
+   tab 切换与安卓返回栈：自己压的层自己弹，只有回到根才把返回交给系统。
+   判断标准：管的是"当前在哪一页、怎么回去"，不管那一页里画什么 ——
+   各页的渲染函数（renderDates/renderTl/...）属于 pages/，留到下一轮。
+   为什么单独成文件：history.length 曾被当成层数、左滑直接退出应用，
+   这类"看起来对"的推断必须和它影响的 UI 摆在一起才看得见。
+   ====================================================== */
 
 /* ================= tab / 历史返回 =================
    安卓左滑返回手势的本质是 `history.back()`。以前只有"非直播页 → 回直播页"
@@ -3020,6 +3048,7 @@ window.addEventListener("popstate", (e)=>{
   }
   /* 5) 已经在根：什么都不做，让系统处理（退出应用） */
 });
+/* @@js:end */
 
 /* ================= 日期条 ================= */
 function renderDates(){

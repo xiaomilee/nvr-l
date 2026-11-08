@@ -26,7 +26,9 @@ const JS_DIR = path.join(UI, "js");
 
 /* 顺序即执行顺序。改这张表 = 改页面的执行次序，必须是"想清楚了才改"的动作，
    而不是顺手排个序。 */
-const ORDER = ["core/auth.js", "core/format.js", "core/api.js", "core/theme.js"];
+const ORDER = ["core/auth.js", "core/format.js",
+               "components/shell.js", "components/fullscreen.js", "components/nav.js",
+               "core/api.js", "core/theme.js"];
 
 let pass = 0, fail = 0;
 function ck(name, cond, detail){
@@ -50,7 +52,7 @@ function walk(dir, rel){
   return out;
 }
 const got = walk(JS_DIR, "").sort();
-ck("js/ 下正好四个源文件", got.length === ORDER.length && ORDER.every(n => got.includes(n)),
+ck("js/ 下正好 " + ORDER.length + " 个源文件", got.length === ORDER.length && ORDER.every(n => got.includes(n)),
    JSON.stringify(got));
 ck("没有未纳入合成的源文件（多一个就是改了不生效）",
    got.filter(n => !ORDER.includes(n)).length === 0, JSON.stringify(got));
@@ -85,7 +87,7 @@ lines.forEach((ln, i) => {
   if(m) begins.push({ i: i, name: m[1] });
   if(ln.trim() === "/* @@js:end */") ends.push(i);
 });
-ck("标记数量与源文件一致（begin 4 / end 4）",
+ck("标记数量与源文件一致（begin/end 各 " + ORDER.length + " 处）",
    begins.length === ORDER.length && ends.length === ORDER.length,
    "begin=" + begins.length + " end=" + ends.length);
 ck("每个源文件恰好一处 begin 标记",
