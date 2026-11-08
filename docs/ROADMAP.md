@@ -55,6 +55,7 @@
 | 9 | 11-08 14:50 | 批次 4 收尾：时间窗确认（`confirm.py`：N 帧 M 命中 / 分类确认阈值 / 最短持续 / 结束等待 / 相邻合并）+ 通知与台账跟着确认走 + 跨桶窗口裁到桶首 + 五处版本 0.9.122 | 55b3773 | 0.9.122 出包（101160332 字节，md5 5ea95cd090fae412793b91f61543671a）；152 部署八项全绿，两路 `hstate=recording`；「一路取帧失败 → unknown + FRAME_FAIL 且 today 不涨」实测通过；8 路 1.8× 目标按 3 核实测**未达成**（见批次 4 验收记录） |
 | 10 | 11-08 15:56 | 批次 5 切片一：样式源拆分（`app/ui/css/{theme,base,components,pages,player}.css`）+ `tools/compose_ui.py` 合成器 + 构建闸门（validate 四项、`css_split.test.js` 28 条）+ 打包器把 `ui/css/` 排除出包 | 275b2a8 | 未出包（批次还剩 JS 拆分 / 按钮验收 / 文档重构 / 版本收尾）；validate 77 项、后端 1022 条、前端含新 28 条全绿；样式层叠等价已证（831 条规则逐条同） |
 | 11 | 11-08 17:29 | 批次 5 切片二：脚本源开始拆，只搬 **core** （`core/{auth,format,api,theme}.js` 四段 187 行）+ `compose_ui.py` 扩成多段合成（标记位置即执行顺序）+ 闸门（validate 77→81、`js_split.test.js` 39 条、打包排除 `ui/js`） | b20c514 | 未出包（批次还剩 components/pages/player 三段与文档收尾）；后端 1022 条、前端全绿、validate 81 项；等价已证：未搬的 8442 行逐行相同、四段去掉文件头后逐行相同 |
+| 12 | 11-08 19:43 | 批次 5 切片三：脚本源 `components` 三段（shell / fullscreen / nav，共 658 行）搬进 `js/components/`，`js_split.test.js` 39→60 条、validate 的源文件清单 4→7 | c597afd | 未出包（批次还剩 pages/player 两段、按钮验收、文档、版本收尾）；后端 1022 条、前端全绿、validate 81 项；等价已证：剥掉标记与文件头后脚本 **8631 行逐行相同**，index.html 又是 29 行纯新增 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -466,8 +467,28 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 > `pack_fpk.py` 也把 `ui/js/` 排除出 `app.tgz`（同 `ui/css/`：设备上有一份能改却不生效的源，
 > 比没有更坏）。
 >
-> **下一轮**：搬 `components` 段（`toast` / `layout` / 全屏与旋转工具 / 页面导航），
-> 判断标准沿用"谁都能用的纯函数进 core、跨页控件进 components、只在某一页出现的进 pages"。
+> **下一轮（第 12 轮已执行，见下）**：搬 `components` 段，判断标准沿用"谁都能用的纯函数进 core、
+> 跨页控件进 components、只在某一页出现的进 pages"。
+>
+> **进度（第 12 轮，仍未收尾）**：`components` 三段落地 ——
+> `components/shell.js`（toast / layout / resize，32 行）、
+> `components/fullscreen.js`（三级降级全屏 + 横屏 + Esc + 按钮接线，286 行）、
+> `components/nav.js`（tab 切换与安卓返回栈，340 行），共 **658 行**。
+> 三段在源码里本来就不挨着（中间夹着页面渲染函数），多段标记正好派上用场：
+> 一段一个 `@@js:begin`，顺序仍由位置决定，不用为了"能拆"先去搬动代码。
+>
+> **等价口径这轮升级了**：不再逐段比对，而是把 `index.html` 里所有合成标记与文件头注释
+> 剥掉，剩下的**代码序列**与拆分前逐行比对 —— 8631 行完全相同。
+> 这比逐段更严：它同时覆盖此前已拆的四段与这轮新拆的三段，且不受"以后又加了几段"影响。
+> 验证脚本 `var_jssplit/verify2.py`、拆分前快照 `var_jssplit/index.before12.html`（都不入库）。
+> `index.html` 的 git diff 仍是 **29 行纯新增、0 行删除**。
+>
+> 闸门同步：`js_split.test.js` 的 ORDER 表 4→7（39→**60** 条），
+> `validate.py` 的 `JS_REQUIRED` 4→7。这两张表是"挪一个标记就红"的地方，必须和标记一起改。
+>
+> **下一轮（第 13 轮）**：`pages` 段。剩下的大头是回放页与时间轴
+> （`renderDates` / `renderHeat` / `renderTl` / `renderClips` / 缩略图 / 各页设置渲染），
+> 判断标准是"只在某一页出现的渲染函数"。一轮搬 2~3 段，别一次吞 4000 行。
 
 ---
 
