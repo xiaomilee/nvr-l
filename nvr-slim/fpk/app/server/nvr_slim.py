@@ -1,14 +1,34 @@
 #!/usr/bin/env python3
-"""NVR-L 后端主程序：HTTP 服务、调度、状态汇总。
+"""NVR-L 后端主程序：HTTP 服务、线程编排、状态汇总（约 4000 行）。
 
 这个文件是 Web 层的唯一入口，只做三件事：
-  1. 起 HTTP（localhost 之外的手机直连也要用，所以监听 0.0.0.0）；
-  2. 把各模块（取流 / 取帧 / 录制 / 检测 / 台账 / 归档 / 通知 / 存储）串成一条时间线；
-  3. 把它们的真实状态汇总成 /api/status、/api/health 之类的只读视图。
+  1. 起 HTTP（手机直连 NAS 的 IP 也要用，所以监听 0.0.0.0），按路径分发到
+     各模块，并在边界处做鉴权 / CSRF / 输入强校；
+  2. 把取流 / 录制 / 取帧 / 检测 / 台账 / 事件 / 归档 / 通知 / 清理这些模块
+     串成一条时间线（启动时建对象，运行期由各自的线程推进）；
+  3. 把它们的**真实状态**汇总成 /api/status、/api/link、/api/health 等只读视图。
 
-真正的业务逻辑都在各自模块里：录制在 recorder.py，AI 在 detect.py，
-台账在 ledger.py，归档在 archive.py，录像缺口在 health.py。
-这里不要藏算法——放进来就会变成 3000 行里最难找的那一段。
+业务算法一律不放在这里：录制在 recorder.py、检测在 detect.py、
+台账在 ledger.py、缺口在 health.py、事件定位在 event.py / event_index.py。
+理由很直接——这里一藏算法，就会变成 4000 行里最难找的那一段；
+而批次 5 连抓三次的「改了不生效」都出在「谁该重新读配置」这条链上，
+链越短越容易查。完整模块表、路由表与数据流见 docs/ARCHITECTURE.md。
+
+几个容易踩的口径，改之前先认一遍：
+  * 写配置有**两条入口**：/api/config 与 /api/link/policy。后者同样能改
+    record_enable / record_segment_sec，任何热生效都要同时通知
+    Recorder 与 Link —— 只改一条入口就会「换个入口按就不生效」。
+  * 状态不是「进程在不在」。上游字节（ingest.idle_sec）、分片增长
+    （Recorder 的 last_age_sec）、当天覆盖（台账 avail_spans）三层
+    由 health.state_of() 统一判七态，见 health.py 顶部注释。
+    断流时进程仍活着，只看 poll() 会一直误报「录像中」。
+  * detect 的 unknown 不等于「没人来过」；检测是有界并发的二等公民，
+    绝不能阻塞取帧与录像（评审红线：录像是事实数据，检测只是解释）。
+  * 除首页 / 静态 / 两个 auth 接口外，所有 /api/* 都要凭证；
+    GET 配置一律脱敏，写操作还要 X-NVR-Request 头。
+
+改这个文件前先读 docs/ARCHITECTURE.md 与 docs/ROADMAP.md 的总原则：
+录制链路（RTSP 断流退避 / MP4 封口 / 进程收尾）只加不改，新能力以新模块挂接。
 """
 import argparse
 import json

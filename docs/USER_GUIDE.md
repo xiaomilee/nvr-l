@@ -1,0 +1,178 @@
+# 使用说明（0.9.123）
+
+这份文档回答「界面上这个数字是什么意思、我按下去会发生什么」。
+它不重复 [`CONFIGURATION.md`](CONFIGURATION.md) 的配置键表，也不重复
+[`ARCHITECTURE.md`](ARCHITECTURE.md) 的路由表；这里只讲**用户侧的操作与读法**。
+
+贯穿全文的一条口径（评审原话）：**监控系统不能展示看起来正确、实际没验证过的数据**。
+界面上每个状态都有真实数据源，下面逐处标了出处；看到「看起来对」的数字时，
+先按 [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) 追它的出处，别直接当结论。
+
+## 1. 五个页面
+
+底部导航是 5 个 tab（`app/ui/index.html` 的 `#tabbar`，约 1780 行；
+切换逻辑在 `app/ui/js/components/nav.js:51` 的 `activatePage()`）。
+**没有独立的「诊断」页**：诊断是设置页里的一个分区，深链 `?page=cam&diag=1`
+可以直接展开它（`app/ui/js/core/wiring.js:34`）。
+
+### 直播 `live`
+
+各路实时画面与快照墙。`app/ui/js/pages/live.js`、`live_snap.js`。
+取图走 `img.src` 拿 JPEG（`GET /api/live/snapshot/<cam>.jpg`），
+实时流走 MJPEG（`GET /api/live/stream/<cam>?fps=&w=`，`fps` 1~15 默认 8，
+`w` 0~1920 默认 960，最多 8 路并发）。
+
+快照失败要能看见「最后成功时间与错误原因」，不是给一张旧图或空白。
+
+### 回放 `play`
+
+按**时间**找录像。垂直时间轴（`app/ui/js/pages/timeline.js`）两轨：
+全时原画与归档浓缩片段。点时间轴块即定位播放，支持前后 30 秒跳转。
+从事件页点进来的落点优先：清单还没拉回来时先记住目标秒数，
+等清单到了再落；过期（>15 秒）或日期回退就作废，不会下次进回放页被一条
+很久以前的事件带走。
+
+### 事件 `events`
+
+按**事情**找录像，与回放的「按时间」是两条入口。日期（近 7 天）/ 摄像头 /
+类别（人员、车辆、两轮车）三段筛选**全部交给服务端**（`GET /api/events?...`），
+不是前端拉全量再过滤——后者会把「前 200 条里的全部」当成全部。
+
+点一条事件即向 `/api/events/<id>/clip` 问定位，拿到 `{分片, 偏移, url}` 后
+跳到回放页从「事件前 10 秒」起播。播放地址与偏移都来自服务端，
+前端只从分片名里读回「这一片从几点开始」，不再自己拼文件名。
+**播不了不跳页、不给黑框**：未封口 / 分片不在 / 空文件 / 结构不完整 /
+那时没录，五种原因各有 code 与中文文案，直接写在卡片上。
+
+### 文件 `list`
+
+按日期看盘上**真实有的**录像文件。维度是「全时 N / 归档 N」两个 chip，
+条数来自 `/api/recordings` 实扫目录（3 秒短缓存，`force=1` 绕过）。
+日期格按这天磁盘上有什么源分色：只有全时=灰、只剩归档=淡紫、
+两者都在（归档交接期约一天）=蓝→紫渐变。默认落点是「最近一个真有录像的日子」，
+不是列表末位——凌晨打开时今天还没落盘，取末位会整片空白。
+
+### 设置 `cam`
+
+五张通用设置卡（`app/ui/js/pages/settings_editor.js:658` 的拼装顺序，
+标题见 `app/ui/js/pages/settings_cards.js`）：
+
+| 卡片 | 出处 | 管什么 |
+|---|---|---|
+| 录制 | `settings_cards.js:136` | 所有摄像头共用的录制总闸、分片长度、保存目录 |
+| 事件侦测与归档 | `:175` | 台账总闸、归档回溯、处理队列；每路可单独覆盖 |
+| 回放设置 | `:270` | 活动连播与呈现，全局 |
+| 检测 | `:377` | 移动侦测 + AI 识别，类别矩阵；每路可单独覆盖 |
+| 外观 | `:472` | 明暗跟随飞牛系统 |
+
+另外还有几个不是 `<h3>` 卡片的区块：运行日志（`renderLog()` `:604`）、
+历史日志（`toggleLogSource()` `:701`）、诊断导出（`exportDiag()` `:771`）、
+磁盘扫描（`runScan()` `:790`）、摄像头列表（`renderCamList()` `:817`）、
+每路只读摘要（`renderCamRead()` `:869`）。
+
+> 一处**别照抄旧注释**的口径：后端 `nvr_slim.py:2674` 的注释管第二张卡叫
+> 「录制与压制衔接」，前端实际标题是「事件侦测与归档」；那个旧中文串只出现在
+> 安装向导 `wizard/config:28` 里。
+
+## 2. 诊断与日志分区（设置页内）
+
+入口 `app/ui/js/pages/diagnostics.js:71` 的 `renderDiagZone()`，
+折叠态只显示 `diagSummary()`（`:38`）一行摘要。展开后按 `:80-81` 拼 9 张卡：
+
+| 卡片 | 出处 | 数据源 |
+|---|---|---|
+| 存储与占用 | `:149` | `/api/storage/usage`（30 分钟缓存） |
+| 每路录制状态 | `:249` | **`/api/link` 的 `record.channels`**（`:204` 注释写明） |
+| 录像缺口 | `:335` | `/api/health/gaps?date=`，`:288` 拼 URL |
+| 统一取流 | `:346` / `:394` | `/api/status` 的 `ingest` |
+| 环境自检 | `:405` | 版本 / ffmpeg / ffprobe / 像素判读 |
+| 录像残片 | `:419` | `/api/record/parts` |
+| AI 检测 | `:485` | `/api/status` 的 `detect`，含「调度」行 |
+| 运行日志 | `:596` | `/api/log`，按 `[WARN]` / `[ERR]` 分级着色 |
+| 维护 | `:619` | 清日志 / 重启 / 清理 / 归档等有副作用的操作 |
+
+**录像缺口卡**：没有超过 1 分钟的洞时只有一句「今天各路都没有超过 1 分钟的缺口」
+（`:315`）。1 分钟以下的小缝不报——mtime 秒级抖动与 GOP 边界本来就有一两秒，
+报出来只会把真断流淹在噪声里（`health.py:20` 的 `GAP_MIN_SEC = 60.0`）。
+有洞时按 `health.gap_reason()` 的 5 条原因逐段列出起止与时长，并给合计缺口与覆盖率。
+
+**调度行**（AI 检测卡内，`:525-536`）：并发几路 / 队列 `queued/queue_max` /
+丢弃分类（队列满 `dropped_full` / 过期 `dropped_stale`）/ 一轮 `round_avg_ms` 与路数。
+每路另有「未知 N」「同帧跳过 N」（`:550-557`）与「最近错误 `[code]`」（`:560-563`）。
+
+**诊断导出**按钮（`settings_cards.js:771`）下载一份纯文本诊断包
+（`GET /api/log/export`）：状态摘要、通道清单（URL 已脱敏）、最近业务日志、
+HTTP 访问汇总、录制失败时的命令行与 stderr，全文再过一次 `redact.mask_text()`。
+排障时优先把这份贴出来，比截图有用。
+
+## 3. 状态怎么读
+
+### 每路录制：7 种 `hstate`
+
+定义在 `app/server/health.py:30` 的 `STATE_LABEL`：
+`off 未启用 / stopped 已停止 / connecting 连接中 / recording 录像中 /
+stalled 卡住 / recovering 恢复中 / error 异常`。
+
+`hstate` 不是录制进程自己给的，是 `link_payload()` 在出口补的
+（`nvr_slim.py:2686-2695`）——`recorder.status()` 只知道「进程在不在」，
+判不出「进程在但没输出」，而那恰好是真机断流的样子。
+判定函数 `health.state_of()`（`health.py:100`）按三层顺序走：
+进程没跑 → 看 `retry`/`stall` 分 `connecting / recovering / error / stopped`；
+进程在跑 → 分片 `last_age_sec` 超过 `STALL_SEC=60` 判 `stalled`；
+再上游 `idle_sec` 超过阈值判 `stalled`；都正常才 `recording`。
+
+**「卡住」与「异常」分开报**：两者都该告警，但拿「重启一下」去处理一个
+还活着的进程只会白折腾。
+
+### AI 检测：四档 state + 十个错误码
+
+`/api/status` 的 `detect` 块由 `detect.status_of()` 一处判定，前端只负责翻译。
+四档 state（`settings_cards.js:304` 的 `detStateZh`）：
+`disabled 已关闭 / starting 加载中… / unavailable 不可用·原因 / ready 正常`。
+
+十个失败码定义在 `app/server/detect.py:127-136`：
+`FFMPEG_NOT_FOUND / MODEL_MISSING / RUNTIME_FAIL / MODEL_LOAD_FAIL /
+FRAME_FAIL / INFER_ERR / WORKER_DOWN / QUEUE_FULL / STALE_FRAME / STATUS_ERR`。
+前端 `detHintOf()`（`:320`）按码给「下一步做什么」，显式覆盖 7 个
+（`INFER_ERR` 与 `FRAME_FAIL` 合并一条），其余落到「服务可能是旧版本」兜底句。
+
+三态是 `hit / miss / unknown`（`detect.py:123`），另有一档 `skip`：
+取帧层「本轮没有新画面」是正常节拍错位，混进 `unknown` 会每两拍刷一次红。
+只有 `hit / miss` 进「今日帧数」，`unknown` 按错误码分桶单独列。
+
+**`unknown` 不等于「没人来过」**：取帧失败、模型没加载、推理异常、
+排队过期都记未知，既不凑命中也不算「无活动」。
+
+### 存储：两维，不是叠加
+
+界面收敛成「全时 + 归档浓缩」两源。总回溯天数不是「7 天缩时 + 3 天全时 = 10 天」：
+最前面 N 天全时原画，之后的日子以归档浓缩片段保留，两者不重复占空间。
+每路可单独设全时保留天数；具体默认值与生效方式见 `CONFIGURATION.md`。
+
+## 4. 操作口径（按下去之前值得知道）
+
+- **改配置会真改运行中的服务**：`/api/config` 与 `/api/link/policy` 是两条写入口，
+  改 `record_enable` / 分片长度会通知 `Recorder` 并可能 kill/重拉录制进程。
+  自动采集器（`test/btn_harvest.py`）因此**跑完必须还原**并整份比对磁盘配置，
+  否则会把测试机留在关录状态，比没跑过更糟。
+- **清理是两段式**：`/api/retention/cleanup` 默认 `dry_run=true` 只预览，
+  真正删除要按 `paths` + 指纹二次确认。归档是全时唯一的源，
+  该日没裁完 `.done` 一律保留并在预览的 `protected` 里注明。
+- **归档连跑**：夜间任务一轮吃完还剩下就接着来，三条判停先到先停
+  （待办归零 / 本轮零进展 / 6 轮或 4 小时上限）。手动「立即归档」只跑一轮，
+  真跑返回 202 由后台线程执行，前端每 1.5 秒轮询 `/api/archive/progress`。
+- **编辑摄像头密码留空 = 保留原值**；GET 配置一律脱敏，
+  RTSP 地址不再落 localStorage（0.9.120）。
+- **写操作要带凭证和 `X-NVR-Request: 1`**，否则 401 / 403；
+  token 不放 URL 查询参数，也不进 localStorage 之外的持久介质。
+
+## 5. 三个最容易误读的口径
+
+| 容易读成 | 实际 |
+|---|---|
+| 「进程还活着 = 在录」 | 断流时进程仍在，只是分片不增长；按上面三层判 `hstate` |
+| 「验收表里 `partial` = 改了不生效」 | `partial` 是**该项没有运行态观测出口**，只能验到落盘；「生效方式」与「接口有没有观测出口」是两件事，见 `CONFIGURATION.md` §2 |
+| 「检测没报 = 没人来过」 | 失败记 `unknown`，按错误码分桶；`unknown ≠ 无活动` |
+
+改了设置却「看起来没变」，先按 [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
+的「改了不生效」一节追消费端，别急着重启。
