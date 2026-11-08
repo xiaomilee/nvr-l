@@ -9968,6 +9968,17 @@ function pvResume(){
 });
 /* @@js:end */
 
+/* @@js:begin pages/events.js —— 本段由 build.sh 合成，请改 app/ui/js/pages/events.js；直接改这里会被下一次合成覆盖 */
+/* ================= pages/events.js =================
+   事件页：最近 7 天的事件列表、三段筛选、事件卡片，以及「点事件直接看」的
+   定位交接（哪一路 / 哪一天 / 从哪一秒）。只读 /api/events 与 clip 接口。
+   判断标准：围绕一条事件的取数、渲染、筛选与跳转放这里；真正把画面播出来
+   是 player/player.js 与 pages/timeline.js 的事，播放逻辑只该有一处实现。
+   为什么单独成文件：评审点名的差异化之一就是「从翻录像变成点事件直接看」。
+   段首那三条边界（不自己拼播放地址 / missing_reason 由服务端翻译 /
+   筛选交给服务端）是这一页的契约，改动时不该悄悄把服务端口径搬回前端。
+   ===================================================== */
+
 /* ================= 事件页（0.9.121） =================
    评审点名的两件差异化之一：从「翻录像」变成「点事件直接看」。
    这一页只读三段接口（/api/events、/<id>、/<id>/clip），不碰录制链路；
@@ -10302,6 +10313,18 @@ function evGo(delta){
   const rf = document.getElementById("btnEvRefresh");
   if(rf) rf.onclick = ()=>{ loadEvents(true); };
 })();
+/* @@js:end */
+
+/* @@js:begin core/boot.js —— 本段由 build.sh 合成，请改 app/ui/js/core/boot.js；直接改这里会被下一次合成覆盖 */
+/* ================= core/boot.js =================
+   页面加载后的启动与对表：读回本地配置 → 渲染各页 → 扫盘 → 接扫描按钮；
+   齿轮里的快照刷新频率（1~10 秒）；与服务端配置的定时同步 syncFromServer。
+   判断标准：决定「什么时候把哪些页叫起来」「多久跟服务端对一次表」的放这里；
+   某一页怎么画在 pages/，请求怎么发在 core/api.js，按钮怎么接在 core/wiring.js。
+   为什么单独成文件：启动次序与配置对表是全局的，不属于任何一页；塞进某个
+   页面文件，改保留期或刷新率就得跨四五个文件找入口。pushPending 与
+   serverCfgStamp 是一对（用户刚改完的配置别被服务端旧值盖回去），别拆散。
+   ================================================= */
 
 /* ================= 启动 ================= */
 function loadDay(){
@@ -10463,6 +10486,7 @@ function syncFromServer(){
   }).catch(()=>{});
 }
 let serverCfgStamp = null;
+/* @@js:end */
 /* @@js:begin core/theme.js —— 本段由 build.sh 合成，请改 app/ui/js/core/theme.js；直接改这里会被下一次合成覆盖 */
 /* ================= core/theme.js =================
    明暗主题引擎：跟随系统 / 固定浅色 / 固定深色，桌面壳可用 postMessage 强制。
@@ -10510,6 +10534,16 @@ document.addEventListener("click", e=>{
   if(q === "dark" || q === "light") THEME.mode = q;
   applyTheme(); })();
 /* @@js:end */
+
+/* @@js:begin core/wiring.js —— 本段由 build.sh 合成，请改 app/ui/js/core/wiring.js；直接改这里会被下一次合成覆盖 */
+/* ================= core/wiring.js =================
+   把控件接到已有函数上的最后一层：返回键、回放页摄像头下拉、?page= 直达、
+   首页列数与连续播放、全屏退出的两个出口、单格「无画面 · 重试」重连。
+   判断标准：这里只有 DOM 事件绑定与一两行转发，不定义渲染、不定义请求；
+   一旦要算数据或画卡片，就该写在对应的 pages/ 或 components/ 文件里。
+   为什么单独成文件：它排在主题引擎之后、凭证启动之前，是页面「能点」之前
+   的最后一道接线。混进各页之后，「按钮没反应」会变成满文件找 addEventListener。
+   ==================================================== */
 
 document.getElementById("lrBack").onclick = ()=> leaveLive();
 
@@ -10597,6 +10631,17 @@ if(_liveWrap) _liveWrap.addEventListener("click", e=>{
   mountLiveStream(card, c, true);
   toast("toast2", "正在重连 " + c.name);
 });
+/* @@js:end */
+
+/* @@js:begin core/auth_boot.js —— 本段由 build.sh 合成，请改 app/ui/js/core/auth_boot.js；直接改这里会被下一次合成覆盖 */
+/* ================= core/auth_boot.js =================
+   凭证引导层：粘贴 token、校验、写入，以及页面启动时先问 /api/auth/status
+   再决定要不要弹引导（authBoot）。
+   判断标准：只回答「现在有没有凭证、没有时怎么让用户补上」；凭证怎么存、
+   请求头怎么带是 core/auth.js 的事，不进这一份。
+   为什么必须排在最后：先确认凭证、页面再去拉数据 —— 没有凭证时每个 /api
+   都是 401，越早盖住引导层，首屏越不会先闪一片「加载失败」再弹框。
+   ======================================================== */
 
 /* ================= 凭证启动顺序（0.9.120） =================
    先确认凭证，页面再去拉数据：没有凭证时每个 /api 都是 401，越早盖住引导层，
@@ -10657,6 +10702,7 @@ function authBoot(){
     .catch(()=>{});
 }
 authBoot();
+/* @@js:end */
 </script>
 </body>
 </html>

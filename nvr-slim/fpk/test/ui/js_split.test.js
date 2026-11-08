@@ -30,7 +30,10 @@ const JS_DIR = path.join(UI, "js");
    （要 POST 配置、按服务端通道表重排摄像头），所以同一张直播页被 core/api.js
    隔成两份，这不是漏搬。clips / player / live_snap 都在 core/api 之前，
    设置页两段在它之后。诊断、持久化、回放数据与时间轴四段排在设置页之后、
-   主题引擎之前 —— 它们要读设置页写进 GS / CAMERAS 的值，位置本来就在那儿。 */
+   主题引擎之前 —— 它们要读设置页写进 GS / CAMERAS 的值，位置本来就在那儿。
+   事件页与启动对表又夹在时间轴与主题引擎之间（事件页要调时间轴的定位，
+   启动对表要读各页写进 GS 的值）；控件接线与凭证启动排在主题引擎之后，
+   前者是页面「能点」之前最后一道绑定，后者必须先盖住引导层再去拉数据。 */
 const ORDER = ["core/auth.js", "core/state.js", "core/format.js",
                "components/shell.js", "components/fullscreen.js", "components/nav.js",
                "pages/clips.js", "player/player.js", "pages/live_snap.js",
@@ -38,7 +41,8 @@ const ORDER = ["core/auth.js", "core/state.js", "core/format.js",
                "pages/settings_cards.js", "pages/settings_editor.js",
                "pages/diagnostics.js", "pages/settings_persist.js",
                "pages/playback_data.js", "pages/timeline.js",
-               "core/theme.js"];
+               "pages/events.js", "core/boot.js", "core/theme.js",
+               "core/wiring.js", "core/auth_boot.js"];
 
 let pass = 0, fail = 0;
 function ck(name, cond, detail){
@@ -141,9 +145,30 @@ ck("最后一个 <script> 是真正干活的那段（含 authBoot 调用）",
 /* ---------- G 没被"顺手搬空" ---------- */
 let mainScriptAt = -1;
 lines.forEach((ln, i) => { if(ln.trim() === "<script>") mainScriptAt = i; });
-ck("脚本区仍有未拆分的主体（> 8000 行，不是只剩几个壳）",
+ck("脚本区仍是完整的单文件（> 8000 行，不是只剩几个壳）",
    mainScriptAt >= 0 && lines.length - mainScriptAt > 8000,
    mainScriptAt + " → " + lines.length);
+
+/* ---------- H 拆完之后不许再把新代码堆回 index.html ---------- */
+/* 全部脚本逻辑都该落在 js/ 下；脚本区里只剩三种东西：合成标记、标记段里的
+   代码，以及最前面那句 "use strict"; —— 它只有作为整个 script 的第一条语句
+   才生效，搬进任何一段都会退化成一句没用的字符串表达式，所以留在这儿是对的。
+   这条断言让"拆分完成"一直成立：往单文件里补一行功能，闸门立刻红。 */
+const inRegion = new Set();
+begins.forEach(b => {
+  const e = ends.find(x => x > b.i);
+  if(e === undefined) return;
+  for(let i = b.i; i <= e; i++) inRegion.add(i);
+});
+const stray = [];
+for(let i = mainScriptAt + 1; i < lines.length; i++){
+  const t = lines[i].trim();
+  if(t === "</script>") break;
+  if(!t || inRegion.has(i) || t === '"use strict";') continue;
+  stray.push((i + 1) + ":" + t.slice(0, 40));
+}
+ck("标记段之外没有散落代码（新功能请写进 js/，别堆回 index.html）",
+   stray.length === 0, stray.slice(0, 3).join(" | "));
 
 console.log("脚本源拆分：" + pass + " 项通过" + (fail ? "，" + fail + " 项失败" : ""));
 process.exit(fail ? 1 : 0);
