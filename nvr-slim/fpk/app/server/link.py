@@ -686,6 +686,11 @@ class Link:
         self.mode = runtime.link_mode(cfg.get("link_mode"))
         self.interval_h = runtime.link_interval_h(cfg.get("link_interval_h"))
         self.seg_sec = runtime.segment_sec(cfg.get("record_segment_sec"))
+        # 待处理上限是背压硬闸门（q.qsize() >= max_queue 时暂缓入队）。
+        # 以前只在 __init__ 读过一次：设置页改完接口回 ok、config.json 也写了，
+        # 运行中的队列却还按旧值限流，直到重启才生效，界面还没有任何提示。
+        # 按钮验收表（test/test_btn_effect.py）就是这么把它抓出来的。
+        self.max_queue = runtime.clamp_int(cfg.get("link_max_queue"), 20, 2000, 200)
         new_style = runtime.clip_style(cfg.get("clip_style"))
         if new_style != self.clip_style:
             self.clip_style = new_style

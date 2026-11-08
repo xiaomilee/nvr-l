@@ -111,6 +111,10 @@ LINK_INTERVAL_LIMITS = (1, 24)
 _ENUM_KEYS = {"gpu": ("auto", "qsv", "off"), "scan_mode": ("now", "m15", "h1", "d1"),
               "process_mode": ("fast", "fine"),
               "clip_style": ("join", "split"),
+              # link_mode 以前漏在这里：/api/link/policy 会用 runtime.link_mode()
+              # 收敛，但 /api/config 走 coerce 的字符串分支，非法值原样落盘并
+              # 回读给前端，syncFromServer 就把一个不存在的模式显示到界面上。
+              "link_mode": ("live", "scheduled"),
               "condense_mode": ("virtual", "materialize", "off")}
 
 
