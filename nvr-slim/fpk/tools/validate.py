@@ -254,10 +254,12 @@ if not missing_css:
 # test/ui/js_split.test.js 钉成一张表 —— 那里才是"挪一个标记就红"的地方。
 JS_DIR = os.path.join(ROOT, "app", "ui", "js")
 JS_REQUIRED = ["core/auth.js", "core/format.js", "core/api.js", "core/theme.js",
-               "components/shell.js", "components/fullscreen.js", "components/nav.js"]
+               "components/shell.js", "components/fullscreen.js", "components/nav.js",
+               "pages/clips.js", "pages/settings_cards.js", "pages/settings_editor.js"]
 missing_js = [n for n in JS_REQUIRED
               if not os.path.isfile(os.path.join(JS_DIR, n.replace("/", os.sep)))]
-check("脚本源文件齐全（core 4 + components 3）", not missing_js, "缺: %s" % missing_js)
+check("脚本源文件齐全（core 4 + components 3 + pages 3）", not missing_js,
+      "缺: %s" % missing_js)
 _js_begin = len(re.findall(r"/\* @@js:begin[ ]", ui_html))
 check("index.html 的 js 合成标记成对",
       _js_begin >= 1 and _js_begin == ui_html.count("/* @@js:end */"),
