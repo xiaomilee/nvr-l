@@ -255,6 +255,48 @@ class BtnEffect(unittest.TestCase):
         with self.subTest(层="Link 与 Recorder 同一个秒数"):
             self.assertEqual(after.get("segment_sec"), new_seg)
 
+    def test_94_policy_bool_string_not_truthy(self):
+        """录制总闸的字符串 "false" 不能被当成"开"（两条入口必须同口径）。
+
+        /api/config 走 runtime.coerce，把 "false" / "0" 收敛成 False；
+        policy 入口以前是裸 bool("false")，结果是 True —— 用户从设置页能
+        关掉录像，同样一个值从衔接策略这条入口进来却把录像打开了，
+        接口还照样回 ok。录制总闸最不能有歧义，所以这里不验正常布尔值，
+        专拿字符串来钉住两条入口给出同一个结论。
+
+        用例自己先把总闸设成"开"再"关"，不依赖前面用例留下的状态
+        （CASES 里有一项会把总闸改成 False，test_93 又会取反）。
+        证据取磁盘与运行中的 Recorder，不读 /api/link 顶层那个同名回读字段。
+        """
+        code, body = self.req("/api/link/policy", "POST", {"record_enable": True})
+        self.assertEqual(code, 200, body[:200])
+        self.assertIs(json.loads(body).get("ok"), True)
+        self.assertIs(self.disk().get("record_enable"), True)
+        self.assertIs((self.get("/api/link").get("record") or {}).get("enabled"), True,
+                      "起手没把 Recorder 打开，后面这次'关'验不出变化")
+
+        code, body = self.req("/api/link/policy", "POST",
+                              {"record_enable": "false"})
+        self.assertEqual(code, 200, body[:200])
+        self.assertIs(json.loads(body).get("ok"), True)
+        with self.subTest(层="磁盘落盘"):
+            self.assertIs(self.disk().get("record_enable"), False,
+                          '字符串 "false" 落盘成了 True：关录像被判成了开录像')
+        with self.subTest(层="运行中 Recorder"):
+            self.assertIs((self.get("/api/link").get("record") or {}).get("enabled"),
+                          False, "Recorder 仍开着，关录像没有真的生效")
+        with self.subTest(层="两条入口同口径"):
+            # 同一个字符串走设置页那条入口，coerce 一直给 False；
+            # policy 入口此前给 True，正是这个用例要挡住的相反结论。
+            self.req("/api/config", "POST", {"record_enable": True})
+            code, body = self.req("/api/config", "POST",
+                                  {"record_enable": "false"})
+            self.assertEqual(code, 200, body[:200])
+            self.assertIs(self.get("/api/config")["config"].get("record_enable"),
+                          False)
+            self.assertIs(self.disk().get("record_enable"), False,
+                          "配置入口把总闸关了，不该被 policy 的旧结论带开")
+
 
 def _bind(case, idx):
     def test(self):

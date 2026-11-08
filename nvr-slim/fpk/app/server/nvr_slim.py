@@ -2716,7 +2716,15 @@ def set_link(body):
     if "link_max_queue" in body:
         cfg["link_max_queue"] = runtime.clamp_int(body.get("link_max_queue"), 20, 2000, 200)
     if "record_enable" in body:
-        cfg["record_enable"] = bool(body.get("record_enable"))
+        # 录制总闸必须和 /api/config 用同一个收敛口径。那边走 runtime.coerce，
+        # 会把字符串 "false" / "0" 正确收敛成 False；这里以前直接写
+        # bool(body.get(...))，而 Python 里 bool("false") 是 True —— 前端一旦把
+        # 开关值序列化成字符串（旧缓存、表单直传、手改请求），「关录像」从
+        # 这条 policy 入口进来反而会把录像打开，接口照样回 ok、配置照样落盘，
+        # 界面上完全看不出两条入口给了相反结论。录制总闸是最不能有歧义的
+        # 开关，值怎么进来都得给同一个结果，所以统一交给 coerce 判。
+        cfg["record_enable"] = runtime.coerce(
+            "record_enable", body.get("record_enable"))
     cfg["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     runtime.save_config(STATE["var_dir"], cfg)
     if STATE.get("link"):
