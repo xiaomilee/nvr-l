@@ -106,9 +106,12 @@ def _row(key, label, ui, landed, runtime=(), note="", proc="", restart=False):
 # 其中若干项 UI 已下线或恒值，note 里如实写明，不假装「点得到按钮」。
 ROWS = [
     _row("record_enable", "录制总开关", '[data-rec="enabled"]',
-         "config.record_enable",
-         ("link.record_enable", "link.record.enabled", "status.cams.recording"),
-         note="热生效会 kill/重拉录制进程，验收时务必还原，别把测试机留在关录状态"),
+         "config.record_enable", ("link.record.enabled",),
+         note="热生效会 kill/重拉录制进程，验收时务必还原，别把测试机留在关录状态。"
+              "生效证据只认 link.record.enabled（Recorder 对象自己的开关）："
+              "/api/link 顶层的 record_enable 是现读 config.json 补的回读字段；"
+              "status.cams.recording 数的是「此刻真在跑的 ffmpeg」，没装 ffmpeg 或"
+              "上游没数据时它照样是 0，把开关的生效与否和进程存活混成一件事。"),
     _row("record_dir", "录像保存目录", "#recDir",
          "config.record_dir", ("link.record.root",),
          note="服务端 restart_hint 明确提示需重启；且改目录会触发录像重启",
@@ -170,9 +173,13 @@ ROWS = [
          note="status.notify 只有 recent/pending，改冷却不会立刻变"),
     _row("cameras", "摄像头列表", "[data-camname] / [data-camseg] 等",
          "config.cameras.*.name",
-         ("link.record.channels.*.segment_sec", "status.cams.total"),
-         note="landed 故意取 name 不取 url：url 出接口前被抹成 ***, 拿脱敏值"
-              "判「变没变」会把所有地址改动都误判成没变"),
+         ("link.record.channels.*.name",),
+         note="锚点取「名字」不取「单路分片长度」：segment_sec 改成 0 表示跟随通用设置，"
+              "键会从配置里消失，同一个观测点在改前/改后两种形态下键名不同，"
+              "判「变没变」会把合法操作误判成采集失败；名字一定在，且它决定 "
+              "dir_name，Recorder 的通道列表必须跟着换。landed 取 name 不取 url："
+              "url 出接口前被抹成 ***，拿脱敏值判「变没变」会把所有地址改动都误判成没变。"
+              "通道总数（status.cams.total）不随编辑变化，列进来只会制造假失败。"),
 ]
 
 
@@ -330,15 +337,24 @@ def _result(row, state, reason, checks):
             "reason": reason, "checks": checks}
 
 
-def verify_all(rows, before, after, changed, expected=None, proc=None):
-    """跑整张表。partial 算过（如实标注还差什么），fail/unknown 不算过。"""
-    expected = expected or {}
-    items = [verify_row(r, before, after, changed,
-                        expected.get(r["key"], MISSING), proc)
-             for r in rows]
+def roll_up(items):
+    """把逐项结果收成一页纸结论。
+
+    单独抽出来是因为「一次跑全表」和「逐项改值再采」两条路必须给同一个口径：
+    采集器（test/btn_harvest.py）逐项取快照、只能一项一项判，如果它自己再数一遍
+    tally，迟早会和这里数出两个不一样的结论 —— 而看报告的人只会看那一行。
+    """
     tally = {s: sum(1 for x in items if x["state"] == s) for s in STATES}
     return {"total": len(items), "tally": tally, "items": items,
             "ok": tally["fail"] == 0 and tally["unknown"] == 0}
+
+
+def verify_all(rows, before, after, changed, expected=None, proc=None):
+    """跑整张表。partial 算过（如实标注还差什么），fail/unknown 不算过。"""
+    expected = expected or {}
+    return roll_up([verify_row(r, before, after, changed,
+                               expected.get(r["key"], MISSING), proc)
+                    for r in rows])
 
 
 def summary(report):

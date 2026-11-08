@@ -228,6 +228,8 @@ fpk/
     ├── test_link.py       录制封口判定/包大小判定/幂等键/两种衔接节奏（29 项）
     ├── test_btn_effect.py 按钮验收表：真起本地服务验设置项热生效（12 项）
     ├── test_button_matrix.py 声明式验收矩阵与两表对齐守卫（58 项）
+    ├── btn_harvest.py     设置项采集器：改值 → 采三份快照 → 还原 → 出报告（手动跑，不进闸门）
+    ├── test_btn_harvest.py 采集器离线守卫：取值策略与报告口径（15 项）
     └── test_config_doc.py 配置文档守卫：docs/CONFIGURATION.md 与 DEFAULTS 不漂移（10 项）
 ```
 
@@ -256,6 +258,28 @@ bash build.sh --check    # 只校验不打包
 两张表分工不合并：`test_button_matrix.py` 是声明表（该验什么、`pass` /
 `partial` / `fail` / `unknown` 怎么算过），`test_btn_effect.py` 是执行器
 （真起服务实跑），另有一条对齐守卫钉住两表的 key 与生效证据不漂移。
+
+**全表采集用 `test/btn_harvest.py`**（不进闸门，手动跑，20 项约 30 秒）：
+
+```bash
+python test/btn_harvest.py                       # 全表，报告写进 test-reports/
+python test/btn_harvest.py --only record_enable,cameras
+python test/btn_harvest.py --skip record_dir --keep   # 留下临时 var 便于看服务日志
+```
+
+它对声明表每一行做同一件事：读磁盘原值 → 换成另一个合法值 `POST /api/config`
+→ 等 500ms（`snapshot_interval` 等 3.5s，它要等巡检那一拍）→ 取
+`/api/config` + `/api/status` + `/api/link` 三份快照 → **还原原值** →
+喂 `button_matrix.verify_row` 判四层。退出码 = 报告通过 **且** 还原成功。
+
+三条口径别改：①「另一个合法值」由 `runtime.coerce` 验过（`test_btn_harvest.py`
+钉住），不许自己发明范围；② 还原值从磁盘 `config.json` 取，不从 `/api/config`
+取（接口里的摄像头地址是 `rtsp://***@` 脱敏值，拿它回推会把真地址写坏）；
+③ 它只打 `127.0.0.1`，源码里不许出现 LAN 地址或 SSH —— 改配置是有副作用的，
+能指向测试机就会变成一次真实的配置抖动（`test_14` 守着这条）。
+
+报告里 `partial` 是**只验到落盘**（该项没有运行态出口、要重启、或 ffmpeg argv
+采不到），采集器会把它们逐条列出来，别把「通过 9 / 部分 11」读成全过了。
 
 **改配置键要同步 `docs/CONFIGURATION.md`**：那份文档的主表由
 `test_config_doc.py` 解析，逐项比对 `runtime.DEFAULTS` 的类型、默认值、
