@@ -1,0 +1,609 @@
+/* ============ player.css · 画面与时间 ============
+   概览与全天时间轴、播放器、全屏、单路全屏、回放页垂直时间轴、全屏黑边轨。
+   为什么把这些放一起：它们共享同一套"画面 + 时间"的坐标与手感（进度条命中区、
+   三车道配色、全屏下的悬浮位置），改其中一处往往要同步另一处，分成几个文件
+   反而容易改漏。纯页面版式仍然留在 pages.css。
+   ------------------------------------------------------------------
+   合成进 index.html 的样式区，改这里才生效。 */
+
+
+/* 概览 */
+/* 0.9.33 概览四格（保留时长/占全天/片段数/体积）整体下线：信息与
+   时间轴摘要、诊断页重复，回放页少一层占位更聚焦 */
+
+/* 热力条 */
+.heatwrap{background:var(--surface);padding:2px 16px 14px;border-bottom:1px solid var(--line)}
+.heat{display:flex;gap:3px;height:30px}
+.hcell{flex:1;border-radius:5px;background:var(--fill);position:relative;transition:.12s}
+.hcell.on{box-shadow:0 0 0 2px var(--primary);z-index:1}
+.heatlbl{display:flex;justify-content:space-between;font-size:10.5px;color:var(--faint2);margin-top:5px}
+/* 全天分布时间轴：全时/归档 同一刻度看分布（0.9.33 起常驻播放器画面上方；
+   0.9.34 说明行移到色条上方，色条贯穿全宽、加高方便点按跳播） */
+.tlane{margin-top:12px}
+.tl-head{display:flex;align-items:baseline;gap:8px;margin-bottom:7px}
+.tl-head b{font-size:12px;color:var(--text2);font-weight:600}
+.tl-hint{margin-left:auto;font-size:10px;color:var(--faint2)}
+.tl-all{font-size:10.5px;color:var(--primary);padding:2px 6px;margin:-2px 0 -2px auto;cursor:pointer}
+.tlrow{display:block;margin-bottom:9px}
+.tl-cap{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:4px}
+.tl-lbl{flex:none;font-size:10.5px;color:var(--muted)}
+.tl-track{flex:1;height:20px;border-radius:5px;background:var(--fill);position:relative;overflow:hidden;display:block;cursor:pointer}
+.tl-block{position:absolute;top:0;bottom:0;border-radius:4px;min-width:4px}
+.tl-block.fb{background:var(--keep)}
+/* 当前播放文件定位竖线：全时/归档两条轨同源同位，随 timeupdate 轻量移动。
+   0.9.39 应用户要求改红色 + 光晕，与播放控件当前时刻同色。 */
+.tl-cursor{position:absolute;top:-1px;bottom:-1px;width:2px;background:#ff5a5a;
+  box-shadow:0 0 6px rgba(255,80,80,.9);pointer-events:none;display:none;z-index:2}
+.tl-val{font-size:10.5px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:72%;font-variant-numeric:tabular-nums}
+.tl-ticks{display:flex;justify-content:space-between;font-size:10px;color:var(--faint2);margin:3px 0 0;font-variant-numeric:tabular-nums}
+/* 0.9.33 时间轴进播放器：黑底适配；0.9.34 左右贴边贯穿全宽、色条加高到
+   20px 方便手指点按；0.9.104 缩时轨下线后只剩两行，轨道再加高到 24px，
+   点按容错更大；横屏/全屏整块隐藏不占播放空间 */
+.p-tl{flex:0 0 auto;margin:2px 0 4px;padding:6px 12px 2px;border-bottom:1px solid rgba(255,255,255,.07)}
+.p-tl .tl-track{height:24px}
+.p-tl .tl-head{margin-bottom:5px}
+.p-tl .tl-head b{color:rgba(255,255,255,.55)}
+.p-tl .tl-track{background:rgba(255,255,255,.10)}
+.p-tl .tl-lbl{color:rgba(255,255,255,.45)}
+.p-tl .tl-val{color:rgba(255,255,255,.55)}
+.p-tl .tl-ticks{color:rgba(255,255,255,.32);margin-top:2px}
+.phone.land .p-tl{display:none}
+.player.fshide .p-tl{opacity:0;pointer-events:none}
+.player .p-tl{transition:opacity .25s ease}
+/* 全天统计行（0.9.89）：非全屏一律 display:none —— 一行 24px + 8px 间距全部让给
+   时间轴；只有全屏才露出来（全屏时间轴本来就浮在画面上方，空间不缺，信息不该丢）。 */
+.vtlstat{display:none;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-bottom:6px}
+.vtlstat b{color:var(--text2);font-weight:600;font-size:12px}
+/* 「没有内容」的浅提示（0.9.89）：台账暂无活动 / 读取失败时才出现。
+   原来这类话常驻在时间轴顶上那行摘要里，为了给时间轴腾高度整行撤掉了，
+   改成按需覆盖一层浅字——有活动时一个像素都不占。 */
+.vtlnote{position:absolute;left:12px;right:12px;top:10px;text-align:center;
+  font-size:11.5px;color:var(--muted);pointer-events:none;z-index:3}
+
+
+/* ---------- 播放器 ---------- */
+.player{position:absolute;inset:0;background:#000;z-index:30;display:none;flex-direction:column;color:#fff}
+.player.on{display:flex}
+.p-top{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:14px 14px 8px;
+  background:linear-gradient(rgba(0,0,0,.6),transparent);position:relative;z-index:2}
+.p-top .ttl{font-size:14px;font-weight:500}
+.p-top .sub{font-size:11.5px;color:rgba(255,255,255,.6);margin-top:1px}
+.p-close,.p-more{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:#fff;
+  background:rgba(255,255,255,.12)}
+.p-close svg,.p-more svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+.p-more{margin-left:auto}
+
+.stage{flex:1;position:relative;display:grid;place-items:center;overflow:hidden;min-height:0}
+.stage canvas{width:100%;display:block;background:#111}
+.osd{position:absolute;left:12px;top:10px;font-size:11px;color:#e9ecf1;text-shadow:0 1px 3px #000;opacity:.92}
+.osd .rec{display:inline-flex;align-items:center;gap:4px;margin-left:7px;color:#ff6b6b}
+.osd .rec i{width:5px;height:5px;border-radius:50%;background:#ff4d4d;display:block}
+.qchip{position:absolute;right:10px;top:9px;height:22px;padding:0 8px;border-radius:11px;
+  background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.18);font-size:10.5px;
+  color:#dfe4ec;display:flex;align-items:center;gap:5px}
+.pcenter{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.pcenter .ring{width:62px;height:62px;border-radius:50%;background:rgba(0,0,0,.42);
+  border:1.5px solid rgba(255,255,255,.7);display:grid;place-items:center;transition:.2s;opacity:0}
+.pcenter .ring.show{opacity:1}
+.pcenter svg{width:24px;height:24px;fill:#fff;margin-left:3px}
+
+.p-ctrl{flex:0 0 auto;padding:10px 16px calc(14px + env(safe-area-inset-bottom));background:#000;position:relative;z-index:2}
+.p-times{display:flex;align-items:baseline;font-size:11.5px;color:rgba(255,255,255,.66);margin-bottom:1px}
+.p-times i{font-style:normal;font-size:9px;color:rgba(255,255,255,.38);margin:0 3px}
+.p-times .pt-s b,.p-times .pt-e b{font-weight:500}
+.p-times .pt-c{flex:1;text-align:center;font-size:12.5px;font-weight:600;color:#ff6b6b}
+/* 进度条：命中区 34px 高（轨道只有 4px，难点拖就是这么来的），touch-action 掐掉页面滚动手势 */
+.p-bar{height:34px;display:flex;align-items:center;position:relative;margin:0 -2px;touch-action:none}
+.p-track{position:relative;height:4px;width:100%;border-radius:3px;background:rgba(255,255,255,.18)}
+.p-fill{position:absolute;left:0;top:0;height:100%;border-radius:3px;background:#fff}
+.p-knob{position:absolute;top:50%;width:16px;height:16px;border-radius:50%;background:#fff;
+  transform:translate(-50%,-50%);box-shadow:0 1px 4px rgba(0,0,0,.4);transition:box-shadow .15s}
+.p-bar.drag .p-knob{box-shadow:0 0 0 7px rgba(255,255,255,.16)}
+.p-marks{position:absolute;inset:0;pointer-events:none}
+.p-marks i{position:absolute;top:50%;width:2px;height:8px;background:rgba(255,255,255,.45);
+  transform:translate(-50%,-50%);border-radius:1px}
+.p-btns{display:flex;align-items:center;justify-content:space-between;padding:2px 14px 0;gap:8px}
+.pb{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:#fff}
+.pb:active{background:rgba(255,255,255,.1)}
+.pb svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.pb .txt{font-size:10px;font-weight:600;letter-spacing:-.3px}
+.pb .spd{font-size:13px;font-weight:600;letter-spacing:-.2px}
+.pb.play{width:56px;height:56px;background:rgba(255,255,255,.16)}
+.pb.play svg{width:26px;height:26px;fill:#fff;stroke:none}
+/* 本文件播放进度行：00:00 · 当前 · 总长 */
+.p-fprog{display:flex;align-items:baseline;font-size:10.5px;color:rgba(255,255,255,.45);margin:0 2px 4px}
+.p-fprog .fc{flex:1;text-align:center;color:rgba(255,255,255,.85)}
+/* 倍速菜单：浮在按钮行上方 */
+.speedpop{position:absolute;right:20px;bottom:124px;background:rgba(24,28,36,.97);
+  border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:5px;display:none;z-index:6;
+  box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.speedpop.on{display:block}
+.speedpop button{display:block;width:100%;text-align:center;padding:8px 26px;border-radius:8px;
+  color:#fff;font-size:13px;font-family:"Cascadia Mono",Consolas,monospace}
+.speedpop button:active{background:rgba(255,255,255,.08)}
+.speedpop button.on{background:rgba(92,141,255,.26);color:#a8c2ff;font-weight:600}
+/* ⋯ 导出菜单 */
+.p-mask{position:absolute;inset:0;background:rgba(0,0,0,.42);display:none;z-index:5}
+.p-mask.on{display:block}
+.p-menu{position:absolute;right:12px;top:54px;width:268px;background:#171b23;
+  border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:6px;display:none;z-index:6;
+  box-shadow:0 12px 34px rgba(0,0,0,.55)}
+.p-menu.on{display:block}
+.p-menu .pm-fn{font-size:10.5px;color:rgba(255,255,255,.5);padding:6px 10px 4px;word-break:break-all}
+.p-menu button{display:block;width:100%;text-align:left;padding:10px;border-radius:9px;color:#fff;font-size:13.5px}
+.p-menu button:active{background:rgba(255,255,255,.08)}
+.p-menu .pm-hint{font-size:10px;color:rgba(255,255,255,.36);padding:2px 10px 7px;line-height:1.5}
+.p-swipe{text-align:center;font-size:10.5px;color:rgba(255,255,255,.34);margin-top:10px}
+/* 0.9.31 播放页内嵌热力格：非全屏时位于画面下方（stage 随之变矮、画面下移），
+   深色配色，正在播放的 2 小时格高亮；横屏全屏态整体隐藏 */
+.p-heat{flex:0 0 auto;background:#000;padding:7px 16px 5px;border-top:1px solid rgba(255,255,255,.07)}
+.ph-cap{font-size:10.5px;color:rgba(255,255,255,.4);margin-bottom:6px}
+.ph-heat .phcell{flex:1;height:24px;border-radius:5px;border:none;padding:0;min-width:0}
+.ph-heat .phcell.on{box-shadow:0 0 0 2px rgba(92,141,255,.95);z-index:1}
+.ph-heat .phcell.sel{box-shadow:0 0 0 2px var(--warn);z-index:1}
+.ph-heat .phcell.sel.on{box-shadow:0 0 0 2px var(--warn),0 0 0 4px rgba(92,141,255,.95)}
+.ph-lbl{display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,.32);
+  margin-top:5px;font-variant-numeric:tabular-nums}
+.phone.land .p-heat{display:none}
+.player.fshide .p-heat{opacity:0;pointer-events:none}
+.player .p-heat{transition:opacity .25s ease}
+
+/* 横屏（全屏）：播放中控制整体淡出，暂停/轻点画面即浮现 */
+.phone.land{--pw:844px;--ph:390px}
+.phone.land .tabbar{display:none}
+.phone.land .p-top{position:absolute;top:0;left:0;right:0;background:linear-gradient(rgba(0,0,0,.55),transparent);padding:10px 14px}
+.phone.land .p-ctrl{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(transparent,rgba(0,0,0,.7) 42%)}
+.player .p-top,.player .p-ctrl{transition:opacity .25s ease}
+.player.fshide .p-top,.player.fshide .p-ctrl{opacity:0;pointer-events:none}
+.phone.land .stage{position:absolute;inset:0}
+.phone.land .p-swipe{display:none}
+
+/* ---------- 全屏模式 ----------
+   真全屏时 .phone 必须铺满整个视口，不能再是 390×844 的"手机壳"；
+   桌面端原本靠 transform:scale 缩放，进全屏后要复位成 1，否则会缩成一小块。 */
+body.fsmode{overflow:hidden;background:#000}
+body.fsmode .phone{
+  position:fixed!important;inset:0!important;
+  width:100vw!important;height:100vh!important;
+  height:100dvh!important;
+  max-width:none!important;max-height:none!important;
+  margin:0!important;border-radius:0!important;
+  transform:none!important;box-shadow:none!important;
+  background:#000;z-index:9000;
+  transition:none!important;
+}
+body.fsmode .hdr,body.fsmode .tabbar,body.fsmode .wallbar{display:none!important}
+body.fsmode .toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%)}
+
+/* 方向锁不住时的旋转兜底：把整个容器转 90° 吃满视口。
+   宽高互换 + 以中心旋转，视觉上就是横屏。 */
+body.rot .phone{
+  width:100vh!important;height:100vw!important;
+  left:50%!important;top:50%!important;
+  transform:translate(-50%,-50%) rotate(90deg)!important;
+  transform-origin:center center!important;
+}
+/* 全屏 + 旋转叠加时提高特异性，并显式解除 body.fsmode 的 inset:0!important
+   造成的过约束（left+right+width 同时指定，部分 webview 解析结果不一致），
+   同时关掉 .phone 的宽高过渡（旋转瞬间会看到拉伸） */
+body.fsmode.rot .phone{
+  left:50%!important;top:50%!important;right:auto!important;bottom:auto!important;
+  width:100vh!important;height:100vw!important;
+  transform:translate(-50%,-50%) rotate(90deg)!important;
+  transform-origin:center center!important;
+  transition:none!important;
+}
+body.rot{background:#000}
+
+/* 全屏工具组（退出全屏 / 旋转）：**挂在 .phone 内部**，跟着容器一起转。
+   之前挂在 body 上、再手写反向旋转补偿，旋转后整组跑到用户视角的左上角，
+   胶囊还被挤成两行（真机截图）。放进 .phone 后永远落在用户视角右上角，
+   文字也不用补偿——固定定位在 transform 祖先内是以该祖先为包含块的。 */
+#fsTools{
+  position:fixed;top:calc(8px + env(safe-area-inset-top));right:10px;z-index:9999;
+  display:none;align-items:center;gap:8px;
+}
+#fsTools.on{display:flex}
+#fsTools button{
+  height:40px;min-width:40px;padding:0 14px;border-radius:20px;
+  border:1px solid rgba(255,255,255,.2);background:rgba(14,18,26,.62);color:#fff;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  font-family:inherit;font-size:12.5px;font-weight:600;line-height:1;white-space:nowrap;
+  cursor:pointer;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  box-shadow:0 3px 14px rgba(0,0,0,.4);transition:transform .12s,background .12s;
+}
+#fsTools button:active{transform:scale(.95);background:rgba(14,18,26,.92)}
+#fsTools button.ico{width:40px;padding:0}
+#fsTools svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#fsTools button[hidden]{display:none}
+
+/* 全屏自诊断角标：默认隐藏，排障时 URL 加 ?fsdiag=1 打开（截图即可定位） */
+#fsDiag{
+  display:none;position:fixed;left:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:9998;
+  font-size:9px;line-height:1.2;color:rgba(255,255,255,.55);pointer-events:none;
+  font-variant-numeric:tabular-nums;text-shadow:0 1px 2px rgba(0,0,0,.85);
+}
+#fsDiag.on{display:block}
+
+
+/* ---------- 单路全屏（从首页卡片进入） ----------
+   顶部条常驻：它同时是"我在看哪一路 / 在不在录"和唯一可靠的退出出口。
+   底部控制条播放中隐藏，轻点画面或暂停时浮现；暂停时中央再给一个播放键。 */
+.lr-fsbtn{display:none}
+.lr-center{display:none}
+.liveroom.fs{z-index:30}
+.liveroom.fs .lr-top{position:absolute;top:0;left:0;right:0;z-index:7;
+  background:linear-gradient(rgba(0,0,0,.62),rgba(0,0,0,.18) 70%,transparent);
+  padding:10px 16px 18px;transition:opacity .22s ease}
+.liveroom.fs .lr-body{position:absolute;inset:0;padding:0;align-content:stretch;gap:0;
+  grid-template-rows:100%}
+/* 与回放页全屏同一口径：瓦片吃满整个视口（不再锁 16:9——横屏手机约 2.16:1，
+   锁了比例瓦片高度会超出屏幕），画面用 contain 完整呈现，超出部分留黑边 */
+.liveroom.fs .lr-tile{border-radius:0;aspect-ratio:auto;height:100%}
+.liveroom.fs .lr-tile .snap-img{object-fit:contain}
+.liveroom.fs .lr-ctrl{position:absolute;left:0;right:0;bottom:0;z-index:7;
+  background:linear-gradient(transparent,rgba(0,0,0,.78) 46%);padding:16px 18px calc(14px + env(safe-area-inset-bottom));
+  transition:opacity .22s ease}
+.liveroom.fs:not(.chrome) .lr-ctrl{opacity:0;pointer-events:none}
+.liveroom.fs .bk,.liveroom.fs #lrGrid{display:none}
+.liveroom.fs .lr-fsbtn{display:flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:9px;
+  background:rgba(255,255,255,.14);color:#fff;font-size:11.5px;flex:0 0 auto}
+.liveroom.fs .lr-fsbtn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round}
+.liveroom.fs .lr-title .n{font-size:13px}
+.liveroom.fs .lr-title .s{font-size:10.5px;gap:8px}
+.liveroom.fs .lr-title .s .sep{color:rgba(255,255,255,.22)}
+.liveroom.fs .lr-title .s .rec{color:#ffb3ae}
+.liveroom.paused .lr-center{display:grid;position:absolute;inset:0;place-items:center;z-index:6;pointer-events:none}
+.lr-center button{width:64px;height:64px;border-radius:50%;background:rgba(10,14,20,.55);
+  display:grid;place-items:center;pointer-events:auto;border:1.4px solid rgba(255,255,255,.35)}
+.lr-center svg{width:28px;height:28px;fill:#fff;margin-left:3px}
+.liveroom.fs .lr-ctrl .live{display:none}
+.liveroom.fs .lr-ctrl .fsstate{font-size:11px;color:rgba(255,255,255,.5)}
+.liveroom.fs .lr-ctrl .lr-play{height:30px;padding:0 14px;font-size:12px}
+/* 全屏信息去重：每类信息只出现一次 ——
+   与快照卡同一套四角布局：左上留空（画面自带 OSD）、右上=时刻、
+   左下=名称+通道、右下=状态点；顶栏只剩一颗紧凑退出按钮。
+   名字/状态行不再放顶栏，退出不再放底栏，底栏时钟下线。 */
+.liveroom.fs .lr-title{display:none}
+/* 顶栏只剩退出按钮：标题原本靠 flex:1 把它推到右边，隐藏后要自己靠右 */
+.liveroom.fs #lrExitTop{margin-left:auto}
+.liveroom.fs .lr-fsbtn{width:38px;height:38px;padding:0;justify-content:center;border-radius:50%}
+.liveroom.fs .lr-fsbtn span{display:none}
+.liveroom.fs #lrExitBot{display:none}
+.liveroom.fs #lrClock{display:none}
+.liveroom.fs .lr-tile .tf{top:18px;right:70px;font-size:12.5px;color:#e9ecf1;
+  background:rgba(0,0,0,.36);border-radius:7px;padding:3px 9px;
+  text-shadow:0 1px 3px #000}
+/* 右下状态点复用快照卡的 .snap-ago 全套视觉，全屏下加大一档 */
+.liveroom.fs .lr-tile .snap-ago{right:16px;bottom:16px;height:26px;padding:0 10px;
+  border-radius:13px;font-size:12px}
+.liveroom.fs .lr-tile .snap-ago .dot{width:8px;height:8px;flex:0 0 8px}
+.liveroom.fs .lr-tile .tn{left:16px;bottom:16px;font-size:12.5px;padding:3px 9px;
+  border-radius:7px;background:rgba(0,0,0,.42)}
+
+.envchip.bad{background:var(--warn-soft);color:var(--warn-fg)}
+/* ---------- 回放页（Aqara 式垂直时间轴） ----------
+   24h 全天竖排，1 小时 = 60px；蓝轨 = 有画面，橙条 = 台账活动。
+   P0 先做「看得见、点得准」：拖动滚动 + 点标记/点事件跳转提示；
+   真正的 seek 连播随 P1 的常驻画面区一起落地。 */
+.vtl{position:relative;height:1500px}
+.vtl .vhour{position:absolute;left:0;right:0;border-top:1px solid var(--line);font-size:9.5px;color:var(--faint);padding:2px 0 0 6px;pointer-events:none}
+.vtl .vtrack{position:absolute;left:46px;width:60px;border-radius:3px;background:var(--track)}
+/* 画面可用性（有录像的时段）：0.9.69 起从「满饱和蓝」降到 30% 淡蓝。
+   以前它和人员色用同一个 --primary、只差 18% 透明度，人一走、尾巴一长，
+   整段深蓝尾巴压在深蓝底色上等于没画（用户 0.9.67 反馈「颜色区别不明显」
+   的同一个根因）。现在底色退成背景，橙/蓝/绿三色才是前景。 */
+.vtl .vavail{position:absolute;left:46px;width:60px;border-radius:3px;background:var(--primary);opacity:.3}
+.vtl .vavail.arch{background:var(--arch);opacity:.22}
+/* ---------- 事件类别色（0.9.62，0.9.67 三色定版）----------
+   时间轴「一眼分型」的公共口径：
+     橙 = 移动侦测（帧差，台账无 cls） · 蓝 = 人员 · 绿 = 车辆（含两轮车）
+   0.9.63 起车辆不再区分车型；0.9.67 把车辆色从紫换成绿 —— 紫和蓝在
+   3px 细线上几乎分不出来（用户反馈「颜色区别不明显」），橙/蓝/绿
+   三色相拉开约 40°/220°/145°，深浅主题下都一眼可辨。
+   色片（.c-*）给时段块与横线段共用；文字色（.t-*）给气泡摘要用。 */
+.c-motion{background:var(--warn)}
+.c-person{background:var(--primary)}
+.c-veh{background:var(--ev-veh)}
+.t-motion{color:var(--warn)}
+.t-person{color:var(--primary)}
+.t-veh{color:var(--ev-veh)}
+/* 活动时段块：全时/活动筛选下都常亮（v0.9.48：用户反馈全时模式看不到活动标记
+   —— 之前只在活动筛选时点亮，被蓝轨压住了）。
+   时段块**占满整条轨道**（0.9.76 改回，与蓝块同列同宽）：0.9.69 曾把它收进
+   三格里的最左一格（19px），结果时间轴上出现两条并排的竖列 —— 有活动的地方，
+   蓝块被黄块盖住左边 19px、只剩右侧 41px 露出来；没活动的地方蓝块又从最左边
+   开始。用户 2026-10-26 真机截图指出「蓝色和黄色应该对齐」：同一个时刻在两条
+   不同宽度的列上，读起来像两条独立轨道，而不是「这段时间有画面 + 同时有活动」。
+   现在黄块与蓝块严格同一条 60px 轨道、同样的起止时刻 ——「列」对齐这件事由
+   容器的 left/width 保证，不靠颜色铺满。
+
+   0.9.77：0.9.76 把颜色也铺满整条 60px，结果是整段只有一个类别时（车库全天
+   车辆、活动一连十几分钟）整条竖带糊成一片绿，把下面的蓝块整个盖掉，看不出
+   「有画面 + 有活动」两件事。现在颜色回到三格窄道（左移动 / 中人员 / 右车辆，
+   各 19px），容器仍是 46/60 —— 对齐不变，蓝块在没类别的那两格照常透出来。
+   这也恢复了「位置即类别」：一眼能看出这段时间里出现过哪几类，而不是只剩一个
+   被压平的主色。 */
+.vtl .vevspan{position:absolute;left:46px;width:60px;z-index:2;pointer-events:none}
+.vtl .vevspan i{position:absolute;top:0;width:19px;border-radius:2px;display:block;opacity:.9}
+.vtl .vevspan i.mot{left:0}
+.vtl .vevspan i.per{left:20px}
+.vtl .vevspan i.veh{left:40px}
+/* 活动落在断录里（0.9.75）：这一段台账有活动（人/车确实在），但没有任何录像。
+   不画类别色条 —— 三格色条暗示「点开就有画面」，那正是「有活动 = 有画面」这个
+   错误暗示的来源。只留一个虚线框：这里发生过，但没录下来。 */
+.vtl .vevspan.gap{border:1px dashed var(--faint);border-radius:3px;box-sizing:border-box;opacity:.5}
+.vtlcard.actmode .vtrack,.vtlcard.actmode .vavail{opacity:.16}
+.vtlcard.actmode .vavail.arch{opacity:.1}
+/* Aqara 式横线标注：一枚 = 一个（组）事件，点线弹标注气囊，点空白处跳播。
+   命中区 18px 高保证指尖可点，线只画 3px（与时刻线同粗细级）。
+   0.9.67 三车道：加宽后的轨道 60px 三等分，每类各占 1/3、位置固定互不重叠——
+     左 1/3（left:0）   = 移动侦测（橙）
+     中 1/3（left:20px）= 人员（蓝）
+     右 1/3（left:40px）= 车辆（青绿，含两轮车）
+   没有的类别留空位，不画空线：位置本身就是类别语义，扫一眼不用看图例。
+   （0.9.63 那版是「车道①全宽移动侦测 + 车道②车中/人右」，两类信息挤在
+   同一条线上互相压；0.9.67 起三足鼎立，谁在左中右永远不变） */
+.vtl .vmark{position:absolute;left:46px;width:60px;height:18px;margin-top:-9px;cursor:pointer;z-index:3}
+.vtl .vmark .lanes{position:absolute;inset:0}
+/* 线在命中区里的落点：盒子 18px 高、margin-top:-9px（盒子中心 = 事件时刻），
+   3px 线要中心对齐盒子中心就该落在 7.5px。0.9.67 写的是 5px（线中心 6.5），
+   整整差 2.5px —— 默认 120px/h 下等于标记比真实时刻早 1 分 15 秒。 */
+.vtl .vmark .lanes i{position:absolute;top:7.5px;display:block;height:3px;border-radius:2px}
+.vtl .vmark .lanes i.mot{left:0;width:19px}
+.vtl .vmark .lanes i.per{left:20px;width:19px}
+.vtl .vmark .lanes i.veh{left:40px;width:19px}
+/* 类别筛选未命中的时段/横线整体变淡（0.9.60）：不是没录，是这一条不看你选的类别。
+   保留类别色只降透明度 —— 变淡的那条也该看得出来是哪一类 */
+.vtl .vevspan.dim{opacity:.18}
+.vtl .vmark.dim .lanes{opacity:.22}
+/* 标注气囊：点横线弹出，随轨道滚动，列表行/播放钮直接跳播 */
+/* 事件气泡（0.9.90）：左边界从 114 挪到 132，给「事件线 → 气泡」的曲线留出 24px 弧长。
+   原来只隔 9px（车辆车道线尾在 105），曲线没有可画的长度，等于画了也看不见。
+   宽度上限跟着收：窄屏（375）时 375-148=227px 仍放得下标题+副文+按钮。 */
+.vbubble{position:absolute;left:132px;z-index:6;
+  min-width:min(190px, calc(100% - 148px));max-width:min(272px, calc(100% - 148px));
+  background:var(--surface);
+  border:1px solid var(--line);border-radius:13px;padding:10px 12px;
+  box-shadow:0 14px 36px rgba(10,14,22,.26);cursor:default}
+/* 气泡描边 = 事件类型色，与连到它的那根曲线同色（类型一眼对上） */
+.vbubble.k-motion{border-color:var(--warn)}
+.vbubble.k-person{border-color:var(--primary)}
+.vbubble.k-vehicle{border-color:var(--ev-veh)}
+/* 事件线 → 气泡的连接曲线（0.9.90）。整张 svg 盖在 #vtl 内容层上，
+   所以滚动/缩放/捏合时连线天然跟着走，不必逐帧重算坐标。
+   pointer-events:none：绝不抢事件线的点击。 */
+.vtlwire{position:absolute;left:0;top:0;pointer-events:none;z-index:4;overflow:visible}
+.vtlwire path{fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+/* 簇内多条线并排：降一档线宽与不透明度，三条挤在同一小段里也不糊 */
+.vtlwire.multi path{stroke-width:1.3;stroke-opacity:.9}
+.vtlwire circle{stroke:none}
+.vtlwire .w-motion{stroke:var(--warn)}
+.vtlwire .w-person{stroke:var(--primary)}
+.vtlwire .w-vehicle{stroke:var(--ev-veh)}
+.vtlwire .d-motion{fill:var(--warn)}
+.vtlwire .d-person{fill:var(--primary)}
+.vtlwire .d-vehicle{fill:var(--ev-veh)}
+/* 行高与行距是硬约定：VTL_ROW_Y0 / VTL_ROW_PITCH 靠它们算连线落点（有测试对账），
+   改这里必须同步改 JS 常量，否则线会连偏 */
+.vbubble .bt{font-size:13px;font-weight:600;color:var(--text);line-height:18px}
+.vbubble .bi{font-size:11.5px;color:var(--muted);margin-top:2px}
+.vbubble .row{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;margin:2px -8px 0;border-radius:8px;font-size:12px;cursor:pointer;color:var(--text)}
+/* 簇气泡的分行：行首类别色圆点 = 线的落点色，正在播的那一行淡底高亮 */
+.vbubble .row .bul{width:9px;height:9px;border-radius:50%;flex:0 0 9px}
+.vbubble .row .bul.motion{background:var(--warn)}
+.vbubble .row .bul.person{background:var(--primary)}
+.vbubble .row .bul.vehicle{background:var(--ev-veh)}
+.vbubble .row .lab{font-weight:600}
+.vbubble .row .cnt{font-size:11.5px;color:var(--muted);white-space:nowrap}
+.vbubble .row.on{background:var(--hover)}
+.vbubble .row:active{background:var(--hover)}
+.vbubble .row b{font-variant-numeric:tabular-nums}
+.vbubble .row .d{margin-left:auto;font-size:10.5px;color:var(--primary);white-space:nowrap}
+/* 事件气泡里的类别摘要（0.9.60）：加粗 + 类别色 + 小色片，和时间轴横线段同一套色。
+   事件气泡里的类别摘要复用同一套类（0.9.89 起顶部不再有全天摘要行），故不限定在 .vbubble 内。
+   色片类名用 cd 不用 d：.vbubble .row .d 是「播放 ▸」，会撞 */
+.clsw{display:inline-flex;align-items:center;gap:3px;font-weight:600;white-space:nowrap}
+.clsw .cd{display:block;width:8px;height:3px;border-radius:2px;flex:0 0 auto}
+.csep{color:var(--faint2);margin:0 1px}
+.vbubble .go{margin-top:8px;width:100%;height:30px;border-radius:9px;border:0;background:var(--primary);
+  color:#fff;font-size:12px;font-weight:600;cursor:pointer;padding:0}
+/* 固定时刻线：钉在滚动视口自下而上 2/3 高度（top 由 JS 按 vtlscroll 实测位置设置），
+   1px 红色细线无光晕只盖住轨道区，播放时时间轴内容在它下面向上滚（Aqara 式）；
+   左侧时刻文字与线互相居中——线正好对准数字的中腰 */
+.vnowline{position:absolute;left:0;right:0;pointer-events:none;z-index:5;margin-top:-1px}
+.vnowline i{display:block;width:64px;height:1px;background:var(--danger);border-radius:1px;margin-left:44px}
+.vnowline em{position:absolute;left:2px;top:0;transform:translateY(-50%);font-style:normal;font-weight:600;font-size:9px;
+  color:var(--danger);background:var(--surface);border-radius:4px;padding:1px 3px;font-variant-numeric:tabular-nums}
+/* 回放页菜单栏：更矮更轻（仅回放页，不动其它页的 .hdr） */
+#page-play .hdr{padding:3px 16px 7px}
+/* 时间轴缩放（0.9.89）：原来占卡片顶上单独一行（标题｜摘要｜− ×1.0 ＋），
+   现改为贴时间轴最右侧、竖向居中的悬浮胶囊，那行高度整个让给时间轴。
+   「＋ / 倍率 / −」竖排：与时间轴上下滚动的方向一致，拇指操作不别扭。 */
+.vtlzoom{position:absolute;right:10px;top:50%;transform:translateY(-50%);z-index:4;
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:5px 4px;border-radius:13px;background:var(--surface);border:1px solid var(--line);
+  box-shadow:0 6px 18px rgba(10,14,22,.14);transition:opacity .12s}
+.vtlzoom button{width:30px;height:28px;border-radius:9px;border:1px solid var(--line);
+  background:var(--surface);color:var(--text2);font-size:15px;line-height:1;cursor:pointer;padding:0}
+.vtlzoom button:active{background:var(--fill)}
+.vtlzoom b{font-size:10.5px;color:var(--muted);min-width:34px;text-align:center;font-weight:600}
+/* 事件气囊从 left:114px 铺开、最宽 272px，会横穿到右侧缩放胶囊上：
+   气囊打开期间把缩放藏起来，别让两个浮层叠在一起 */
+.vtlcard.bubbleopen .vtlzoom{opacity:0;pointer-events:none}
+/* 回放页固定布局：画面区/控制条固定，时间轴卡吃满剩余高度（vtlscroll 内部滚动）。
+   不用整页滚动——固定高 flex 列里 pstage 会被压扁（实测 205px→68px）。 */
+.vtlcard{margin:10px 12px 12px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 12px 6px;flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
+.vtlscroll{flex:1;min-height:0;overflow-y:auto;border-radius:10px;background:var(--fill);touch-action:pan-y;scrollbar-width:none}
+.vtlscroll::-webkit-scrollbar{display:none}
+/* 日期下拉按钮（原在 hdropt 内，现直接在菜单栏行尾，去掉了文件跳转按钮） */
+.daybtn{display:flex;align-items:center;gap:5px;font-size:15px;font-weight:600;color:var(--text);
+  background:none;border:0;padding:6px 2px;cursor:pointer;white-space:nowrap}
+#page-play .hdr-row .daybtn{margin-left:auto}
+.daybtn svg{width:14px;height:14px;stroke:var(--faint);fill:none;stroke-width:2.4;stroke-linecap:round}
+/* 日期下拉：右侧对齐弹出 */
+.daypick{position:absolute;right:12px;top:48px;z-index:30;display:none;min-width:150px;max-height:340px;
+  overflow-y:auto;background:var(--surface);border:1px solid var(--line);border-radius:15px;padding:6px;
+  box-shadow:0 14px 36px rgba(10,14,22,.26)}
+.daypick.on{display:block}
+.daypick .dp{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:10px;font-size:13px;cursor:pointer}
+.daypick .dp:active{background:var(--hover)}
+.daypick .dp.on{background:var(--fill);color:var(--primary);font-weight:600}
+.daypick .dp .w{margin-left:auto;font-size:11px;color:var(--faint)}
+/* 回放页常驻画面区（P1）：默认 16:9，双 video A/B 热切换。
+   实际画幅由 --vasp 覆盖（元数据到了就按摄像机的真实宽高比，避免 4:3 摄像头
+   在 16:9 框里上下留黑边） */
+.pstage{position:relative;margin:10px 12px 0;aspect-ratio:var(--vasp,16/9);background:#000;border-radius:14px;overflow:hidden;flex:0 0 auto}
+.pstage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .18s;background:#000}
+.pstage video.on{opacity:1}
+.pstage .pbig{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;background:rgba(0,0,0,.28);font-size:13px;cursor:pointer;z-index:2}
+.pstage .pbig.off{display:none}
+/* 暂停浮层（0.9.88）：画面中央的胶囊继续键，只在"已开始播且暂停"时出现。
+   不做整屏变暗（那是未开播的 .pbig 才需要），只让按钮自己浮在画面上。 */
+.pstage .pfloat{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;
+  display:none;align-items:center;gap:8px;padding:9px 15px;border:1px solid rgba(255,255,255,.28);
+  border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:12.5px;font-family:inherit;
+  line-height:1;cursor:pointer;backdrop-filter:blur(4px);box-shadow:0 8px 22px rgba(0,0,0,.4)}
+.pstage .pfloat.on{display:flex}
+.pstage .pfloat svg{width:20px;height:20px;fill:#fff;display:block;flex:0 0 auto}
+.pstage .pfloat:active{transform:translate(-50%,-50%) scale(.96);opacity:.85}
+/* 操作条：画面区外的下方（不遮画面）；全屏时同栏变渐变底白字 */
+.pops{position:relative;display:flex;align-items:center;gap:4px;margin:8px 12px 0;flex:0 0 auto}
+.pbtn{height:30px;min-width:32px;border:0;background:none;color:var(--text2);cursor:pointer;padding:0 4px;
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;font-family:inherit}
+.pbtn svg{width:17px;height:17px;display:block}
+.pbtn:active{opacity:.6}
+.pbtn.pwide{padding:0 7px}
+.ptm{color:var(--muted);font-size:11.5px;margin-left:2px;font-variant-numeric:tabular-nums}
+.pseg{margin-left:auto;display:flex;background:var(--fill);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.pseg button{border:0;background:none;color:var(--muted);font-size:11px;padding:5px 9px;cursor:pointer;font-family:inherit}
+.pseg button.on{background:var(--primary);color:#fff;font-weight:600}
+/* 活动类别筛选（0.9.60）：只在「活动」模式出现。三个全关 = 活动模式没有目标，
+   由点击拦截兜住（见 data-pvcls 绑定），不会出现空转。
+   pvcatwrap 把筛选 chips 与类别图例包在一起：全屏模式下整块变成右下角绝对定位，
+   图例叠在 chips 上方（0.9.62），两行共用同一个锚点，不会互相压 */
+.pvcatwrap{flex:0 0 auto}
+.pcat{display:none;align-items:center;gap:5px;margin:6px 12px 0;flex:0 0 auto}
+.pcat.on{display:flex}
+.pcatlab{font-size:11px;color:var(--faint2);margin-right:1px}
+.pcat button{border:1px solid var(--line);background:var(--fill);color:var(--muted);
+  font-size:11px;padding:4px 10px;border-radius:20px;cursor:pointer;font-family:inherit}
+.pcat button.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:600}
+body.fsmode #page-play.on .pvcatwrap{position:absolute;left:12px;right:12px;z-index:21;
+  bottom:calc(54px + env(safe-area-inset-bottom) + 6px);
+  display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+body.fsmode #page-play.on .pcat{margin:0;justify-content:flex-end}
+body.fsmode #page-play.on .pcat button{background:rgba(0,0,0,.45);border-color:rgba(255,255,255,.32);color:rgba(255,255,255,.86)}
+body.fsmode #page-play.on .pcat button.on{background:rgba(255,255,255,.94);color:#111;border-color:transparent}
+/* 类别图例（0.9.62，0.9.67 改三车道图示）：常驻，时间轴配色的一眼对照表。
+   每项带一枚 18×6 迷你轨道，色片落在轨道里的实际位置（左/中/右各 1/3），
+   图例本身就是「位置语义」的说明书。AI 没开（台账无 cls）时两个 AI 类别降透明度 */
+.evlegend{display:flex;align-items:center;gap:11px;margin:7px 12px 0;flex:0 0 auto;
+  font-size:10px;color:var(--faint2);line-height:1}
+.evlegend .lg{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;
+  border:1px solid transparent;background:none;color:inherit;font:inherit;line-height:1;
+  padding:3px 8px;border-radius:20px;cursor:default}
+/* 活动模式下图例本身就是筛选器（0.9.88）：选中项裹蓝色胶囊底，
+   不再单开一行「只看…」chips。全时模式下保持只读。 */
+.evlegend.actmode .lg{cursor:pointer}
+.evlegend.actmode .lg:active{opacity:.72}
+.evlegend.actmode .lg.on{background:var(--primary);border-color:var(--primary);color:#fff;
+  text-shadow:none}
+.evlegend.actmode .lg.on .d{background:rgba(255,255,255,.30)}
+.evlegend.noai.actmode .lg.ai.on{opacity:.55}   /* AI 没数据时即便勾上也留"未启用"暗示 */
+.evlegend .lg .d{position:relative;display:block;width:18px;height:6px;border-radius:2px;flex:0 0 auto;
+  background:var(--track)}
+.evlegend .lg .d i{position:absolute;top:2px;display:block;height:2px;border-radius:1px}
+.evlegend .lg .d.mot i{left:0;width:6px}
+.evlegend .lg .d.per i{left:6px;width:6px}
+.evlegend .lg .d.veh i{left:12px;width:6px}
+.evlegend.noai .lg.ai{opacity:.3}
+body.fsmode #page-play.on .evlegend{margin:0;justify-content:flex-end;
+  color:rgba(255,255,255,.7);text-shadow:0 1px 2px rgba(0,0,0,.7)}
+/* 倍速弹层：从操作条向上弹的小网格 */
+.vspop{position:absolute;right:0;bottom:36px;z-index:24;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:5px;
+  display:none;grid-template-columns:repeat(2,1fr);gap:3px;box-shadow:0 12px 30px rgba(10,14,22,.24)}
+.vspop.on{display:grid}
+.vspop button{border:0;background:none;color:var(--text);font-size:12px;padding:7px 13px;border-radius:8px;cursor:pointer;font-family:inherit}
+.vspop button.on{background:var(--primary);color:#fff;font-weight:600}
+/* 全屏回放：画面**整屏铺满**（连原先留给操作条的 54px 底条也吃掉），
+   时间轴与操作条改成悬浮在画面上——播放中时间轴隐去、暂停恢复 */
+body.fsmode #page-play.on{background:#000;overflow:hidden}
+/* 0.9.54：删掉 object-fit:cover。cover 在竖屏（0.46:1 舞台装 16:9 画面）会把左右
+   各裁掉一大半，在横屏（2.2:1）又把上下裁掉——同一台摄像机两个方向看到的画面
+   完全不同，用户判断就是"画面被裁剪"。改回 contain：完整画幅优先，多出来留黑边 */
+body.fsmode #page-play.on .pstage{position:absolute;inset:0;flex:none;margin:0;
+  border-radius:0;aspect-ratio:auto;z-index:1}
+body.fsmode #page-play.on .pstage video{object-fit:contain}
+/* 操作条：压底悬浮（渐变底），不再独占一条高度 —— 画面在它下面继续延伸。
+   按钮放大到 42px 见方、右侧筛选与全屏成组，方便点 */
+body.fsmode #page-play.on .pops{position:absolute;left:0;right:0;bottom:0;margin:0;gap:2px;z-index:21;
+  height:calc(54px + env(safe-area-inset-bottom));
+  padding:0 max(12px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(12px,env(safe-area-inset-left));
+  background:linear-gradient(transparent,rgba(0,0,0,.8))}
+body.fsmode #page-play.on .pbtn,body.fsmode #page-play.on .ptm{color:#fff}
+body.fsmode #page-play.on .pbtn{height:42px;min-width:42px;padding:0 6px}
+body.fsmode #page-play.on .pbtn svg{width:21px;height:21px;color:#fff}
+body.fsmode #page-play.on .pbtn.pwide{min-width:48px;font-size:12.5px}
+body.fsmode #page-play.on .ptm{font-size:12.5px;margin:0 8px 0 4px;color:rgba(255,255,255,.94)}
+body.fsmode #page-play.on .pseg{margin-left:auto;height:38px;border-radius:11px;background:rgba(0,0,0,.45);border-color:rgba(255,255,255,.32)}
+body.fsmode #page-play.on .pseg button{padding:0 16px;font-size:12px;color:rgba(255,255,255,.86)}
+body.fsmode #page-play.on .pseg button.on{background:rgba(255,255,255,.94);color:#111}
+body.fsmode #page-play.on .vspop{background:rgba(18,22,30,.95);border-color:rgba(255,255,255,.2);
+  bottom:calc(62px + env(safe-area-inset-bottom))}
+body.fsmode #page-play.on .vspop button{color:#fff}
+body.fsmode #page-play.on .vtlcard{position:absolute;left:0;right:0;
+  bottom:calc(56px + env(safe-area-inset-bottom));max-height:46%;z-index:20;margin:0;
+  background:transparent;border:0;border-radius:0;padding:8px 14px 4px;
+  box-shadow:none;transition:opacity .18s,transform .18s}
+body.fsmode #page-play.on .vtlscroll{background:transparent}
+/* 全屏时背景是视频画面：缩放胶囊要自带深色底才看得清；
+   全天统计行只在这一刻露出来（白字 + 投影，压在画面上也读得清） */
+body.fsmode #page-play.on .vtlstat{display:flex;color:rgba(255,255,255,.74);text-shadow:0 1px 2px rgba(0,0,0,.7)}
+body.fsmode #page-play.on .vtlstat b{color:#fff}
+body.fsmode #page-play.on .vtlzoom{background:rgba(18,22,30,.84);border-color:rgba(255,255,255,.22);
+  box-shadow:0 8px 22px rgba(0,0,0,.5)}
+body.fsmode #page-play.on .vtlzoom button{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.26);color:#fff}
+body.fsmode #page-play.on .vtlzoom b{color:rgba(255,255,255,.78)}
+body.fsmode #page-play.on .vtlnote{color:rgba(255,255,255,.78);text-shadow:0 1px 2px rgba(0,0,0,.7)}
+body.fsmode #page-play.on .vtl .vhour{color:rgba(255,255,255,.66);
+  border-top-color:rgba(255,255,255,.28);text-shadow:0 1px 2px rgba(0,0,0,.65)}
+/* 未录制的底轨在画面上是浅灰块，透明底时太扎眼——压成半透明白 */
+body.fsmode #page-play.on .vtl .vtrack{background:rgba(255,255,255,.22)}
+body.fsmode #page-play.on .vnowline em{background:rgba(0,0,0,.45)}
+body.fsmode #page-play.on .vbubble{background:rgba(16,20,28,.92);border-color:rgba(255,255,255,.2)}
+body.fsmode #page-play.on.pvplaying .vtlcard{opacity:0;transform:translateY(14px);pointer-events:none}
+
+/* ---------- 0.9.55 全屏「黑边轨」 ----------
+   横屏时 16:9 画面在 2.1:1 的舞台上左右各留一条黑边（约 77px）。黑边是白送的地方，
+   就把按钮全搬进去：播放控制排左轨、退出/旋转排右轨，画面一个像素都不压。
+   rail 类由 syncRail() 按真实画幅算（黑边 <44px 就不加，退回 0.9.54 的底栏悬浮）。 */
+body.fsmode #page-play.on.rail .pops{
+  position:absolute;left:0;top:0;right:auto;bottom:0;width:var(--railw,56px);
+  height:auto;display:flex;flex-direction:column;justify-content:center;align-items:center;
+  gap:6px;padding:0;background:none;z-index:22}
+body.fsmode #page-play.on.rail .pops .pbtn{width:42px;min-width:42px;height:42px;padding:0}
+/* 当前时刻竖排：56px 宽的轨道横着放不下 8 个字符 */
+body.fsmode #page-play.on.rail .pops .ptm{writing-mode:vertical-rl;text-orientation:mixed;
+  font-size:11px;margin:2px 0;letter-spacing:0;color:rgba(255,255,255,.94);
+  text-shadow:0 1px 2px rgba(0,0,0,.8)}
+/* 全时 / 活动 改成竖排两段 */
+body.fsmode #page-play.on.rail .pops .pseg{margin:0;flex-direction:column;width:46px;
+  height:auto;border-radius:10px}
+body.fsmode #page-play.on.rail .pops .pseg button{padding:0;height:32px;font-size:11px;
+  width:100%;text-align:center}
+/* 倍速弹层贴着左轨内侧弹出（临时弹层，不常驻） */
+body.fsmode #page-play.on.rail .vspop{left:calc(var(--railw,56px) + 6px);right:auto;bottom:auto;
+  top:50%;transform:translateY(-50%)}
+/* 时间轴让开左右两轨，底部不再给操作条留高度 */
+body.fsmode #page-play.on.rail .vtlcard{left:var(--railw,56px);right:var(--railw,56px);
+  bottom:10px;max-height:68%}
+/* 退出 / 旋转同样进右轨，只留图标 */
+body.fsmode.rail #fsTools{position:absolute;top:0;right:0;bottom:0;width:var(--railw,56px);
+  display:none;flex-direction:column;justify-content:center;align-items:center;gap:8px;z-index:23}
+body.fsmode.rail #fsTools.on{display:flex}
+body.fsmode.rail #fsTools button{width:42px;min-width:42px;height:42px;padding:0}
+body.fsmode.rail #fsTools button span{display:none}
+/* 旋转态的原生滚动方向按屏幕坐标判定，浏览器不认这层 rotate 变换：
+   时间轴的"竖向"在屏幕上其实是横向，会被 touch-action:pan-y 拦掉 → 交给 JS 换算 */

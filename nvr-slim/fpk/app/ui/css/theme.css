@@ -1,0 +1,57 @@
+/* ============ theme.css · 设计令牌与深浅两套取值 ============
+   为什么单独一个文件：全站颜色只允许从变量来。以前散在各页写死的 #2f6bff
+   一改就要全库搜替换，深色主题下漏改一处就是一块看不清的文字。
+   事件类别色（橙/蓝/绿）与归档紫也在这一层，它们跨页复用，属于令牌不算组件。
+   ------------------------------------------------------------------
+   本文件由 build.sh 合成进 app/ui/index.html 的样式区，改这里才生效；
+   直接改 index.html 里那段会被下一次合成覆盖。 */
+
+:root{
+  --bg:#f4f5f7; --surface:#fff; --line:#e8eaef; --line2:#f1f3f7;
+  --text:#1b1e24; --muted:#6a7280; --faint:#9aa1ac;
+  --primary:#2f6bff; --primary-soft:#ecf1ff;
+  --keep:#1f9d63; --keep-soft:#e8f7ef;
+  --warn:#c47c00; --warn-soft:#fdf3e0;
+  --danger:#d43b3b;
+  --text2:#4d5563; --faint2:#b0b6c0;
+  --fill:#eef1f5; --track:#e3e7ee; --sw-off:#dfe3ea; --hover:#fbfcfd;
+  --primary-soft2:#e0e9ff; --primary-line:#c8d8ff; --warn-fg:#8a5a00;
+  --stage:#e9ebf0; --dot:#2b3a55; --live:#22b573;
+  /* 事件类别色（0.9.62，0.9.67 定版）：橙=移动侦测 蓝=人员 绿=车辆（含两轮车）。
+     车辆原来用紫，3px 细线上和蓝分不出来，换成绿后三者色相拉开 40°/220°/145° */
+  --ev-veh:#0f9d58;
+  /* 归档浓缩的固定色（0.9.111）。以前存储条里全时用 --primary(#2f6bff)、
+     归档写死 #5c8fd6，两个都是蓝的 —— 浅色下难分，深色下 --primary 变成
+     #5c8dff 后几乎一模一样，图例完全失效。改用紫色，与全时的蓝拉开 60° 以上，
+     浅色/深色两套主题都成立。时间轴归档块同步用这个色。 */
+  --arch:#8b5cf6;
+  /* 归档色的淡底与描边（0.9.113 文件页日期条分色用） */
+  --arch-soft:#efe7fd; --arch-line:#d9c8fb;
+  --pw:390px; --ph:844px;
+}
+/* 深色：跟随系统（html[data-theme=dark]，由 head 内联脚本与下方 THEME 引擎控制） */
+html[data-theme="dark"]{
+  --bg:#14161b; --surface:#1c1f26; --line:#2a2e37; --line2:#23262e;
+  --text:#e9ebef; --muted:#98a0ac; --faint:#7b828e;
+  --text2:#b6bdc9; --faint2:#59606c;
+  --primary:#5c8dff; --primary-soft:#1e2942;
+  --keep:#35c98c; --keep-soft:#12301f;
+  --warn:#e2a53c; --warn-soft:#332812;
+  --danger:#ff7070;
+  --fill:#242833; --track:#2c313c; --sw-off:#3b4250; --hover:#232830;
+  --primary-soft2:#263352; --primary-line:#35476e; --warn-fg:#e6c07c;
+  --stage:#0a0c10; --dot:#8fa0bd; --live:#2fd08b;
+  --ev-veh:#34d399;
+  --arch:#a78bfa;   /* 归档色（深色下提亮，仍与 --primary:#5c8dff 区分得开） */
+  --arch-soft:#241d38; --arch-line:#3d3160;
+}
+html[data-theme="dark"] .card{box-shadow:0 1px 2px rgba(0,0,0,.45)}
+html[data-theme="dark"] .toast{background:rgba(8,10,14,.94)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{margin:0;background:var(--stage);color:var(--text);
+  font:15px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  display:grid;place-items:center;overflow:hidden}
+.mono{font-family:"Cascadia Mono",Consolas,"SF Mono",monospace;font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;background:none;border:none;padding:0;cursor:pointer}
+.faint{color:var(--faint)}

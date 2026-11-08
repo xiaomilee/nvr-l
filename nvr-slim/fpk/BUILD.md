@@ -203,6 +203,7 @@ fpk/
 ├── wizard/                install 4 步（端口/录制目录/衔接方式）/ config 3 步；**必须进包**
 ├── app/
 │   ├── ui/                index.html（手机原型，明暗跟随飞牛）+ config（iframe 入口 nvr-l.main）
+│   │   └── css/           样式源：theme/base/components/pages/player，构建时合成进 index.html（不进包）
 │   ├── server/
 │   │   ├── nvr_slim.py    HTTP 服务、路由、线程编排
 │   │   ├── runtime.py     配置（带 mtime 缓存）、核显自检、槽位池、工具探测
@@ -214,7 +215,8 @@ fpk/
 │   │   └── retention.py   每日定点清理
 │   └── bin/               放静态 ffmpeg（可选，见 README.md）
 ├── tools/
-│   ├── validate.py        75 项结构/语法校验（打包前必跑）
+│   ├── validate.py        77 项结构/语法校验（打包前必跑）
+│   ├── compose_ui.py      样式合成：css/*.css → index.html 的样式区（幂等，可 --check）
 │   ├── gen_icons.py       纯标准库生成四件图标
 │   └── pack_fpk.py        无 fnpack 的 fpk 打包器（checksum=md5(app.tgz) 自动回填）
 ├── dist/                  打包产物 nvr-l-0.3.0_x86.fpk
@@ -228,9 +230,21 @@ fpk/
 ## 打包
 
 ```bash
-bash build.sh            # 结构 → 参数 → 保留 → 衔接 → 打包（无 fnpack 时用 pack_fpk.py）
+bash build.sh            # 合成样式 → 结构 → 全部单测 → 打包（无 fnpack 时用 pack_fpk.py）
 bash build.sh --check    # 只校验不打包
 ```
+
+**0.9.123 起多了一步「样式合成」**，排在结构校验**之前**（validate 会核对
+`index.html` 与 `app/ui/css/` 是否同步，放后面就变成核对上一轮的产物）：
+
+```bash
+python tools/compose_ui.py           # css/*.css → index.html 的样式区（幂等，没变化不写文件）
+python tools/compose_ui.py --check    # 只查是否同步，不同步退出码 1
+```
+
+合成顺序固定为 `theme → base → components → pages → player`（令牌在前、页面覆盖在后），
+**不要按文件名排序**。页面在设备上仍是单个 `index.html`（无 `<link>` 外链，首屏不闪白），
+`app/ui/css/` 只是仓库里的源，不进包 —— 否则会让人以为在设备上改 css 能生效。
 
 fpk 布局：包根 tar.gz，成员 `manifest`（含 `checksum=md5(app.tgz)`）、
 `app.tgz`（app/ 内容在根）、`cmd/`、`config/`、`ui/`（app/ui 副本）、

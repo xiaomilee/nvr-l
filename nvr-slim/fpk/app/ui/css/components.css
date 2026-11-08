@@ -1,0 +1,119 @@
+/* ============ components.css · 跨页复用的控件 ============
+   输入框、按钮、步进器、折叠卡、键值行这类"多页共用一套观感"的积木。
+   判断标准：同一个 class 在两页以上出现 → 放这里；只服务一页 → 放 pages.css。
+   以前这些散落在各页段落里，改一处输入框高度要在三个页面段落里各找一遍。
+   ------------------------------------------------------------------
+   合成进 index.html 的样式区，改这里才生效。 */
+
+/* ---------- 设置页表单 ---------- */
+.fld{margin:2px 0 10px}
+.fld label{display:block;font-size:11.5px;color:var(--faint);margin-bottom:5px}
+.fld input[type=text],.fld input[type=password],.fld input[type=number]{width:100%;height:38px;border:1px solid var(--line);
+  border-radius:10px;padding:0 11px;font:13.5px/1 -apple-system,"Microsoft YaHei",sans-serif;color:var(--text);
+  background:var(--bg);outline:none}
+.fld input:focus{border-color:var(--primary);background:#fff}
+.fld .half{display:flex;gap:8px}
+.fld .half>div{flex:1}
+.fld select{width:100%;height:38px;border:1px solid var(--line);border-radius:10px;padding:0 8px;
+  font:13px/1 -apple-system,"Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg);outline:none}
+.rtspbox{background:var(--bg);border:1px dashed var(--line);border-radius:10px;padding:9px 11px;margin-top:8px}
+.rtspbox label{font-size:11px;color:var(--faint)}
+.rtspbox code{display:block;font:11.5px/1.5 "Cascadia Mono",Consolas,monospace;color:var(--text2);margin-top:2px;
+  word-break:break-all}
+.camrow{display:flex;align-items:center;gap:9px;background:var(--surface);border-radius:12px;
+  padding:11px 12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(20,26,40,.045)}
+.camrow .st{width:7px;height:7px;border-radius:50%;background:var(--live);flex:0 0 7px}
+.camrow .st.gray{background:var(--faint2)}
+.camrow .cn{font-size:13.5px;font-weight:600}
+.camrow .ci{font-size:11px;color:var(--faint);margin-top:1px}
+.camrow .tags{margin-left:auto;display:flex;gap:5px}
+.pillbtn{height:31px;padding:0 13px;border-radius:9px;background:var(--primary-soft);color:var(--primary);
+  font-size:12.5px;font-weight:500}
+.pillbtn.red{background:#fdecec;color:var(--danger)}
+.pillbtn.gray{background:var(--bg);color:var(--text2);font-weight:400}
+.dirrow{display:flex;gap:8px;align-items:center}
+.dirrow input{flex:1}
+.dirrow .pillbtn{flex:0 0 auto;height:38px}
+
+/* 保留周期步进器 */
+.retrow{display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line2)}
+.retrow:first-of-type{border-top:none;padding-top:2px}
+.retrow .rn{font-size:12.5px;min-width:0;flex:1}
+.retrow .rn i{display:block;font-style:normal;font-size:10.5px;color:var(--faint);margin-top:1px}
+.stepper{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.stepper button{width:26px;height:28px;display:grid;place-items:center;color:var(--text2);font-size:15px;
+  background:var(--bg)}
+.stepper button:active{background:#e9edf4}
+.stepper .val{min-width:52px;text-align:center;font-size:12.5px;font-variant-numeric:tabular-nums;
+  background:var(--surface);line-height:28px;border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.retrow .gb{width:52px;text-align:right;font-size:10.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.cleanline{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text2);background:var(--bg);
+  border-radius:9px;padding:8px 10px;margin-top:9px;line-height:1.5}
+.cleanline b{font-weight:600}
+.cleanline .dot{width:6px;height:6px;border-radius:50%;background:var(--live);flex:0 0 6px}
+
+/* ---------- 任务页 ---------- */
+.taskwrap{flex:1;overflow-y:auto;padding:12px 16px 20px}
+.tk{background:var(--surface);border-radius:12px;padding:12px;margin-bottom:9px}
+.tk .l1{display:flex;align-items:center;gap:8px}
+.tk .name{font-size:12.5px;font-family:"Cascadia Mono",Consolas,monospace}
+.tk .l2{display:flex;align-items:center;font-size:11.5px;color:var(--faint);margin-top:5px;gap:8px}
+.pbar{height:3px;border-radius:2px;background:var(--fill);margin-top:8px;overflow:hidden}
+.pbar i{display:block;height:100%;background:var(--primary);border-radius:2px}
+
+/* 遮罩提示 */
+.toast{position:absolute;left:50%;bottom:96px;transform:translate(-50%,10px);background:rgba(24,28,36,.92);
+  color:#fff;font-size:12.5px;padding:9px 14px;border-radius:10px;opacity:0;transition:.22s;pointer-events:none;z-index:50}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+
+/* ---------- 诊断：存储占用 ---------- */
+.dcard{background:var(--surface);border-radius:14px;padding:13px 14px;margin-bottom:10px}
+.dcard .dh{display:flex;align-items:baseline;gap:7px;font-size:12.5px;font-weight:600;margin-bottom:9px}
+.dcard .dh .tg{font-size:10px;color:var(--faint);font-weight:400}
+.dcard .dh .rt{margin-left:auto;font-size:10px;color:var(--faint);font-weight:400;
+  font-variant-numeric:tabular-nums}
+/* 可折叠卡的标题行（0.9.111 录像残片）：整行可点，右侧给展开/收起 */
+.dcard .dh.partshead{cursor:pointer;user-select:none;-webkit-user-select:none}
+.dcard .dh.partshead:active{opacity:.6}
+.sthead{display:flex;align-items:baseline;gap:6px;margin-bottom:8px}
+.sthead .big{font-size:21px;font-weight:700;letter-spacing:-.4px}
+.sthead .unit{font-size:11px;color:var(--muted)}
+.sthead .rt{margin-left:auto;font-size:10.5px;color:var(--faint)}
+.stbar-big{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--track)}
+.stbar-big i{display:block;height:100%}
+.stbar-big .f{background:var(--primary)}
+.stbar-big .c{background:var(--arch)}   /* 归档：紫，与全时的蓝拉开色相 */
+.stbar-big .k{background:#9dbaff}   /* 第三代色位：缩时产物已下线，保留占位不参与绘制 */
+.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:7px;font-size:10.5px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:5px}
+.legend i{width:8px;height:8px;border-radius:2px;display:block}
+.legend b{font-weight:600;color:var(--text2)}
+.strow{display:flex;align-items:center;gap:8px;margin-top:7px;font-size:11px}
+.strow .nm{flex:0 0 68px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--text2)}
+.strow .stbar{flex:1;display:flex;height:6px;border-radius:3px;overflow:hidden;background:var(--track)}
+.strow .stbar i{display:block;height:100%}
+.strow .stbar .f{background:var(--primary)}
+.strow .stbar .c{background:var(--arch)}
+.strow .stbar .k{background:#9dbaff}
+.strow .vv{flex:0 0 auto;min-width:78px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text2)}
+.strow .vv em{display:block;font-style:normal;font-size:9px;color:var(--faint)}
+.dline{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.6}
+.dline b{color:var(--text2);font-weight:600}
+/* 键值对形式的 dline（AI 检测诊断卡用）：左标签右值，长值自动换行不撑破卡片 */
+.dline.kv{display:flex;align-items:baseline;gap:8px}
+.dline .k{flex:0 0 auto;min-width:74px;color:var(--faint)}
+.dline .v{flex:1;min-width:0;text-align:right;word-break:break-all}
+.pathchip{display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 9px;border-radius:8px;
+  background:var(--fill);font-size:10px;color:var(--muted)}
+.pathchip code{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10px}
+.stnote{margin-top:9px;padding-top:9px;border-top:1px solid var(--line2);display:flex;gap:9px;align-items:flex-start}
+.stnote span{flex:1;font-size:10px;color:var(--faint);line-height:1.6}
+.btnmini{flex:0 0 auto;height:26px;padding:0 10px;border-radius:7px;background:var(--fill);
+  font-size:10.5px;color:var(--text2)}
+.btnmini:disabled{opacity:.6}
+.stload{margin-top:6px;font-size:11px;color:var(--faint);line-height:1.7}
+.envi{display:flex;gap:6px;flex-wrap:wrap}
+.envchip{height:23px;padding:0 9px;border-radius:7px;background:var(--fill);color:var(--text2);
+  font-size:10.5px;display:inline-flex;align-items:center}
+.envchip.ok{background:var(--keep-soft);color:#15794a}

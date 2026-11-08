@@ -216,12 +216,37 @@ for f in ["app/server/nvr_slim.py", "app/server/runtime.py", "app/server/params.
           # 语法错就是启动即崩，必须在打包前编译一遍。
           "app/server/event.py", "app/server/event_index.py",
           # 时间窗确认（0.9.122）：detect 在模块级 import 它，同一条理由。
-          "app/server/confirm.py"]:
+          "app/server/confirm.py",
+          # 前端合成器（0.9.123）：打包前的第一步就是它，语法错等于整个构建闸门失效。
+          "tools/compose_ui.py"]:
     try:
         py_compile.compile(os.path.join(ROOT, f), doraise=True)
     except py_compile.PyCompileError as e:
         pybad.append("%s: %s" % (f, str(e).splitlines()[0]))
 check("py_compile 服务脚本", not pybad, str(pybad))
+
+# 7.5 前端样式源（0.9.123 起 index.html 的样式区由 app/ui/css/*.css 合成）
+# 缺一个源文件，页面不会报错，只会少一页的版式 —— 这种"看起来正常"的缺失
+# 只能靠构建闸门拦。顺序表与 compose_ui.py 的 ORDER 必须一致，否则改了不生效。
+CSS_DIR = os.path.join(ROOT, "app", "ui", "css")
+CSS_ORDER = ["theme.css", "base.css", "components.css", "pages.css", "player.css"]
+missing_css = [n for n in CSS_ORDER if not os.path.isfile(os.path.join(CSS_DIR, n))]
+check("样式源文件齐全（theme/base/components/pages/player）", not missing_css,
+      "缺: %s" % missing_css)
+extra_css = ([n for n in sorted(os.listdir(CSS_DIR))
+              if n.endswith(".css") and n not in CSS_ORDER]
+             if os.path.isdir(CSS_DIR) else [])
+check("css/ 下没有未纳入合成顺序的文件", not extra_css, "多出: %s" % extra_css)
+ui_html = read("app/ui/index.html")
+check("index.html 有且只有一个样式合成标记",
+      ui_html.count("/* @@css:begin") == 1 and ui_html.count("/* @@css:end */") == 1,
+      "begin=%d end=%d" % (ui_html.count("/* @@css:begin"),
+                           ui_html.count("/* @@css:end */")))
+if not missing_css:
+    _sync = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "compose_ui.py"),
+                            "--check"], capture_output=True, text=True)
+    check("index.html 与 css/ 已同步", _sync.returncode == 0,
+          (_sync.stderr or _sync.stdout).strip())
 
 # 8. app/bin 说明与 ffmpeg 占位
 check("app/bin 有 ffmpeg 说明",

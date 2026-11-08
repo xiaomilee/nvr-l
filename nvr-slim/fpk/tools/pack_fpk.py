@@ -50,6 +50,12 @@ FIXED_MTIME = 1700000000
 # 它在 app.tgz 里（→ target/ui/index.html），不该在包根重复一份 110KB。
 UI_ROOT_KEEP = ("config", "images")
 
+# 按归档内完整路径排除的目录（相对于包根，用 "/" 分隔）。
+# ui/css/ 是前端样式源（0.9.123 起拆分出来），页面读的是合成后的 index.html。
+# 把源一起塞进包，会让人以为在设备上改 css 能生效 —— 改了完全没用，因为
+# 浏览器拿到的是 index.html 里的内联样式。源只留在仓库里。
+PKG_SKIP_DIRS = {"ui/css"}
+
 
 def read_manifest():
     m = {}
@@ -121,11 +127,17 @@ def add_tree(tar, src_dir, prefix, mode_dir=0o755, mode_file=0o644):
     """添加目录自身 + 其下全部文件，成员名不带 './'。"""
     add_dir(tar, prefix)
     for base, dirs, files in os.walk(src_dir):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS)
         rel_base = os.path.relpath(base, src_dir).replace("\\", "/")
-        for d in dirs:
+        keep = []
+        for d in sorted(dirs):
+            if d in EXCLUDE_DIRS:
+                continue
             rel = d if rel_base == "." else "%s/%s" % (rel_base, d)
+            if "%s/%s" % (prefix, rel) in PKG_SKIP_DIRS:
+                continue
+            keep.append(d)
             add_dir(tar, "%s/%s" % (prefix, rel))
+        dirs[:] = keep
         for fn in sorted(files):
             rel = fn if rel_base == "." else "%s/%s" % (rel_base, fn)
             if excluded(rel):          # 必须用相对路径：绝对路径里带暂存目录名会误伤全部文件
