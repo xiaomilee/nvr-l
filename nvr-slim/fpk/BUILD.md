@@ -204,7 +204,7 @@ fpk/
 ├── app/
 │   ├── ui/                index.html（手机原型，明暗跟随飞牛）+ config（iframe 入口 nvr-l.main）
 │   │   ├── css/           样式源：theme/base/components/pages/player，构建时合成进 index.html（不进包）
-│   │   └── js/            脚本源：core/ 5 + components/ 3 + pages/ 5 + player/ 1 共 14 份，按标记位置合成进脚本区（不进包）
+│   │   └── js/            脚本源：core/ 5 + components/ 3 + pages/ 9 + player/ 1 共 18 份，按标记位置合成进脚本区（不进包）
 │   ├── server/
 │   │   ├── nvr_slim.py    HTTP 服务、路由、线程编排
 │   │   ├── runtime.py     配置（带 mtime 缓存）、核显自检、槽位池、工具探测

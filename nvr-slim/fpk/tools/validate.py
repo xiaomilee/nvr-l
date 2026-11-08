@@ -258,10 +258,12 @@ JS_REQUIRED = ["core/auth.js", "core/state.js", "core/format.js",
                "components/shell.js", "components/fullscreen.js", "components/nav.js",
                "pages/clips.js", "pages/live_snap.js", "pages/live.js",
                "pages/settings_cards.js", "pages/settings_editor.js",
+               "pages/diagnostics.js", "pages/settings_persist.js",
+               "pages/playback_data.js", "pages/timeline.js",
                "player/player.js"]
 missing_js = [n for n in JS_REQUIRED
               if not os.path.isfile(os.path.join(JS_DIR, n.replace("/", os.sep)))]
-check("脚本源文件齐全（core 5 + components 3 + pages 5 + player 1）", not missing_js,
+check("脚本源文件齐全（core 5 + components 3 + pages 9 + player 1）", not missing_js,
       "缺: %s" % missing_js)
 _js_begin = len(re.findall(r"/\* @@js:begin[ ]", ui_html))
 check("index.html 的 js 合成标记成对",

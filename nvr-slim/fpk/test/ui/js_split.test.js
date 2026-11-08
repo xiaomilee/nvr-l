@@ -29,12 +29,15 @@ const JS_DIR = path.join(UI, "js");
    live_snap 在统一请求层之前（快照走 img.src，不经过 fetch），live.js 在它之后
    （要 POST 配置、按服务端通道表重排摄像头），所以同一张直播页被 core/api.js
    隔成两份，这不是漏搬。clips / player / live_snap 都在 core/api 之前，
-   设置页两段在它之后。 */
+   设置页两段在它之后。诊断、持久化、回放数据与时间轴四段排在设置页之后、
+   主题引擎之前 —— 它们要读设置页写进 GS / CAMERAS 的值，位置本来就在那儿。 */
 const ORDER = ["core/auth.js", "core/state.js", "core/format.js",
                "components/shell.js", "components/fullscreen.js", "components/nav.js",
                "pages/clips.js", "player/player.js", "pages/live_snap.js",
                "core/api.js", "pages/live.js",
                "pages/settings_cards.js", "pages/settings_editor.js",
+               "pages/diagnostics.js", "pages/settings_persist.js",
+               "pages/playback_data.js", "pages/timeline.js",
                "core/theme.js"];
 
 let pass = 0, fail = 0;
