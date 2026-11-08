@@ -22,7 +22,7 @@
 | 1 | 0.9.118 | 录像可信度：真实状态 + 缺口报告 | done | 64aa8ee |
 | 1.5 | 0.9.119 | 实测修复：状态原因不自相矛盾 + 测试机部署工具 | done | 8fbe09f |
 | 2 | 0.9.120 | 安全：API Token / 凭据收敛 / 前端统一请求层 | done | c113ff3 |
-| 3 | 0.9.121 | 事件中心：统一事件模型 + 跨摄像头检索 + 点击定位 | todo | - |
+| 3 | 0.9.121 | 事件中心：统一事件模型 + 跨摄像头检索 + 点击定位 | doing | 720a7da |
 | 4 | 0.9.122 | 检测治理：有界并发 + 时间窗确认 + 诊断完整 | todo | - |
 | 5 | 0.9.123 | 前端拆分 + 文档重构 + 按钮验收自动化 | todo | - |
 
@@ -49,6 +49,7 @@
 | 3 | 11-08 04:57 | 批次 2 切片一：安装级 token（`auth.py`）、统一鉴权闸、登录/cookie/轮换接口、页面粘贴引导；顺手修「界面谎报 stalled」（`status()` 与看门狗同源） | bb1034e / 010c162 | 未出包（批次未收尾，按规则不 bump）；152 只读出「两路实际在写、界面报 stalled」并已修 |
 | 4 | 11-08 06:35 | 批次 2 切片二：明文凭据不再落 localStorage（实测 `saveCfg` 原来整份序列化 camParams）、「清除地址」改显式按钮；新增 `redact.py` 统一脱敏（日志/诊断/试录 stderr），token 在 `auth.token()` 入口登记 | ea066ee | 未出包（批次只剩第 6/8 项）；后端 828 条 + 前端 cred 12 项全绿 |
 | 5 | 11-08 08:06 | 批次 2 收尾：前端 18 处裸 fetch 收进 `API.get/post`（超时/401/JSON/CSRF 四处只写一遍），修「测试通知」永远 403；部署工具补同步 `/var/apps/nvr/cmd`（旧 main 把 `/api/health` 的 401 当失败，导致"装成功了却判超时还回滚"）+ `wait_health` 重读 port.txt | c113ff3 | 0.9.120 出包；152 部署七项全绿（含无凭证必须 401），两路 `hstate=recording` |
+| 6 | 11-08 09:40 | 批次 3 切片一：`event.py`（身份/生命周期/定位）+ `event_index.py`（SQLite 投影）+ 三个只读接口（`/api/events`、`/<id>`、`/<id>/clip`）；测试 111 条 | 720a7da | 未出包（批次只剩前端页与版本收尾）；后端 944 + 前端全绿，validate 73 项通过 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -210,18 +211,43 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 
 清单：
 
-- [ ] 新模块 `app/server/event.py`：统一事件生命周期
+- [x] 新模块 `app/server/event.py`：统一事件生命周期
       `DETECTED → CANDIDATE → CONFIRMED → ACTIVE → ENDED → INDEXED`，
       `event_id` 稳定幂等（`cam_YYYYMMDD_HHMMSS`，延长结束时间不产生新 id）。
-- [ ] 新模块 `app/server/event_index.py`：SQLite（标准库）索引
+      *（第 6 轮落地。三条口径写死在模块里：id 只由「哪一路 + 何时开始」推出，
+      所以事件变长/重判/重建索引都不换 id；六态只许前进，**正在进行的窗口不许
+      标已入库**（结束时间还会变）；`mv=-1` 如实留 `None` —— 未知不等于没有运动，
+      置信度台账里没有就留 `None`，不编一个 0.5。定位 `resolve()` 一并放在这里：
+      按「事件起点所在的片」算，未封口如实报 `not_sealed`，前摇被片头截断标
+      `clamped`，**不做跨片前摇** —— 单个 `<video>` 播到片尾就停，事件本身反而
+      没播到。）*
+- [x] 新模块 `app/server/event_index.py`：SQLite（标准库）索引
       `event_id / camera_id / start_at / end_at / categories / confidence_max / motion_confirmed / source_date / source_segment`。
       台账 JSON 保持不动，索引可从台账重建（`rebuild_index()`）。
-- [ ] API：`GET /api/events?from=&to=&cam=&cat=&limit=`、`GET /api/events/<id>`、
+      *（第 6 轮落地。另外存了 `start_sec/end_sec`（当天钟点秒，回放定位要它）与
+      一张 `day_sync(date, sig)` 表：台账指纹没变就跳过整天重算。整天先删后插，
+      重判后事件变少也能如实反映。类别存 `,person,vehicle,` 整词 LIKE，
+      `two_wheeler` 不会命中 `person`。）*
+- [x] API：`GET /api/events?from=&to=&cam=&cat=&limit=`、`GET /api/events/<id>`、
       `GET /api/events/<id>/clip` → 返回 `{segment, offset_sec, url, missing_reason}`，
       定位口径：事件起点前 10 秒；跨分片、未封口、已删除、损坏都要给出明确 `missing_reason`。
+      *（第 6 轮落地。五种原因各有 code + 中文文案：`not_sealed` / `segment_missing` /
+      `empty_segment` / `corrupt_segment` / `no_segment_before`。"已删除"与"那段时间
+      没录上"用文件清单分不开，文案如实把两种都说出来。`url` 走既有
+      `/api/record/file`，不另开读文件的入口。"事件是否还在这一片里"用分片 **mtime**
+      判断（文件名分不出"一片被删"和"这段分片更长"），mtime 不在可信窗口就不采信。）*
 - [ ] 前端「事件」页：日期 + 摄像头 + 类别筛选、列表卡片、点击直接播放（前 10 秒入点）、前后 30 秒跳转。
 - [ ] 测试：`test_event.py`（合并/幂等/跨分片定位/缺失原因 15+ 条）、`test/ui/events.test.js`。
+      *（第 6 轮已落地 111 条：`test_event.py` 50、`test_event_index.py` 30、
+      `test_event_api.py` 31 —— 后端这侧够用了；**只剩 `test/ui/events.test.js`**，
+      等前端页一起写。）*
 - [ ] 版本 0.9.121。
+
+> 第 6 轮留下的收尾清单（下一轮按这个顺序做，做完就能收这一批）：
+> 前端事件页 + `test/ui/events.test.js` → 把 `/api/events` 加进
+> `tools/deploy_test.py` 的自检项（现在六项 + 凭证设防，事件接口还没被真机验过）
+> → 五处版本号 → 出包 → 部署 152 → 两路 `hstate` 复核 → 验收「点一条真实人员
+> 事件，2 秒内开始播，起点在事件前 10 秒内」。
 
 **验收**：任选一条真实人员事件，页面点击后 2 秒内开始播放，且播放起点在事件发生前 10 秒内。
 
