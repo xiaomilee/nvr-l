@@ -5436,12 +5436,51 @@ const DET = { st:null };   /* /api/status 的 detect 快照：loaded/error/avg_m
 const ING = { st:null, fr:null };
 const NT  = { st:null };   /* /api/status 的 notify 快照：recent/pending */
 
+/* 0.9.122：检测"能不能用"由后端给 state 判（disabled/starting/unavailable/ready），
+   这里只做翻译。以前前端自己拼 running/loaded/error 三段判断，同一个现场在
+   设置页说"未运行"、在诊断卡说"加载中"——用户不知道该信哪个，也不知道要不要重启。
+   st.state 缺失（旧服务端）时仍走老分支，页面不会因为后端没升级就白屏。 */
+function detStateZh(st){
+  const s = st || {};
+  if(s.state === "disabled") return {t:"已关闭", warn:false};
+  if(s.state === "starting") return {t:"加载中…", warn:false};
+  if(s.state === "unavailable")
+    return {t:"不可用 · " + String(s.error_message || s.error || "原因未知").slice(0, 60), warn:true};
+  if(s.state === "ready") return {t:"正常", warn:false};
+  /* 旧服务端兜底 */
+  if(!s.running) return {t:"未运行", warn:true};
+  if(s.error) return {t:"不可用 · " + String(s.error).slice(0, 60), warn:true};
+  if(!s.loaded) return {t:"加载中…", warn:false};
+  return {t:"正常", warn:false};
+}
+
+/* 失败码 → 下一步该干什么。只报错不指路，用户只能来问；这几个码的处置方式
+   差别很大（装 ffmpeg / 重装应用 / 换 wheel），不能笼统写"检测不可用"。 */
+function detHintOf(st){
+  const c = (st && st.error_code) || "";
+  if(c === "FFMPEG_NOT_FOUND") return "这台机器上没找到 ffmpeg：装好 ffmpeg，或在设置里指定路径后重启服务。";
+  if(c === "MODEL_MISSING")    return "随包模型 yolo11n.onnx 不见了：重装应用，或从官方包补回 share/models/。";
+  if(c === "RUNTIME_FAIL")     return "随包 onnxruntime / numpy 与本机 Python 版本对不上：核对下面 Python / wheel 一行。";
+  if(c === "MODEL_LOAD_FAIL")  return "模型加载报错：常见于 CPU 指令集不支持，完整原因在服务运行日志里。";
+  if(c === "WORKER_DOWN")      return "检测进程没起来：服务可能是旧版本，或刚改完配置还没重启。重开一次服务再刷新。";
+  if(c === "INFER_ERR" || c === "FRAME_FAIL")
+    return "推理／取帧失败：看下面每路的「最近错误」，多数是摄像头侧问题，与录像无关。";
+  return "服务可能是旧版本（没有检测 worker），或刚改完配置还没重启。重开一次服务再刷新。";
+}
+
+function detUnknownOf(st){
+  const cams = (st && st.per_cam) || {};
+  let n = 0;
+  Object.keys(cams).forEach(id=>{ n += cams[id].unknown || 0; });
+  return n;
+}
+
 function detStatusLine(){
   const st = DET.st;
   if(!LK.detEnable) return '<span class="v">已关闭</span>';
-  if(!st || !st.running) return '<span class="v" style="color:var(--warn)">未运行</span>';
-  if(st.error) return '<span class="v" style="color:var(--warn)">不可用 · ' + esc(String(st.error).slice(0,60)) + '</span>';
-  if(!st.loaded) return '<span class="v">加载中…</span>';
+  const z = detStateZh(st);
+  if(z.warn) return '<span class="v" style="color:var(--warn)">' + esc(z.t) + '</span>';
+  if(z.t !== "正常") return '<span class="v">' + esc(z.t) + '</span>';
   const cams = st.per_cam || {};
   let today = 0, hits = 0;
   Object.keys(cams).forEach(id=>{
@@ -5449,7 +5488,10 @@ function detStatusLine(){
     const cl = cams[id].cls || {};
     Object.keys(cl).forEach(k=>{ hits += cl[k]; });
   });
-  return '<span class="v">已加载 · CPU · 今日 ' + today + ' 帧 / 命中 ' + hits + ' 次'
+  /* 未知单独列：它既不是"在正常工作"，也不是"没人来过"，混进命中数会骗人 */
+  const unk = detUnknownOf(st);
+  return '<span class="v">正常 · 今日 ' + today + ' 帧 / 命中 ' + hits + ' 次'
+    + (unk ? ' · <span style="color:var(--warn)">未知 ' + unk + '</span>' : '')
     + (st.avg_ms ? ' · ' + st.avg_ms + 'ms/帧' : '') + '</span>';
 }
 
@@ -6715,20 +6757,23 @@ function diagSummary(){
     return s === "stalled" || s === "error";
   }).length;
   const free = REC.diskFreeGB;
-  /* AI 检测摘要（0.9.60）：没开就不提；开了但 worker 没起/推理报错要给个醒 */
+  /* AI 检测摘要（0.9.60）：没开就不提；开了但不可用要给个醒（0.9.122：
+     统一走 detStateZh，不再自己判 running/loaded，也不再只写"未运行"） */
   let det = "";
   if(LK.detEnable){
     const st = DET.st;
-    if(!st || !st.running) det = " · <span style='color:var(--warn)'>AI 识别未运行</span>";
-    else if(st.error) det = " · <span style='color:var(--warn)'>AI 推理不可用</span>";
-    else if(st.loaded){
+    const z = detStateZh(st);
+    if(z.warn) det = " · <span style='color:var(--warn)'>AI " + esc(z.t) + "</span>";
+    else if(st && st.state !== "starting" && st.loaded){
       const cams = st.per_cam || {};
       let hits = 0;
       Object.keys(cams).forEach(id=>{
         const cl = cams[id].cls || {};
         Object.keys(cl).forEach(k=>{ hits += cl[k]; });
       });
-      det = " · AI 命中 " + hits + " 次";
+      const unk = detUnknownOf(st);
+      det = " · AI 命中 " + hits + " 次"
+        + (unk ? " · <span style='color:var(--warn)'>未知 " + unk + "</span>" : "");
     }
   }
   return (ch.length ? (on + "/" + ch.length + " 路在录") : "录制状态未上报")
@@ -7156,13 +7201,25 @@ function cardDetectDiag(){
       + '未开启。开启路径：通用设置 · AI 检测。开启后这里会显示推理耗时、每路命中与通知记录。</div>'
       + '</div>';
   }
-  if(!st || !st.running){
+  /* 0.9.122：不可用与"正在加载"分开说。旧版把两者都写成「worker 未运行」，
+     用户看到就以为要重启服务；实际上首次启动要解 wheel + 载 10.7MB 模型，
+     几秒钟的事。现在按后端给的 state 分三档，并且不可用时给出失败码与下一步。 */
+  const z = detStateZh(st);
+  if(z.warn){
     const rw0 = (st && st.runtime) || {};
-    return head + '<div class="dline" style="color:var(--warn)">worker 未运行</div>'
+    return head
+      + '<div class="dline" style="color:var(--warn)">' + esc(z.t) + '</div>'
+      + ((st && st.error_code) ? line("失败码", esc(String(st.error_code)), true) : "")
       + (rw0.python ? line("Python / wheel", "Python " + esc(rw0.python) + " · "
                            + esc(rw0.ort || "") + (rw0.numpy ? " · " + esc(rw0.numpy) : "")) : "")
       + '<div class="dline" style="font-size:10px;color:var(--faint)">'
-      + '服务可能是旧版本（没有检测 worker），或刚改完配置还没重启。重开一次服务再刷新。</div>'
+      + esc(detHintOf(st)) + '</div>'
+      + '</div>';
+  }
+  if(z.t !== "正常"){
+    return head + '<div class="dline">' + esc(z.t) + '</div>'
+      + '<div class="dline" style="font-size:10px;color:var(--faint)">'
+      + '首次启动要解压运行时并加载模型，等几秒刷新即可；一直停在这里说明运行时没装成。</div>'
       + '</div>';
   }
   const rt = st.error
@@ -7178,6 +7235,18 @@ function cardDetectDiag(){
     : "";
   const perf = st.avg_ms ? line("平均耗时", st.avg_ms + " ms/帧 · 每路每 5 秒 1 帧")
                          : line("平均耗时", "还没有样本（等第一帧抽完）");
+  /* 调度实况（0.9.122）：并发几路、队列积压多少、丢了多少、一轮多久。
+     这几个数就是"检测有没有被路数拖死"的直接证据，验收时看的也是它。 */
+  const sc = st.sched || {};
+  const schLine = sc.workers
+    ? line("调度", "并发 " + sc.workers + " 路 · 队列 " + (sc.queued|0) + "/" + (sc.queue_max|0)
+           + ((sc.dropped_full|0) + (sc.dropped_stale|0)
+              ? ' · <span style="color:var(--warn)">丢弃 ' + ((sc.dropped_full|0) + (sc.dropped_stale|0))
+                + "（队列满 " + (sc.dropped_full|0) + " / 过期 " + (sc.dropped_stale|0) + "）</span>"
+              : " · 无丢弃")
+           + (sc.round_avg_ms ? " · 一轮 " + Math.round(sc.round_avg_ms) + "ms / "
+              + (sc.round_cams || 1) + " 路" : ""))
+    : "";
   const cams = st.per_cam || {};
   const ids = Object.keys(cams);
   let rows = "";
@@ -7191,12 +7260,20 @@ function cardDetectDiag(){
       if((cl.two_wheeler|0) > 0) parts.push("两轮 ×" + (cl.two_wheeler|0));
       if((cl.vehicle|0) > 0)     parts.push("车 ×" + (cl.vehicle|0));
       const cam = (typeof CAMERAS !== "undefined" ? CAMERAS : []).find(x=>x && x.id === id);
+      /* 未知单独一类（0.9.122）：抽帧失败/推理异常/过期丢弃都归这里。
+         它不是"没人来过"，也不能并进命中数——两者并在一起，
+         用户看到的数就既不是"看见了什么"，也不是"没看见多久"。 */
+      const unk = c.unknown || 0;
       rows += '<div class="dline kv"><span class="k">' + esc(cam ? cam.name : id) + '</span><span class="v">'
         + "抽帧 " + (c.today || 0) + (parts.length ? " · " + parts.join(" · ") : " · 无命中")
-        + (c.last ? " · 最近 " + c.last : "") + '</span></div>';
+        + (unk ? ' · <b style="color:var(--warn)">未知 ' + unk + '</b>' : "")
+        + (c.skip ? " · 同帧跳过 " + c.skip : "")
+        + (c.last && c.last.t ? " · 最近 " + snapTime(c.last.t * 1000) : "")
+        + '</span></div>';
       if(c.last_err){
         rows += '<div class="dline kv" style="color:var(--warn)"><span class="k">最近错误</span>'
-          + '<span class="v">' + esc(String(c.last_err).slice(0, 70)) + '</span></div>';
+          + '<span class="v">' + (c.last_code ? "[" + esc(String(c.last_code)) + "] " : "")
+          + esc(String(c.last_err).slice(0, 70)) + '</span></div>';
       }
     });
   }else{
@@ -7220,9 +7297,9 @@ function cardDetectDiag(){
       });
     }
   }
-  return head + rt + rtLine + perf + rows + ntBlock
+  return head + rt + rtLine + perf + schLine + rows + ntBlock
     + '<div class="dline" style="margin-top:8px;font-size:10px;color:var(--faint)">'
-    + '抽帧失败会写进运行日志（带 ffmpeg 真实报错）；命中类别同时写进活动台账，'
+    + '取帧失败只记「未知」，不会写成"无活动"；命中类别同时写进活动台账，'
     + '回放页与活动触发都从台账读，与这里的计数同源。</div>'
     + '</div>';
 }

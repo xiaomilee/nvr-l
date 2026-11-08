@@ -5,7 +5,7 @@
   快照节奏的抽帧 → 本模块推理 → 类别+框 → 忽略区过滤 → 台账窗口带 cls 计数
   → 消费侧（回放页 chips / 缩时触发闸 / 通知）按 detect.trigger 裁决。
 
-四条设计底线：
+六条设计底线：
 1. **依赖缺失不崩不静默**：随包 onnxruntime/numpy wheel 与 NAS 的 Python 版本
    不匹配、或模型文件缺失时，ensure() 返回 (False, 原因)，界面状态行如实显示，
    检测整体关闭——绝不拖垮预览/录制/缩时任何既有链路。
@@ -16,6 +16,13 @@
 4. **纯函数与 IO 分离**：norm_*/trigger_ok/parse_ppm/letterbox/postprocess/
    windows_from_hits 全部无副作用，单测不需要模型；Engine/DetectWorker 才碰
    文件、进程、线程。
+5. **有界并发**（0.9.122）：每路独立节拍 + 有界工作者池（默认 2、封顶 4），
+   队列满了丢、过期帧丢，绝不 wait、绝不一路一线程。检测是二等公民，
+   不许和取帧、录像抢 CPU——评审红线是「漏报不能影响全时录像」，
+   而"影响"最现实的形态就是检测把 CPU 吃满、编码器掉帧。
+6. **三态**（0.9.122）：hit / miss / unknown。unknown（取帧失败、模型未加载、
+   推理异常、断流、排队过期）不得计入「无活动」；失败一律带码，
+   调用方不靠匹配中文串判断。
 
 模型与运行时分发：
   app/share/models/yolo11n.onnx          ~10.7MB（COCO 80 类，opset 19）
@@ -26,6 +33,7 @@
 """
 import json
 import os
+import queue
 import re
 import subprocess
 import threading
@@ -91,6 +99,43 @@ CAM_DETECT_MODES = ("follow", "on", "off")
 MODEL_NAME = "yolo11n.onnx"
 INPUT_SIZE = 640
 NMS_IOU = 0.45
+
+# ---------------------------------------------------------------- 调度与状态口径
+# 0.9.122 之前是「一个循环顺序跑完所有路」：8 路一轮 = 8 × 单路耗时，
+# 一旦超过 5 秒节拍就永远在补旧帧，检测频率随路数稀释——加摄像头越多越"迟钝"。
+# 现在改成「每路独立节拍 + 有界工作者池」，三个常量就是这条改动的全部旋钮。
+
+SCHED_DEFAULT_WORKERS = 2        # 默认并发：单路推理已用 2 个 intra_op 线程，2 并发正好
+SCHED_MAX_WORKERS = 4            # 封顶：再多只会让单帧耗时翻倍、总吞吐反降
+SCHED_TICK_SEC = 0.5             # 到点判定精度（节拍是 5 秒，0.5 足够且几乎不耗 CPU）
+
+# 三态。hit=有检出；miss=推理成功但没检出（**只有**这个才叫"无活动"）；
+# unknown=这一拍没有可信结论。三态必须分开：把 unknown 记成 miss，
+# 等于在摄像头掉线时告诉用户"没人来过"——监控里这种"看起来对"的数据
+# 比一条报错危险得多。
+HIT, MISS, UNKNOWN = "hit", "miss", "unknown"
+
+# 失败码（/api/status 的 detect.error_code）。所有失败路径都给其中之一，
+# 前端按码取文案；中文错误串只用于给人看，不参与判断。
+E_FFMPEG = "FFMPEG_NOT_FOUND"
+E_MODEL = "MODEL_MISSING"
+E_RUNTIME = "RUNTIME_FAIL"
+E_MODEL_LOAD = "MODEL_LOAD_FAIL"
+E_FRAME = "FRAME_FAIL"
+E_INFER = "INFER_ERR"
+E_WORKER = "WORKER_DOWN"
+E_QUEUE = "QUEUE_FULL"
+E_STALE = "STALE_FRAME"
+E_STATUS = "STATUS_ERR"
+
+
+def frame_error_code(err):
+    """取帧失败 → 失败码。ffmpeg 缺失/起不来是环境问题，与"这一帧坏了"要分开：
+    前者整机都检测不了，后者只影响这一路这一拍。"""
+    s = str(err or "")
+    if "ffmpeg 未找到" in s or "ffmpeg 无法启动" in s:
+        return E_FFMPEG
+    return E_FRAME
 
 
 # ---------------------------------------------------------------- 配置强校
@@ -540,6 +585,10 @@ class Engine:
         self._out_name = None
         self._lock = threading.Lock()
         self.error = ""
+        # 失败码（0.9.122）：error 是给人看的话，error_code 是给程序用的键。
+        # 以前只有中文串，状态行要判断"到底缺模型还是缺运行时"只能做子串匹配，
+        # 改一句文案就静默失效。
+        self.error_code = ""
         self.avg_ms = 0.0
         self._infer_n = 0
 
@@ -557,10 +606,12 @@ class Engine:
             mp = model_path(self.app_dir)
             if not os.path.isfile(mp):
                 self.error = "模型文件缺失：%s" % mp
+                self.error_code = E_MODEL
                 return False, self.error
             ok, why = ensure_runtime(self.app_dir, self.var_dir, self.log)
             if not ok:
                 self.error = why
+                self.error_code = E_RUNTIME
                 return False, why
             try:
                 import onnxruntime as ort
@@ -573,9 +624,11 @@ class Engine:
                 self._in_name = so.get_inputs()[0].name
                 self._out_name = so.get_outputs()[0].name
                 self.error = ""
+                self.error_code = ""
                 return True, ""
             except Exception as e:
                 self.error = "模型加载失败：%s" % str(e)[:160]
+                self.error_code = E_MODEL_LOAD
                 return False, self.error
 
     def infer(self, rgb, w, h, conf_map):
@@ -592,9 +645,11 @@ class Engine:
             dt = (time.time() - t0) * 1000.0
             self._infer_n += 1
             self.avg_ms = round(self.avg_ms * 0.9 + dt * 0.1, 1)
+            self.error_code = ""
             return dets
         except Exception as e:
             self.error = "推理失败：%s" % str(e)[:160]
+            self.error_code = E_INFER
             self.log("AI 推理失败：%s" % self.error)
             return None
 
@@ -664,10 +719,104 @@ def grab_ppm_image(ffmpeg, path, timeout=8):
     return True, proc.stdout, ""
 
 
+# ---------------------------------------------------------------- 调度内核
+
+def pool_size(n_cams):
+    """并发度：路少就少开线程，路多封顶 4。
+
+    上限 4 不是拍脑袋：单次推理已经用 2 个 intra_op 线程（见 Engine.ensure），
+    4 并发 ≈ 8 个计算线程，再往上只会让单帧耗时翻倍、总吞吐反而下降。
+    下限 2 是因为 76ms 的推理不值当为单路退化成串行。
+    """
+    try:
+        n = int(n_cams or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return max(SCHED_DEFAULT_WORKERS, min(SCHED_MAX_WORKERS, n))
+
+
+def is_stale(queued_at, now, interval):
+    """排队超过一个节拍 = 过期帧，直接丢。
+
+    为什么丢而不是"接着推"：检测要回答的是「**此刻**有没有人」。
+    一帧在队列里躺了 6 秒才轮到推理，结论对应的是 6 秒前的画面，却会被写进
+    当前 5 分钟桶——时间轴上就出现"人走了才标记"。丢掉的代价只是这一拍
+    没有结论（记 unknown），不会漏掉下一拍。
+    """
+    try:
+        return (float(now) - float(queued_at)) > max(0.5, float(interval))
+    except (TypeError, ValueError):
+        return True
+
+
+class Scheduler:
+    """每路独立节拍 + 在跑集合。无 IO、无线程，单测直接喂时间戳驱动。
+
+    ≤0.9.121 的写法是「一个循环里 for 顺序跑完所有路」，一轮耗时 = 路数 ×
+    单路耗时；8 路必然超过 5 秒节拍，于是每一拍都迟到，实际检测频率掉到 1/8。
+    现在节拍跟着**每一路**走：谁到点谁能跑，跑不下的排队，过期就丢。
+    """
+
+    def __init__(self, interval=5.0):
+        self.interval = max(1.0, float(interval or 5.0))
+        self.next_due = {}
+        self.inflight = set()
+        self.lock = threading.Lock()
+
+    def due(self, cam_ids, now):
+        """到点且没在跑的路（按传入顺序，结果稳定，便于单测断言）。
+
+        到点判定成立就**立刻**推后 next_due，而不是等任务跑完再推：
+        队列满被丢掉的那一拍不该在下一拍补跑，否则队列一堵就是双倍负载。
+        """
+        out = []
+        with self.lock:
+            for cid in cam_ids:
+                if cid in self.inflight:
+                    continue
+                nd = self.next_due.get(cid)
+                if nd is not None and now < nd:
+                    continue
+                self.next_due[cid] = now + self.interval
+                out.append(cid)
+        return out
+
+    def begin(self, cid):
+        with self.lock:
+            self.inflight.add(cid)
+
+    def end(self, cid):
+        with self.lock:
+            self.inflight.discard(cid)
+
+    def trim(self, alive_ids):
+        """清掉已不在配置里的路：删摄像头/关掉某路检测后，不该留下永远不跑的节拍。"""
+        keep = set(alive_ids)
+        with self.lock:
+            for cid in list(self.next_due):
+                if cid not in keep:
+                    self.next_due.pop(cid, None)
+            self.inflight &= keep
+
+    def inflight_count(self):
+        with self.lock:
+            return len(self.inflight)
+
+
 # ---------------------------------------------------------------- 调度 Worker
 
 class DetectWorker:
-    """快照节奏的检测调度：每 interval 秒对每路抽 1 帧 → 推理 → 台账窗口。
+    """有界并发的检测调度（0.9.122）。
+
+    一条 ticker 线程"到点就派活"，N 个工作者线程"抽帧 → 推理 → 落账"。
+    三条不变式就是这一批要守的东西：
+
+    1. **有界**：并发 = pool_size(路数)，默认 2、封顶 4；队列长度 2×并发。
+       任何时候都不会因为"路多"冒出几十个推理线程把 CPU 吃干——录像和取帧
+       在同一台机器上，检测是二等公民。
+    2. **不重入**：同一路在跑（或已在队列里）就不再派第二份，防止慢路自我叠加。
+    3. **不阻塞**：ticker 只做判定 + `put_nowait`，队列满了就丢并记 unknown，
+       绝不等在队列上；过期任务被工作者拿到时直接丢，不推两拍前的画面。
 
     与 SnapshotWorker 平行而独立：这一路全挂也不影响预览出图。总闸关闭时
     整个 worker 不启动（schedule() 才被 nvr_slim 调用）。
@@ -675,7 +824,7 @@ class DetectWorker:
 
     def __init__(self, engine, ffmpeg, var_dir, record_root_fn, cams_fn,
                  cfg_fn, interval=5, timeout=10, log=None, notifier=None,
-                 frame_path_fn=None):
+                 frame_path_fn=None, workers=None, queue_size=None):
         self.engine = engine
         self.ffmpeg = ffmpeg
         self.var_dir = var_dir
@@ -687,46 +836,86 @@ class DetectWorker:
         self.frame_path_fn = frame_path_fn
         self.interval = max(1, min(60, int(interval or 5)))
         self.timeout = int(timeout)
+        # workers=None 表示"按路数自动定"，在 start() 里按当时的摄像头数算一次：
+        # 测试机 2 路 → 2 并发，院子 8 路 → 4 并发。构造时算不了，因为配置
+        # 还没读；固定成 2 又会让 8 路跑不满。
+        self._auto_workers = workers is None
+        self.workers = max(1, min(SCHED_MAX_WORKERS,
+                                  int(workers or SCHED_DEFAULT_WORKERS)))
+        self.queue_size = max(1, int(queue_size or self.workers * 2))
         self.log = log or (lambda m: None)
         self.notifier = notifier        # Notifier.offer(cam_name, cat)——None=不通知
         self.stop_event = threading.Event()
-        self.thread = None
-        # 统计：cam_id -> {"total":n, "today":{date:n}, "cls":{date:{person:n,...}}}
+        self.thread = None              # ticker
+        self._threads = []              # 工作者
+        self.q = None
+        self.sched = Scheduler(self.interval)
+        # 统计：cam_id -> {total, today, cls, unknown, skip, codes, last, ...}
         self.stats = {}
         self._stats_lock = threading.Lock()
         self._day = time.strftime("%Y-%m-%d")
+        # 调度实况（验收要看的数）：队列丢了多少、过期丢了多少、"一轮"多长
+        self.dropped = 0
+        self.stale = 0
+        self.last_ok_at = None
+        self._pending = 0               # 已派发未完成的任务数
+        self._busy_since = 0.0
+        self._busy_cams = 0
+        self._round_ms = 0.0
+        self._round_avg = 0.0
+        self._round_cams = 0
 
     def start(self):
         if self.thread and self.thread.is_alive():
             return
         self.stop_event.clear()
+        if self._auto_workers:
+            try:
+                _cfg, cams = self.cfg_fn() or ({}, [])
+            except Exception:
+                cams = []
+            self.workers = pool_size(len(cams or []))
+            self.queue_size = max(1, self.workers * 2)
+        # 重启时换一只新队列：上一轮积压的旧任务已经过期，留着只会被逐个丢掉
+        self.q = queue.Queue(maxsize=self.queue_size)
+        self.sched = Scheduler(self.interval)
         self.thread = threading.Thread(target=self._loop, daemon=True,
                                        name="detect")
         self.thread.start()
+        self._threads = []
+        for i in range(self.workers):
+            t = threading.Thread(target=self._work, daemon=True,
+                                 name="detect-%d" % i)
+            t.start()
+            self._threads.append(t)
 
     def stop(self):
         self.stop_event.set()
 
     def alive(self):
-        return bool(self.thread and self.thread.is_alive())
+        """ticker 与**所有**工作者都活着才算在跑：少一个工作者就是少一份并发，
+        而"线程悄悄死了"正是旧实现最难发现的一种故障（接口照旧说 running）。"""
+        if not (self.thread and self.thread.is_alive()):
+            return False
+        return all(t.is_alive() for t in self._threads)
 
     # ---------------------------------------------------------- 主循环
     def _loop(self):
         while not self.stop_event.is_set():
-            t0 = time.time()
             try:
-                self._round()
+                self._tick()
             except Exception as e:
                 self.log("检测轮异常：%r" % e)
-            self.stop_event.wait(max(0.5, self.interval - (time.time() - t0)))
+            self.stop_event.wait(SCHED_TICK_SEC)
 
-    def _round(self):
+    def _tick(self):
+        """一拍：判定谁到点 → 派活。只做判定与入队，绝不在这里抽帧/推理。"""
         cfg, cams = self.cfg_fn() or ({}, [])
         if not cfg.get("enable"):
             return
         ok, why = self.engine.ensure()
         if not ok:
-            # 诚实但安静：状态行已经显示原因，这里每分钟最多一条
+            # 诚实但安静：状态行已经显示原因，这里同一原因只记一条
             key = "engine|%s" % why[:40]
             if self.stats.get("_engine_err") != key:
                 self.stats["_engine_err"] = key
@@ -734,9 +923,8 @@ class DetectWorker:
             return
         conf_map = cfg.get("conf") or conf_from_sensitivity("std")
         now = time.time()
+        ready = []
         for c in cams:
-            if self.stop_event.is_set():
-                return
             if not isinstance(c, dict) or c.get("enabled") is False:
                 continue
             if not cam_detect_on(c, cfg.get("enable")):
@@ -747,23 +935,100 @@ class DetectWorker:
             url = str(c.get("sub_url") or c.get("url") or "").strip()
             if not url:
                 continue
-            self._one(c, url, conf_map, classes, now)
+            ready.append((c, url, classes))
+        ids = [c["id"] for c, _u, _k in ready]
+        self.sched.trim(ids)
+        due = self.sched.due(ids, now)
+        if not due:
+            return
+        by_id = {c["id"]: (c, u, k) for c, u, k in ready}
+        got = 0
+        for cid in due:
+            cam, url, classes = by_id[cid]
+            self.sched.begin(cid)
+            try:
+                self.q.put_nowait((cid, cam, url, conf_map, classes, now))
+                got += 1
+            except queue.Full:
+                # 队列满 = 上一拍的活还没干完。丢这一拍并如实记 unknown，
+                # 不做阻塞等待：ticker 一旦堵住，所有路一起停摆，那才是真事故。
+                self.sched.end(cid)
+                with self._stats_lock:
+                    self.dropped += 1
+                self._unknown(cid, E_QUEUE, "检测队列已满（%d 项），本轮丢弃" % self.queue_size)
+        if got:
+            self._busy_add(got, now)
 
+    def _work(self):
+        """工作者线程：取任务 → 判过期 → 抽帧推理落账 → 交还 inflight。"""
+        while not self.stop_event.is_set():
+            try:
+                task = self.q.get(timeout=SCHED_TICK_SEC)
+            except queue.Empty:
+                continue
+            cid = task[0] if task else None
+            try:
+                cid, cam, url, conf_map, classes, queued_at = task
+                if is_stale(queued_at, time.time(), self.interval):
+                    with self._stats_lock:
+                        self.stale += 1
+                    self._unknown(cid, E_STALE,
+                                  "排队超过 %d 秒，丢弃过期帧" % self.interval)
+                else:
+                    self._one(cam, url, conf_map, classes, time.time())
+            except Exception as e:
+                self.log("检测任务异常：%r" % e)
+                if cid:
+                    self._unknown(cid, E_INFER, "检测任务异常：%r" % e)
+            finally:
+                if cid:
+                    self.sched.end(cid)
+                self._busy_done()
+
+    # ---------------------------------------------------------- 一轮耗时
+    def _busy_add(self, n, now):
+        """记录"这一拍到点的那批路什么时候全部干完"——验收口径
+        「8 路一轮 ≤ 1.8 × 单路」直接读 round_ms / round_cams。"""
+        with self._stats_lock:
+            if self._pending == 0:
+                self._busy_since = now
+                self._busy_cams = 0
+            self._pending += n
+            self._busy_cams += n
+
+    def _busy_done(self):
+        with self._stats_lock:
+            if self._pending <= 0:
+                return
+            self._pending -= 1
+            if self._pending > 0:
+                return
+            ms = round((time.time() - self._busy_since) * 1000.0, 1)
+            self._round_ms = ms
+            self._round_cams = self._busy_cams
+            self._round_avg = (ms if not self._round_avg
+                               else round(self._round_avg * 0.8 + ms * 0.2, 1))
+
+    # ---------------------------------------------------------- 单路一拍
     def _one(self, cam, url, conf_map, classes, now):
         ok, data, err = self._grab(cam, url)
+        cid = cam["id"]
         if not ok:
             if err == NO_NEW_FRAME:
-                return                     # 没有新图：本轮不算失败，也不记账
-            self._fail(cam["id"], err)
+                # 正常节拍错位：取帧 10 秒一张、检测 5 秒一拍，隔拍必撞同一张图。
+                # 既不是 hit 也不是 miss，更不是 unknown —— 记 skip，不刷诊断页。
+                self._skip(cid)
+                return
+            self._unknown(cid, frame_error_code(err), err)
             return
         ppm = parse_ppm(data)
         if not ppm:
-            self._fail(cam["id"], "PPM 解析失败")
+            self._unknown(cid, E_FRAME, "PPM 解析失败")
             return
         w, h, rgb = ppm
         dets = self.engine.infer(rgb, w, h, conf_map)
         if dets is None:
-            self._fail(cam["id"], self.engine.error or "推理失败")
+            self._unknown(cid, E_INFER, self.engine.error or "推理失败")
             return
         # 类别过滤（算力口径）+ 忽略区过滤（框中心落忽略格即丢）。
         # 忽略格是 16×9 归一化矩形，与归一化框同一坐标系，直接比。
@@ -773,7 +1038,7 @@ class DetectWorker:
         if dets:
             self._write_ledger(cam, dets, now)
             self._notify(cam, dets)
-        self._ok_stat(cam["id"], dets)
+        self._ok_stat(cid, dets)
 
     def _grab(self, cam, url):
         """取一帧 PPM：优先用取帧层的本地 jpg，没有才退回自己拉流。
@@ -893,50 +1158,187 @@ class DetectWorker:
             rects.append([col / 16.0, row / 9.0, 1.0 / 16.0, 1.0 / 9.0])
         return rects
 
-    # ---------------------------------------------------------- 统计
+    # ---------------------------------------------------------- 三态统计
+    @staticmethod
+    def _blank():
+        return {"total": 0, "today": {}, "cls": {}, "last": None,
+                "unknown": {}, "skip": {}, "codes": {}}
+
+    def _roll_day(self):
+        """跨零点自动换天（调用方已持锁）。
+
+        worker 是长期存在的，_day 在构造时定死会让「今日」在次日一直读旧键
+        —— 诊断页从此显示 0 帧，用户以为 AI 不干活了。
+        """
+        d = time.strftime("%Y-%m-%d")
+        if d != self._day:
+            self._day = d
+
     def _ok_stat(self, cam_id, dets):
+        """有结论的一拍：hit 或 miss。
+
+        **只有这里**刷新 last_success_at —— 它回答的是"检测最后一次真的看见
+        画面是何时"，不是"线程还在转"。状态行的"正常"必须由它背书。
+        """
         with self._stats_lock:
-            st = self.stats.setdefault(cam_id, {"total": 0, "today": {},
-                                                "cls": {}, "last": None})
+            self._roll_day()
+            st = self.stats.setdefault(cam_id, self._blank())
             st["total"] += 1
             d = self._day
             st["today"][d] = st["today"].get(d, 0) + 1
+            st["last_state"] = HIT if dets else MISS
             if dets:
                 cd = st["cls"].setdefault(d, {})
                 for cat in {x["c"] for x in dets}:
                     cd[cat] = cd.get(cat, 0) + 1
                 st["last"] = {"t": time.time(),
                               "cats": sorted({x["c"] for x in dets})}
+            self.last_ok_at = time.time()
             self.stats.pop("_engine_err", None)
 
-    def _fail(self, cam_id, err):
-        with self._stats_lock:
-            st = self.stats.setdefault(cam_id, {"total": 0, "today": {},
-                                                "cls": {}, "last": None})
-            st["last_err"] = str(err)[:120]
-            st["last_err_at"] = time.time()
+    def _unknown(self, cam_id, code, err):
+        """没有结论的一拍。绝不写成"无活动"。
 
+        unknown 与 miss 的差别就是「不知道」和「没人」的差别；把摄像头掉线
+        记成"没人来过"，等于替用户签了一份他没看过的空白报告。
+        """
+        with self._stats_lock:
+            self._roll_day()
+            st = self.stats.setdefault(cam_id, self._blank())
+            d = self._day
+            st["unknown"][d] = st["unknown"].get(d, 0) + 1
+            cd = st["codes"].setdefault(d, {})
+            cd[code] = cd.get(code, 0) + 1
+            st["last_err"] = str(err)[:120]
+            st["last_code"] = code
+            st["last_err_at"] = time.time()
+            st["last_state"] = UNKNOWN
+
+    def _skip(self, cam_id):
+        """这一拍没有新画面（正常节拍错位）。三类都不算：不是 hit、不是 miss、
+        也不是故障，所以单独一档，免得每两拍就刷一次"未知"。"""
+        with self._stats_lock:
+            self._roll_day()
+            st = self.stats.setdefault(cam_id, self._blank())
+            d = self._day
+            st["skip"][d] = st["skip"].get(d, 0) + 1
+
+    # ---------------------------------------------------------- 状态
     def status(self):
-        """给 /api/status：加载态 + 错误 + 平均耗时 + 每路统计。"""
+        """检测详情：加载态 + 错误码 + 每路三态计数 + 调度实况。
+
+        判定口径（能不能用、为什么不能用）在 status_of 里，这里只交事实。
+        """
         with self._stats_lock:
             per_cam = {}
+            d = self._day
             for cid, st in self.stats.items():
                 if cid.startswith("_"):
                     continue
                 per_cam[cid] = {
                     "total": st.get("total", 0),
-                    "today": st.get("today", {}).get(self._day, 0),
-                    "cls": st.get("cls", {}).get(self._day, {}),
+                    "today": st.get("today", {}).get(d, 0),
+                    "cls": st.get("cls", {}).get(d, {}),
+                    "unknown": st.get("unknown", {}).get(d, 0),
+                    "skip": st.get("skip", {}).get(d, 0),
+                    "codes": st.get("codes", {}).get(d, {}),
                     "last": st.get("last"),
+                    "last_state": st.get("last_state"),
                     "last_err": st.get("last_err"),
+                    "last_code": st.get("last_code"),
                 }
-            return {
-                "loaded": self.engine.loaded,
-                "error": self.engine.error,
-                "avg_ms": self.engine.avg_ms,
-                "alive": self.alive(),
-                "per_cam": per_cam,
+            sched = {
+                "workers": self.workers,
+                "interval": self.interval,
+                "queued": (self.q.qsize() if self.q is not None else 0),
+                "queue_max": self.queue_size,
+                "inflight": self.sched.inflight_count(),
+                "dropped_full": self.dropped,
+                "dropped_stale": self.stale,
+                "pending": self._pending,
+                "round_ms": self._round_ms,
+                "round_avg_ms": self._round_avg,
+                "round_cams": self._round_cams,
             }
+        eng = self.engine
+        return {
+            "loaded": bool(eng is not None and eng.loaded),
+            "error": (eng.error if eng is not None else ""),
+            "error_code": (getattr(eng, "error_code", "") if eng is not None else ""),
+            "avg_ms": (eng.avg_ms if eng is not None else 0),
+            "alive": self.alive(),
+            "last_success_at": self.last_ok_at,
+            "per_cam": per_cam,
+            "sched": sched,
+        }
+
+
+# ---------------------------------------------------------------- 统一状态
+
+def status_of(worker=None, det_cfg=None, ffmpeg="", runtime=None):
+    """`/api/status` 的 detect 块：**一个**判定口径，三处共用。
+
+    为什么要有这个函数：状态行、诊断卡、接口以前各自拼一遍"能不能用"，
+    同一个现场在不同地方说法不一样（worker 没起时一处写"未运行"、
+    一处写"加载中"）。现在只有这里判，前端只负责把 state 翻译成中文。
+
+    返回（前七项是批次 4 定的契约，其余为既有字段的兼容保留）：
+      enabled        总闸是否打开
+      available      现在能不能出检测结果（true 才敢在界面上说"正常"）
+      running        调度线程是否活着
+      state          disabled / starting / unavailable / ready
+      error_code     失败码（见 E_*）；空串=没有失败
+      error_message  给人看的中文原因
+      last_success_at 最后一次真的看见画面的时刻（None=还没有过）
+    """
+    enabled = _as_bool((det_cfg or {}).get("enable"), False)
+    detail = {}
+    if worker is not None:
+        try:
+            detail = dict(worker.status() or {})
+        except Exception as e:
+            detail = {"error": "检测状态读取失败：%r" % e, "error_code": E_STATUS}
+    running = bool(detail.get("alive") or detail.get("running"))
+    code = str(detail.get("error_code") or "")
+    msg = str(detail.get("error") or "")
+    if not enabled:
+        # 关闭不是故障：给空码，界面按"已关闭"说，不要红字
+        state, code, msg = "disabled", "", ""
+    elif not ffmpeg and not code:
+        state, code, msg = "unavailable", E_FFMPEG, "未找到 ffmpeg，无法抽帧"
+    elif worker is None:
+        state = "unavailable"
+        if not code:
+            code, msg = E_WORKER, "检测进程未启动（服务刚启动或已退出）"
+    elif code:
+        state = "unavailable"
+    elif not running:
+        state, code, msg = "unavailable", E_WORKER, "检测线程已停止"
+    elif not detail.get("loaded"):
+        # 首次要解 wheel + 加载 10.7MB 模型，几秒钟的事，别报错
+        state = "starting"
+    else:
+        state = "ready"
+    out = {
+        "enabled": enabled,
+        "available": state == "ready",
+        "running": running,
+        "state": state,
+        "error_code": code,
+        "error_message": msg,
+        "last_success_at": detail.get("last_success_at"),
+    }
+    for k in ("loaded", "error", "avg_ms", "per_cam", "sched", "alive"):
+        if k in detail:
+            out[k] = detail[k]
+    out.setdefault("loaded", False)
+    out.setdefault("error", "")
+    out.setdefault("avg_ms", 0)
+    out.setdefault("per_cam", {})
+    out.setdefault("sched", {})
+    if runtime is not None:
+        out["runtime"] = runtime
+    return out
 
 
 if __name__ == "__main__":

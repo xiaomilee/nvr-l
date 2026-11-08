@@ -79,6 +79,9 @@ if [ -n "$NODE" ]; then
   # 事件页：入点来自服务端定位、播不了要说清原因、±30 秒基准是画面（0.9.121）
   echo "== 事件页 =="
   "$NODE" "$ROOT/test/ui/events.test.js" || exit 1
+  # 检测状态与三态：能不能用只由后端 state 判，未知不与命中混算（0.9.122）
+  echo "== 检测状态与三态 =="
+  "$NODE" "$ROOT/test/ui/detect.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

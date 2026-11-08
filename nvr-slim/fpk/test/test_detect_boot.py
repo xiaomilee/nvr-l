@@ -233,6 +233,46 @@ class DetectBootTest(unittest.TestCase):
         self.assertEqual(len(wins), 1, "间隔 18s ≤ 30s：应并成一个窗口")
         self.assertEqual(len(ev), 1, "一次在场不能被切成多条事件")
 
+    # ---------------------------------------------------------- 统一状态接线
+
+    def test_b10_detect_status_unified(self):
+        """0.9.122：/api/status 的 detect 块只看 detect.status_of。
+
+        这条守的是接线：配置块、worker、ffmpeg 路径三样都被真的传进去了。
+        以前 nvr_slim 自己拼一份 running/loaded/error，和 status_of 各判一套。
+        """
+        import json as _json
+        with open(os.path.join(self.tmp, "config.json"), "w", encoding="utf-8") as f:
+            _json.dump({"detect": {"enable": True}}, f)
+
+        class W:
+            workers = 2
+
+            def status(self):
+                return {"alive": True, "loaded": True, "avg_ms": 76.0,
+                        "per_cam": {"c1": {"today": 3, "cls": {}, "unknown": 1}},
+                        "sched": {"workers": 2}}
+
+        nvr_slim.STATE["detect_worker"] = W()
+        st = nvr_slim.detect_status()
+        for k in ("enabled", "available", "running", "state",
+                  "error_code", "error_message", "last_success_at"):
+            self.assertIn(k, st, "缺契约字段 %s" % k)
+        self.assertTrue(st["enabled"], "配置里 enable=true 要传进去")
+        self.assertEqual(st["state"], "ready")
+        self.assertEqual(st["per_cam"]["c1"]["unknown"], 1)
+        self.assertIn("python", st.get("runtime") or {})
+
+    def test_b11_detect_status_no_worker(self):
+        """开了总闸但没有 worker：报 WORKER_DOWN，不冒充可用。"""
+        import json as _json
+        with open(os.path.join(self.tmp, "config.json"), "w", encoding="utf-8") as f:
+            _json.dump({"detect": {"enable": True}}, f)
+        nvr_slim.STATE["detect_worker"] = None
+        st = nvr_slim.detect_status()
+        self.assertFalse(st["available"])
+        self.assertEqual(st["error_code"], detect.E_WORKER)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

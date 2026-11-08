@@ -2391,23 +2391,25 @@ def _sync_detect_worker(cfg=None):
             return
         STATE["detect_worker"] = w
         w.start()
-        _log_line("AI 检测已开启（快照模式，每 5 秒/路）")
+        _log_line("AI 检测已开启（快照模式，每 5 秒/路，并发 %s）"
+                  % (getattr(w, "workers", None) or "自动"))
     elif not on and w is not None:
         w.stop()
         _log_line("AI 检测已关闭")
 
 
 def detect_status():
-    """给 /api/status：加载态 + 失败原因 + 平均耗时 + 每路今日计数 + 运行时口径。"""
-    w = STATE.get("detect_worker")
-    rt = detect.runtime_wheel_names()
-    if w is None:
-        return {"running": False, "loaded": False, "error": "", "avg_ms": 0,
-                "per_cam": {}, "runtime": rt}
-    st = w.status()
-    st["running"] = True
-    st["runtime"] = rt
-    return st
+    """给 /api/status：统一检测状态（0.9.122）。
+
+    判定口径搬进了 detect.status_of：这里只负责取三样现场（配置块 / worker /
+    ffmpeg 路径），不再自己拼"能不能用"。以前状态行、诊断卡、接口各拼一遍，
+    worker 没起时一处说"未运行"、一处说"加载中"，用户根本不知道该信哪个。
+    """
+    cfg = runtime.load_config(STATE["var_dir"])
+    det = cfg.get("detect") if isinstance(cfg.get("detect"), dict) else {}
+    return detect.status_of(STATE.get("detect_worker"), det,
+                            ffmpeg=STATE.get("ffmpeg_bin") or "",
+                            runtime=detect.runtime_wheel_names())
 
 
 def ingest_status():
