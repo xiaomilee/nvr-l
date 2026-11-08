@@ -25,12 +25,15 @@ const UI = path.join(ROOT, "app", "ui");
 const JS_DIR = path.join(UI, "js");
 
 /* 顺序即执行顺序。改这张表 = 改页面的执行次序，必须是"想清楚了才改"的动作，
-   而不是顺手排个序。注意这三份 pages/ 并不挨在一起：clips 在 core/api 之前，
-   设置页两段在它之后 —— 位置就是代码原本所在的位置，没有为了"看着整齐"挪动过。 */
-const ORDER = ["core/auth.js", "core/format.js",
+   而不是顺手排个序。位置就是代码原本所在的位置，没有为了"看着整齐"挪动过：
+   live_snap 在统一请求层之前（快照走 img.src，不经过 fetch），live.js 在它之后
+   （要 POST 配置、按服务端通道表重排摄像头），所以同一张直播页被 core/api.js
+   隔成两份，这不是漏搬。clips / player / live_snap 都在 core/api 之前，
+   设置页两段在它之后。 */
+const ORDER = ["core/auth.js", "core/state.js", "core/format.js",
                "components/shell.js", "components/fullscreen.js", "components/nav.js",
-               "pages/clips.js",
-               "core/api.js",
+               "pages/clips.js", "player/player.js", "pages/live_snap.js",
+               "core/api.js", "pages/live.js",
                "pages/settings_cards.js", "pages/settings_editor.js",
                "core/theme.js"];
 

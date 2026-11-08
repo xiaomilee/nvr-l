@@ -1875,6 +1875,17 @@ function authGate(show, msg){
 })();
 /* @@js:end */
 
+/* @@js:begin core/state.js —— 本段由 build.sh 合成，请改 app/ui/js/core/state.js；直接改这里会被下一次合成覆盖 */
+/* ================= core/state.js =================
+   全页共用的数据形状与可变状态：CAMERAS / camParams 的默认骨架、GS 通用设置、
+   回放现场 state，以及把 /api/status 与 /api/link 灌进真实资源状态的那两个入口。
+   它们连起来只回答一个问题：**这一刻页面上的「当前值」是什么**。
+   判断标准：被多个页面读写、且本身不画界面的状态放这里；纯时间计算进
+   core/format.js，画面怎么摆、按钮怎么点都不进这个文件。
+   为什么值得单独成文件：设置页写 GS、回放页写 state、直播页读 CAMERAS，
+   以前「这个值到底谁改的」只能全文搜；集中之后改一次默认值就能看清牵动哪几页。
+   ================================================= */
+
 /* ================= 数据 =================
    摄像头只留「身份 + 码流」两类字段：不区分品牌、不存账号密码（要认证就直接写进
    RTSP 地址里，形如 rtsp://user:pass@ip:554/...），也不做分组/录像策略。
@@ -2338,6 +2349,7 @@ function scanHint(){
     ? "警告：NVR 只留 " + d + " 天，每天一档可能在下次扫描前就被覆盖，建议改每小时。"
     : "NVR 留 " + d + " 天，每天一次来得及，但断电一天就会丢一批。";
 }
+/* @@js:end */
 
 /* @@js:begin core/format.js —— 本段由 build.sh 合成，请改 app/ui/js/core/format.js；直接改这里会被下一次合成覆盖 */
 /* ================= core/format.js =================
@@ -3631,6 +3643,18 @@ function drawScene(){
 }
 /* @@js:end */
 
+/* @@js:begin player/player.js —— 本段由 build.sh 合成，请改 app/ui/js/player/player.js；直接改这里会被下一次合成覆盖 */
+/* ================= player/player.js =================
+   归档播放器：A/B 两个 video 热切换、倍速、导出、片段同步与主循环。
+   它们绑在同一件事上 —— **currentTime 与 src 到底归谁管**，
+   所以不能按函数名切成「倍速.js」「导出.js」：改一处换源逻辑就得同时看预加载、
+   重试与标题更新，分家之后最容易只改一半。
+   判断标准：读 state.segs（磁盘上的归档片段）、写播放器里那两个 video 的放这里；
+   直播页的快照与实时流读的是快照/RTSP 接口，归 pages/，不进这个文件。
+   为什么单独成文件：这是全页唯一会碰 currentTime 的地方，「点了事件却跳错秒」
+   只需在这一份里查，不必再在八千行里找 seekVideo 被谁覆盖过。
+   ==================================================== */
+
 /* ================= 播放器 ================= */
 const player = document.getElementById("player");
 
@@ -4176,6 +4200,19 @@ function loop(ts){
   }
   requestAnimationFrame(loop);
 }
+/* @@js:end */
+
+/* @@js:begin pages/live_snap.js —— 本段由 build.sh 合成，请改 app/ui/js/pages/live_snap.js；直接改这里会被下一次合成覆盖 */
+/* ================= pages/live_snap.js =================
+   直播页的取图入口：刷新间隔、单张快照的超时与 token 去重加载。
+   它排在统一请求层**之前**，不是漏搬 —— 快照是 img.src 直接取一张 JPEG，
+   走 fetch/API 反而要多一次解码与凭证处理；请求层之后那半张直播页在
+   pages/live.js，两段被 core/api.js 隔开是执行顺序决定的。
+   判断标准：只负责「哪张图、多久换、加载失败怎么算」的放这里；
+   快照墙怎么摆、字幕怎么画、宫格怎么切都不进这个文件。
+   为什么单独成文件：断网时「快照墙一直转圈还是显示几秒前」由这一小段决定，
+   混在渲染里最难复现，也最容易被顺手改坏。
+   ====================================================== */
 
 /* ================= 直播页 =================
    三种状态：
@@ -4255,6 +4292,7 @@ function pullSnap(camId, img, onDone){
   img.setAttribute("data-tok", String(token));
   img.src = "/api/live/snapshot/" + encodeURIComponent(camId) + ".jpg?t=" + token;
 }
+/* @@js:end */
 
 /* @@js:begin core/api.js —— 本段由 build.sh 合成，请改 app/ui/js/core/api.js；直接改这里会被下一次合成覆盖 */
 /* ================= core/api.js =================
@@ -4357,6 +4395,19 @@ API.req = function(path, opt){
 API.get  = (path, opt)=> API.req(path, Object.assign({ method: "GET" }, opt || {}));
 API.post = (path, body, opt)=> API.req(path, Object.assign({ method: "POST", body: body }, opt || {}));
 /* @@js:end */
+
+/* @@js:begin pages/live.js —— 本段由 build.sh 合成，请改 app/ui/js/pages/live.js；直接改这里会被下一次合成覆盖 */
+/* ================= pages/live.js =================
+   直播页的渲染与实时播放层：把配置推给后端（决定显示哪几路、多久刷一次）、
+   快照墙与宫格、时间戳与倒计时、进出直播间、实时流挂载、兜底画面绘制。
+   它们共用 CAMERAS 与 LIVE_COLS 两份现场状态，改一路数量就得连着看渲染、
+   列数弹层与流地址，所以摆在一起而不按控件切碎。
+   判断标准：出现在直播页、要读全局状态或碰 DOM 的逻辑放这里；
+   取图超时与 token 去重在 pages/live_snap.js，请求统一走 core/api.js，
+   时间格式化走 core/format.js。
+   为什么放在请求层之后：这段要 POST 配置、要按服务端通道表重排摄像头，
+   依赖 API.get/post 已经就位 —— 位置即执行顺序，别为了「同页同目录」挪动它。
+   ================================================== */
 
 /* 把摄像头与通用设置推给后端：快照 worker、录制、衔接吃的都是这份配置。
    内容没变就不发（签名去重），变了静默 POST，失败也不打扰用户。 */
@@ -5268,6 +5319,7 @@ function drawLiveScene(cv, idx){
   g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(0,0,0,.42)");
   c.fillStyle = g; c.fillRect(0,0,w,h);
 }
+/* @@js:end */
 
 /* @@js:begin pages/settings_cards.js —— 本段由 build.sh 合成，请改 app/ui/js/pages/settings_cards.js；直接改这里会被下一次合成覆盖 */
 /* ================= pages/settings_cards.js =================
