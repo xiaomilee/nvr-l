@@ -76,6 +76,9 @@ if [ -n "$NODE" ]; then
   # 并守住"页面里不许再有裸 fetch"（0.9.120）
   echo "== 统一请求层 =="
   "$NODE" "$ROOT/test/ui/api.test.js" || exit 1
+  # 事件页：入点来自服务端定位、播不了要说清原因、±30 秒基准是画面（0.9.121）
+  echo "== 事件页 =="
+  "$NODE" "$ROOT/test/ui/events.test.js" || exit 1
 else
   echo "SKIP 未找到 node，跳过设置页/时间轴测试（只影响测试，不影响出包）"
 fi

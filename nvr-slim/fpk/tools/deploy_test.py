@@ -49,6 +49,12 @@ CHECKS = [
         d.get("warn"), d.get("err")))),
     ("/api/recordings", "录像清单", lambda d: (bool(d.get("ok")), "cams=%d" % len(
         d.get("cameras") or {}))),
+    # 事件中心（0.9.121）。这一项最容易"接口通但没数据"：索引建了、同步也跑了，
+    # 却因为口径不对一条都读不出来。所以把条数与索引覆盖天数一起写进报告 ——
+    # count=0 是真没事件还是索引没同步，看 days 就能分开（0.9.121 起纳入自检）。
+    # 路径不加查询串：走默认「今天 00:00:00 ~ 23:59:59」，免得 curl 把 & 当后台符号。
+    ("/api/events", "事件索引", lambda d: (bool(d.get("ok")), "count=%s 索引天数=%s" % (
+        d.get("count"), (d.get("index") or {}).get("days")))),
 ]
 
 

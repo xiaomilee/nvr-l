@@ -1375,6 +1375,44 @@ body.rot .vtlscroll{touch-action:none}
   color:#fff;font-weight:600}
 .ag-err{min-height:18px;margin-top:6px;color:var(--danger);font-size:12px}
 .ag-hint{margin:6px 0 0;font-size:11px;color:var(--faint);line-height:1.5}
+
+/* ---------- 事件页（0.9.121） ----------
+   为什么单开一页：回放页的动作是「按时间找画面」，事件页是「按事情找时间」。
+   两件事塞进一页，用户每次都得先想"我现在在哪种模式里"。这一页只读接口，
+   不参与录像链路。 */
+.evbar{display:flex;gap:6px;overflow-x:auto;padding:8px 16px 0;background:var(--surface);
+  scrollbar-width:none}
+.evbar::-webkit-scrollbar{display:none}
+.evbar.end{padding-bottom:9px;border-bottom:1px solid var(--line)}
+.evchip{flex:0 0 auto;height:29px;padding:0 11px;border-radius:15px;border:1px solid var(--line);
+  background:var(--bg);font-size:12px;color:var(--text2)}
+.evchip.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.evwrap{flex:1;overflow-y:auto;padding:11px 16px 20px;-webkit-overflow-scrolling:touch}
+.evcard{display:flex;align-items:stretch;gap:10px;background:var(--surface);border-radius:13px;
+  padding:10px 11px;margin-bottom:8px}
+.evcard:active{opacity:.62}
+/* 左侧细色条 = 这条事件的主类别，与时间轴三车道同一套配色 */
+.evstrip{flex:0 0 4px;border-radius:2px;background:var(--warn)}
+.evstrip.person{background:var(--primary)}
+.evstrip.vehicle{background:var(--ev-veh)}
+.evmain{flex:1;min-width:0}
+.evtime{font-size:15.5px;font-weight:600;letter-spacing:-.3px}
+.evmeta{margin-top:2px;font-size:11.5px;color:var(--faint);overflow:hidden;white-space:nowrap;
+  text-overflow:ellipsis}
+.evtags{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.evtag{font-size:10px;padding:1.5px 7px;border-radius:8px;background:var(--fill);color:var(--text2)}
+.evtag.person{background:var(--primary-soft);color:var(--primary)}
+.evtag.vehicle{background:var(--keep-soft);color:var(--keep)}
+.evtag.motion{background:var(--warn-soft);color:var(--warn-fg)}
+.evacts{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.evbtn{height:28px;padding:0 10px;border-radius:9px;border:1px solid var(--line);
+  background:var(--bg);font-size:11.5px;color:var(--text2)}
+.evbtn.main{background:var(--primary);border-color:var(--primary);color:#fff}
+.evnote{margin-top:7px;font-size:11.5px;line-height:1.5;border-radius:8px;padding:6px 8px;
+  background:var(--warn-soft);color:var(--warn-fg)}
+.evnote.info{background:var(--fill);color:var(--muted)}
+.evnote .code{margin-left:5px;font-size:10px;color:var(--faint)}
+.eveof{padding:14px 0 4px;text-align:center;font-size:11.5px;color:var(--faint);line-height:1.6}
 </style>
 </head>
 <body>
@@ -1572,6 +1610,27 @@ body.rot .vtlscroll{touch-action:none}
       <div class="clips" id="clips"></div>
     </section>
 
+    <!-- ============ 事件（0.9.121） ============
+         三段筛选（日期 / 摄像头 / 类别）都是服务端筛的：前端不再拉全量自己过滤，
+         否则列表被 limit 截断后，筛出来的"全部"其实只是前 200 条里的全部。 -->
+    <section class="page" id="page-events">
+      <div class="hdr">
+        <div class="hdr-row">
+          <div>
+            <div class="camsel" style="font-size:17px">事件<span class="hdr-sub"
+              style="margin-left:7px" id="evSum">—</span></div>
+          </div>
+          <button class="iconbtn" id="btnEvRefresh" title="重新读取事件">
+            <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="evbar" id="evDayBar"></div>
+      <div class="evbar" id="evCamBar"></div>
+      <div class="evbar end" id="evCatBar"></div>
+      <div class="evwrap" id="evList"></div>
+    </section>
+
     <!-- ============ 设置 ============ -->
     <section class="page" id="page-cam">
       <div class="hdr">
@@ -1675,6 +1734,11 @@ body.rot .vtlscroll{touch-action:none}
     <button class="tb" data-page="play">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.4 2"/></svg>
       <span>回放</span>
+    </button>
+    <!-- 事件（0.9.121）：按"事情"找录像，与回放的"按时间"是两条入口 -->
+    <button class="tb" data-page="events">
+      <svg viewBox="0 0 24 24"><path d="M4 18V9m5 9V6m5 12v-7m5 7V11"/></svg>
+      <span>事件</span>
     </button>
     <button class="tb" data-page="list">
       <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
@@ -2605,6 +2669,12 @@ function activatePage(page){
   if(page === "live"){
     updateSnapLabels();
     setTimeout(renderLive, 20);   // 回到快照墙时重画，避免尺寸为 0
+  }
+  if(page === "events"){
+    /* 事件页：每次进页重画筛选条 + 读一次列表（30 秒内吃缓存）。
+       放在这里而不是 goPage 里，深链 ?page=events 与底部 tab 才会走同一条路。 */
+    renderEvChips();
+    loadEvents();
   }
   if(page === "list"){
     camPickShow(false);
@@ -8959,6 +9029,10 @@ try{
   }
 }catch(e){}
 let pvCur = pvA, pvNxt = pvB, pvPreloadSeg = -1;
+/* 事件页点过来的待播落点（0.9.121）：{t, at}。
+   为什么不在事件页直接操作播放器：定位要等清单/分片列表装好（首次进页可能还在
+   拉 /api/recordings），而"装好之后再定位"的唯一入口就是 pvAutoEnter。 */
+let pvSeekTo = null;
 
 function pvSegAt(t){
   const a = PPLAY.segs;
@@ -9512,8 +9586,17 @@ function pvAutoEnter(force){
   }
   if(!force && PPLAY.on) return;         // 已经在播：重绘不打断
   pvLoadDay();                           // 清单可能刚回来，段列表按最新数据重装
-  pvFallbackDay();
+  const fellBack = pvFallbackDay();
   if(!PPLAY.segs.length) return;
+  /* 事件页点进来的落点优先（0.9.121）：它带的是用户刚点的那条事件，
+     不是"默认落点"。两种情况作废 —— 回退过日期（目标那天一片都没有，
+     落点已经没有意义），或者已经过期（清单拉了三次才回来，超过 15 秒）；
+     不作废的话，用户下次进回放页会被一条很久以前的事件莫名其妙地带走。 */
+  if(pvSeekTo){
+    const p = pvSeekTo;
+    pvSeekTo = null;
+    if(!fellBack && Date.now() - p.at < 15000 && pvPlayAt(p.t)) return;
+  }
   const t = pvEnterStart();
   if(t == null) return;
   pvPlayAt(t);
@@ -9556,6 +9639,341 @@ function pvResume(){
     pvAdvance();
   });
 });
+
+/* ================= 事件页（0.9.121） =================
+   评审点名的两件差异化之一：从「翻录像」变成「点事件直接看」。
+   这一页只读三段接口（/api/events、/<id>、/<id>/clip），不碰录制链路；
+   播放仍走回放页那一套（定位 / 预加载 / OSD 同步只该有一处实现），
+   这里只负责把「哪一路、哪一天、从哪一秒」交代过去。
+
+   三个边界写在这里，免得下一个人扩大它：
+   1. 不自己拼播放地址：url 一律用服务端 clip 接口给的那一条（评审点名的
+      第二个工程问题），前端只从分片名里读回"这一片从几点开始"。
+   2. 播不了就说清原因：missing_reason 有多种（未封口 / 分片不在 / 结构坏），
+      翻译文案由服务端给（event.MISSING_TEXT），前端不再维护第二份。
+   3. 筛选全部交给服务端：拉全量再在前端过滤，会把"前 200 条里的全部"当成全部。 */
+const EV = {day: jsToday(), cam: "", cat: "", data: null, key: "", at: 0, err: "",
+            loading: false, open: "", focus: "", clip: null, clipErr: ""};
+
+/* 日期条 = 最近 7 天（今天在最前）。
+   不做任意日期选择器：台账按天同步，而录像保留期默认就是 7 天；
+   多翻一天就多一次整天重建索引，用户还多半看不到东西。 */
+const EV_DAYS = 7;
+
+function evPad(n){ return (n < 10 ? "0" : "") + n; }
+function evYmd(d){
+  return d.getFullYear() + "-" + evPad(d.getMonth() + 1) + "-" + evPad(d.getDate());
+}
+function evDayList(){
+  const out = [];
+  const now = new Date();
+  for(let i = 0; i < EV_DAYS; i++)
+    out.push(evYmd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)));
+  return out;
+}
+
+/* 分片名 `HH-MM-SS.mp4` → 当天钟点秒。
+   这是前端唯一一处"从文件名读时间"，而且读的是服务端刚给的那一片：
+   事件身份、偏移、可用性都由后端裁定，这里只把片头换算成钟点。
+   解析不出来就返回 null —— 宁可让上层说"拿不到定位"，也不猜一个 0。 */
+function evSegSec(name){
+  const m = /^(\d{2})-(\d{2})-(\d{2})\.mp4$/.exec(String(name || ""));
+  if(!m) return null;
+  return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]);
+}
+
+/* clip 接口 → 播放入点（当天钟点秒）：分片起点 + 服务端给的偏移。
+   偏移就是「事件起点前 10 秒」落在这一片里的位置，clamped 时它已从片首算过，
+   所以这里不需要再判一次截断。 */
+function evClipStart(clip){
+  if(!clip) return null;
+  const s = evSegSec(clip.segment);
+  if(s == null) return null;
+  return s + Math.max(0, +clip.offset_sec || 0);
+}
+
+function evCatText(k){
+  return k === "person" ? "人员" : k === "vehicle" ? "车辆"
+       : k === "two_wheeler" ? "两轮车" : k === "motion" ? "移动侦测" : String(k || "");
+}
+/* 两轮车并入车辆：与时间轴的三车道同一口径（evKind），否则同一条事件
+   在时间轴上是绿的、在事件页是灰的。 */
+function evCatCls(k){
+  return k === "person" ? "person"
+       : (k === "vehicle" || k === "two_wheeler") ? "vehicle" : "motion";
+}
+/* 卡片左侧色条取"最值得说"的类别：人 > 车 > 移动。
+   一条事件常常同时有人员和车辆，色条只能有一个颜色，挑最能代表它的那个。 */
+function evMainCat(ev){
+  const c = (ev && ev.categories) || [];
+  if(c.indexOf("person") >= 0) return "person";
+  if(c.indexOf("vehicle") >= 0 || c.indexOf("two_wheeler") >= 0) return "vehicle";
+  return "motion";
+}
+
+function evFind(id){
+  const evs = (EV.data && EV.data.events) || [];
+  for(let i = 0; i < evs.length; i++) if(evs[i].id === id) return evs[i];
+  return null;
+}
+
+/* 打开一条事件后展开的操作区。播不了时把服务端的中文原因摆出来 ——
+   需求里"点击直接播放"的前提是这一段真的还在，不在就得说清是哪一种不在。 */
+function evOpenHtml(ev){
+  let note = "";
+  if(EV.clipErr){
+    note = '<div class="evnote">读不到定位：' + esc(EV.clipErr) + '</div>';
+  }else if(EV.clip && EV.clip.missing_reason){
+    note = '<div class="evnote">' + esc(EV.clip.missing_text || "这段录像现在播不了")
+         + '<span class="code mono">' + esc(EV.clip.missing_reason) + '</span></div>';
+  }else if(EV.clip && EV.clip.clamped){
+    note = '<div class="evnote info">事件前面那段被片头截断，入点从片首开始。</div>';
+  }
+  return note + '<div class="evacts">'
+    + '<button class="evbtn" data-evgo="-30">◀ 前 30 秒</button>'
+    + '<button class="evbtn main" data-evgo="0">▶ 打开回放</button>'
+    + '<button class="evbtn" data-evgo="30">后 30 秒 ▶</button>'
+    + '</div>';
+}
+
+function evCardHtml(ev){
+  const open = EV.open === ev.id;
+  const cam = (CAMERAS.find(c => c.id === ev.cam) || {}).name || ev.cam || "—";
+  /* 置信度只在这条事件真有评估值时才显示：台账里没有就留空，
+     编一个 0.5 出来是最容易被当成"数字有出处"的那种假数据。 */
+  const conf = (typeof ev.confidence_max === "number")
+    ? " · 置信度 " + ev.confidence_max.toFixed(2) : "";
+  const cats = (ev.categories && ev.categories.length) ? ev.categories : ["motion"];
+  return '<div class="evcard" data-ev="' + esc(ev.id) + '">'
+    + '<i class="evstrip ' + evMainCat(ev) + '"></i>'
+    + '<div class="evmain">'
+      + '<div class="evtime mono">' + gfmtClock(ev.start) + '</div>'
+      + '<div class="evmeta">' + esc(cam) + " · " + gfmtDur(ev.duration) + conf + '</div>'
+      + (open ? evOpenHtml(ev) : "")
+    + '</div>'
+    + '<div class="evtags">' + cats.map(k =>
+        '<span class="evtag ' + evCatCls(k) + '">' + esc(evCatText(k)) + '</span>').join("")
+    + '</div></div>';
+}
+
+function renderEvList(){
+  const el = document.getElementById("evList");
+  if(!el) return;
+  let body;
+  if(EV.err){
+    body = '<div class="eveof">读取失败：' + esc(EV.err) + '<br>点右上角重新读一次</div>';
+  }else if(!EV.data){
+    body = '<div class="eveof">正在读事件台账（首次会按台账同步这一天的索引）…</div>';
+  }else{
+    const evs = EV.data.events || [];
+    /* 接口给的是时间正序（那是时间轴的读法：从早到晚读一天）。事件页要的是
+       "最近发生了什么"，所以列表倒过来展示 —— 只影响展示顺序，不参与任何
+       定位计算，切回回放页的落点仍然是服务端给的坐标。 */
+    const list = evs.slice().reverse();
+    body = evs.length
+      ? list.map(evCardHtml).join("") + '<div class="eveof">共 ' + evs.length
+        + ' 条 · 点一条直接看</div>'
+      : '<div class="eveof">' + (EV.day === jsToday() ? "今天" : EV.day)
+        + ' 没有符合条件的事件。<br>判定关闭或这一路没开事件侦测时会是空的。</div>';
+  }
+  el.innerHTML = body;
+}
+
+function renderEvHead(){
+  const el = document.getElementById("evSum");
+  if(!el) return;
+  if(EV.err){ el.textContent = "读取失败"; return; }
+  if(!EV.data){ el.textContent = "—"; return; }
+  const s = EV.data.summary || {};
+  const by = s.by_category || {};
+  const parts = [];
+  ["person", "vehicle", "two_wheeler"].forEach(k=>{
+    if(by[k]) parts.push(evCatText(k) + " " + by[k]);
+  });
+  el.textContent = (s.count || 0) + " 条" + (parts.length ? " · " + parts.join(" / ") : "");
+}
+
+/* 三段筛选条。类别只给台账里真实存在的三种（person / vehicle / two_wheeler）：
+   「移动侦测」不是类别，是"一条 AI 类别都没有"的兜底口径，服务端没有这个键；
+   再补一层前端过滤会让人以为筛出来的就是全部（列表被 limit 截过）。 */
+function renderEvChips(){
+  const dayBar = document.getElementById("evDayBar");
+  if(dayBar){
+    dayBar.innerHTML = evDayList().map(d =>
+      '<button class="evchip' + (d === EV.day ? " on" : "") + '" data-evday="' + d + '">'
+      + (d === jsToday() ? "今天" : d.slice(5)) + '</button>').join("");
+    dayBar.querySelectorAll("[data-evday]").forEach(b=>{
+      b.onclick = ()=>{
+        EV.day = b.getAttribute("data-evday");
+        EV.open = ""; EV.focus = ""; EV.clip = null; EV.clipErr = "";
+        EV.data = null;                    /* 换日期：旧列表不许冒充新结果 */
+        renderEvChips(); renderEvHead(); loadEvents(true);
+      };
+    });
+  }
+  const camBar = document.getElementById("evCamBar");
+  if(camBar){
+    const opts = [{id: "", name: "全部机位"}].concat(
+      (CAMERAS || []).map(c => ({id: c.id, name: c.name || c.id})));
+    camBar.innerHTML = opts.map(o =>
+      '<button class="evchip' + (o.id === EV.cam ? " on" : "") + '" data-evname="'
+      + esc(o.id) + '">' + esc(o.name) + '</button>').join("");
+    camBar.querySelectorAll("[data-evname]").forEach(b=>{
+      b.onclick = ()=>{
+        EV.cam = b.getAttribute("data-evname");
+        EV.open = ""; EV.focus = ""; EV.clip = null; EV.clipErr = "";
+        EV.data = null;
+        renderEvChips(); renderEvHead(); loadEvents(true);
+      };
+    });
+  }
+  const catBar = document.getElementById("evCatBar");
+  if(catBar){
+    const opts = [{id: "", name: "全部类别"}, {id: "person", name: "人员"},
+                  {id: "vehicle", name: "车辆"}, {id: "two_wheeler", name: "两轮车"}];
+    catBar.innerHTML = opts.map(o =>
+      '<button class="evchip' + (o.id === EV.cat ? " on" : "") + '" data-evcat="'
+      + esc(o.id) + '">' + esc(o.name) + '</button>').join("");
+    catBar.querySelectorAll("[data-evcat]").forEach(b=>{
+      b.onclick = ()=>{
+        EV.cat = b.getAttribute("data-evcat");
+        EV.open = ""; EV.focus = ""; EV.clip = null; EV.clipErr = "";
+        EV.data = null;
+        renderEvChips(); renderEvHead(); loadEvents(true);
+      };
+    });
+  }
+}
+
+function evQuery(){
+  const day = EV.day || jsToday();
+  let u = "/api/events?from=" + encodeURIComponent(day)
+        + "&to=" + encodeURIComponent(day) + "&limit=200";
+  if(EV.cam) u += "&cam=" + encodeURIComponent(EV.cam);
+  if(EV.cat) u += "&cat=" + encodeURIComponent(EV.cat);
+  return u;
+}
+
+/* 读列表。两条硬规矩：
+   - 失败过的不自动重试（否则「渲染 → 请求 → 失败 → 再渲染」会打成环，页面一直闪）；
+   - 同一组筛选 30 秒内吃缓存（服务端同步索引的代价是按天赋指纹，别一秒一次）。 */
+function loadEvents(force){
+  const url = evQuery();
+  if(!force && EV.err) return Promise.resolve(EV.data);
+  if(!force && EV.data && EV.key === url && (Date.now() / 1000 - EV.at) < 30)
+    return Promise.resolve(EV.data);
+  if(EV.loading) return Promise.resolve(EV.data);
+  EV.loading = true;
+  EV.key = url; EV.err = "";
+  if(force) EV.data = null;
+  renderEvHead(); renderEvList();
+  return API.get(url).then(d=>{
+    EV.loading = false;
+    if(d && d.ok){ EV.data = d; EV.at = Date.now() / 1000; }
+    else EV.err = (d && d.error) || "服务端没有返回事件数据";
+  }).catch(e=>{
+    EV.loading = false;
+    EV.err = String((e && e.message) || e);
+  }).then(()=>{ renderEvHead(); renderEvList(); return EV.data; });
+}
+
+/* 事件 → 回放要交代三件事：哪一路、哪一天、从哪一秒。
+   前两件是 state，第三件塞给回放页的入场逻辑（pvSeekTo）。
+   切页与起播都留在回放页那一侧 —— 定位/预加载/OSD 只该有一处实现。 */
+function evTargetState(ev){
+  if(!ev || !ev.cam || !ev.date) return false;
+  state.camId = ev.cam;
+  if(state.daySel !== ev.date) state.hourBlock = -1;
+  state.daySel = ev.date;
+  /* 日期条是"按 state.rec 算出来的最近有录像的那些天"，事件日期一定在里面；
+     万一不在（清单还没拉回来），补进去再算下标 —— 少了这一步会拿旧下标
+     播另一天的同一秒。 */
+  const l = (state.dayList || []).slice();
+  let i = l.indexOf(ev.date);
+  if(i < 0){ l.push(ev.date); l.sort(); state.dayList = l; i = l.indexOf(ev.date); }
+  state.dayIdx = i;
+  return true;
+}
+
+/* ±30 秒的基准：优先用「播放器最后停在哪」——用户按"后 30 秒"时看的是画面，
+   不是事件条目。切到事件页会停播（pvStop），但 PPLAY.t 就停在停下的那一秒，
+   正是要的基准；只有还没在这条事件的片上播过（换过片 / 没点开）才退回定位入点。 */
+function evBasePoint(ev, clip){
+  if(EV.focus === ev.id && PPLAY.segIdx >= 0
+     && PPLAY.day === ev.date && PPLAY.camId === ev.cam) return PPLAY.t;
+  return evClipStart(clip);
+}
+function evPlayPoint(ev, clip, delta){
+  const base = evBasePoint(ev, clip);
+  if(base == null) return null;
+  return Math.max(0, Math.min(86399, base + (+delta || 0)));
+}
+
+function evSeek(ev, t){
+  if(!(t >= 0)) return false;
+  evTargetState(ev);
+  pvSeekTo = {t: t, at: Date.now()};
+  if(activePage() === "play") pvAutoEnter(true);
+  else goPage("play");
+  return true;
+}
+
+/* 点卡片：先问定位，能播就跳；播不了留在卡片上把原因说清（不跳页、不给黑框）。 */
+function evOpen(id){
+  const ev = evFind(id);
+  if(!ev) return Promise.resolve(null);
+  if(EV.open === id){                       /* 再点一次收起 */
+    EV.open = ""; EV.clip = null; EV.clipErr = "";
+    renderEvList();
+    return Promise.resolve(null);
+  }
+  EV.open = id; EV.focus = id; EV.clip = null; EV.clipErr = "";
+  renderEvList();
+  return API.get("/api/events/" + encodeURIComponent(id) + "/clip").then(d=>{
+    if(EV.open !== id) return null;         /* 用户已经点了别的 */
+    if(!d || !d.ok){
+      EV.clipErr = (d && d.error) || "服务端没有返回定位信息";
+      renderEvList();
+      return null;
+    }
+    EV.clip = d;
+    renderEvList();
+    if(d.missing_reason) return d;
+    evSeek(ev, evClipStart(d));             /* 入点 = 分片起点 + 偏移（事件前 10 秒） */
+    return d;
+  }).catch(e=>{
+    if(EV.open === id){
+      EV.clipErr = String((e && e.message) || e);
+      renderEvList();
+    }
+    return null;
+  });
+}
+
+function evGo(delta){
+  const ev = evFind(EV.focus || EV.open);
+  if(!ev) return false;
+  if(!EV.clip || EV.clip.missing_reason){
+    toast("toast2", (EV.clip && EV.clip.missing_text) || "还没拿到这段的定位");
+    return false;
+  }
+  const t = evPlayPoint(ev, EV.clip, delta);
+  if(t == null) return false;
+  return evSeek(ev, t);
+}
+
+(function(){
+  const list = document.getElementById("evList");
+  if(list) list.onclick = e=>{
+    const t = e.target;
+    const g = (t && t.closest) ? t.closest("[data-evgo]") : null;
+    if(g){ e.stopPropagation(); evGo(+g.getAttribute("data-evgo")); return; }
+    const c = (t && t.closest) ? t.closest("[data-ev]") : null;
+    if(c) evOpen(c.getAttribute("data-ev"));
+  };
+  const rf = document.getElementById("btnEvRefresh");
+  if(rf) rf.onclick = ()=>{ loadEvents(true); };
+})();
 
 /* ================= 启动 ================= */
 function loadDay(){
