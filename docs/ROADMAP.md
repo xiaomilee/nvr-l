@@ -23,7 +23,7 @@
 | 1.5 | 0.9.119 | 实测修复：状态原因不自相矛盾 + 测试机部署工具 | done | 8fbe09f |
 | 2 | 0.9.120 | 安全：API Token / 凭据收敛 / 前端统一请求层 | done | c113ff3 |
 | 3 | 0.9.121 | 事件中心：统一事件模型 + 跨摄像头检索 + 点击定位 | done | 0972f1c |
-| 4 | 0.9.122 | 检测治理：有界并发 + 时间窗确认 + 诊断完整 | todo | - |
+| 4 | 0.9.122 | 检测治理：有界并发 + 时间窗确认 + 诊断完整 | doing | - |
 | 5 | 0.9.123 | 前端拆分 + 文档重构 + 按钮验收自动化 | todo | - |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
@@ -51,6 +51,7 @@
 | 5 | 11-08 08:06 | 批次 2 收尾：前端 18 处裸 fetch 收进 `API.get/post`（超时/401/JSON/CSRF 四处只写一遍），修「测试通知」永远 403；部署工具补同步 `/var/apps/nvr/cmd`（旧 main 把 `/api/health` 的 401 当失败，导致"装成功了却判超时还回滚"）+ `wait_health` 重读 port.txt | c113ff3 | 0.9.120 出包；152 部署七项全绿（含无凭证必须 401），两路 `hstate=recording` |
 | 6 | 11-08 09:40 | 批次 3 切片一：`event.py`（身份/生命周期/定位）+ `event_index.py`（SQLite 投影）+ 三个只读接口（`/api/events`、`/<id>`、`/<id>/clip`）；测试 111 条 | 720a7da | 未出包（批次只剩前端页与版本收尾）；后端 944 + 前端全绿，validate 73 项通过 |
 | 7 | 11-08 11:25 | 批次 3 收尾：前端「事件」页（三段筛选 / 卡片 / 点击定位 / ±30 秒）+ `test/ui/events.test.js` 70 条 + `/api/events` 进部署自检 + 五处版本 0.9.121 + `test/e2e_events.js` 端到端 | 0972f1c | 0.9.121 出包（101142027 字节，md5 f8b82be104966f53a29c118e4ceb933b）；152 部署八项全绿，两路 `hstate=recording`；真机点 11:19:52「人员」事件 814ms 起播、落点 −10.0 秒 |
+| 8 | 11-08 12:55 | 批次 4 切片一：有界并发调度（`Scheduler` + 工作者池 + 过期丢弃）+ 三态记账（hit/miss/unknown/skip）+ 统一 `detect.status_of`（七项契约 + 十个错误码）+ 前端按 state 翻译与未知单独列 | d2138c3 | 未出包（批次还剩时间窗确认与版本收尾）；后端 988 + 前端 915 全绿，validate 73 项通过 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -291,19 +292,55 @@ cd nvr-slim/fpk && python tools/deploy_test.py --report ../../test-reports/deplo
 
 清单：
 
-- [ ] `detect.py` 有界并发：默认 2 路、上限 4 路，工作者池 + 任务队列；
+- [x] `detect.py` 有界并发：默认 2 路、上限 4 路，工作者池 + 任务队列；
       同一路不重入；每路独立 `next_due`；超时任务丢弃过期帧；检测绝不阻塞取帧与录像。
+      *（第 8 轮落地。新增 `Scheduler`（无 IO 无线程，单测直接喂时间戳）+
+      ticker 线程 + `pool_size()` 个工作者线程：ticker 只判定与 `put_nowait`，
+      队列满就丢并记 `QUEUE_FULL`；工作者拿到排队超过一个节拍的任务直接丢
+      （`STALE_FRAME`）。并发度 = `pool_size(路数)`，默认 2、封顶 4，在 `start()`
+      按当时路数算——构造时读不到配置，固定成 2 又让 8 路跑不满。旧写法「一个
+      循环顺序跑完所有路」在 8 路时一轮 = 8 × 单路，必然超过 5 秒节拍，检测频率
+      随路数稀释。`last_success_at` 只在真有结论的一拍刷新。）*
 - [ ] 时间窗确认：N 帧中 M 帧命中、类置信度阈值、最短持续、结束等待、相邻事件合并
       （轻量实现，不引入 DeepSORT/ByteTrack）。
-- [ ] 三态语义：`hit / miss / unknown`，`unknown`（取帧失败、模型未加载、推理异常、断流）不得计入「无活动」。
-- [ ] `detect_status()` 统一 `{enabled, available, running, error_code, error_message, last_success_at}`，
+- [x] 三态语义：`hit / miss / unknown`，`unknown`（取帧失败、模型未加载、推理异常、断流）不得计入「无活动」。
+      *（第 8 轮落地。三态之外多一档 `skip`：取帧层「本轮没有新画面」是正常节拍
+      错位（检测 5 秒 / 取帧 10 秒），既不是 hit 也不是故障，混进 unknown 会每两拍
+      刷一次红。只有 hit/miss 进 `today`（有结论的帧数），unknown 按错误码分桶，
+      `last_err` 只由 unknown 写。顺带修掉 `_day` 定死在构造时导致的跨零点
+      「今日」永远 0 帧。）*
+- [x] `detect_status()` 统一 `{enabled, available, running, error_code, error_message, last_success_at}`，
       所有失败路径都给 code（`FFMPEG_NOT_FOUND` / `MODEL_MISSING` / `FRAME_FAIL` / `INFER_ERR`）。
-- [ ] 前端：检测卡片显示可用性与原因；统计里 `unknown` 单独一类。
+      *（第 8 轮落地。判定搬进 `detect.status_of(worker, det_cfg, ffmpeg, runtime)`，
+      `/api/status` 只负责取三样现场。除清单四项外另有 `RUNTIME_FAIL` /
+      `MODEL_LOAD_FAIL` / `WORKER_DOWN` / `QUEUE_FULL` / `STALE_FRAME` / `STATUS_ERR`；
+      加 `state` 四档（disabled / starting / unavailable / ready）供前端直接翻译——
+      「没加载完」和「坏了」以前都被写成「worker 未运行」，用户只能猜要不要重启。
+      旧字段 `loaded/error/avg_ms/per_cam` 全部保留，老前端不会白屏。）*
+- [x] 前端：检测卡片显示可用性与原因；统计里 `unknown` 单独一类。
+      *（第 8 轮落地。`detStateZh` / `detHintOf` / `detUnknownOf` 三个纯函数：
+      state 翻中文、十个错误码各给下一步（装 ffmpeg / 重装应用 / 核 Python 版本 /
+      重开服务）、未知数按路汇总。诊断卡新增「调度」一行（并路数 / 队列 / 丢弃
+      队列满与过期 / 一轮耗时与路数），每路行加「未知 N」「同帧跳过 N」。
+      顺手修掉每路「最近」渲染成 `[object Object]`（`c.last` 是对象，不是字符串）。）*
 - [ ] 测试：`test_detect_sched.py`、`test_event_confirm.py`、`test_detect_status.py`。
+      *（第 8 轮已落地两个：`test_detect_sched.py` 20 条（并发上限、不重入、
+      ticker 不阻塞、队列满/过期丢弃、8 路一轮明显短于串行、按路数自动定并发）、
+      `test_detect_status.py` 22 条（七项契约、四档 state、引擎错误码、三态记账、
+      跨零点）；另 `test_detect_boot.py` 补 2 条接线断言、`test/ui/detect.test.js`
+      44 条。`test_event_confirm.py` 随时间窗确认一起做。）*
 - [ ] 版本 0.9.122。
 
 **验收**：8 路配置下，单轮检测总耗时不再随路数线性增长（≤ 1.8 × 单路耗时）；
 人为让某路取帧失败，统计里出现 `unknown` 而不掉「无活动」。
+
+> **进度（第 8 轮，未收尾）**：有界并发 / 三态 / 统一状态 / 前端展示四项已落地，
+> 剩「时间窗确认」与版本收尾。验收怎么量也定了口径：`/api/status` 的
+> `detect.sched.round_avg_ms` 与 `round_cams` 就是这个数（ticker 派活到这一拍
+> 全部干完的墙钟），本轮先在单测里证明"8 路一轮 ≈ 2 × 单路"而非 8 × 单路；
+> 真机只有 2 路，8 路的结论要等出包后用 `round_avg_ms` 外推并在汇报里写清口径。
+> 「人为让某路取帧失败」用停掉 `frames` 那一路来做（`_frame_path_for_detect`
+> 会回 `None` → `FRAME_FAIL`），不做假数据。
 
 ---
 
