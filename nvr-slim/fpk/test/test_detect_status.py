@@ -122,6 +122,15 @@ class TestStatusOf(unittest.TestCase):
         st = detect.status_of(None, None)
         self.assertEqual(st["state"], "disabled", "配置块缺失按「关着」处理，不猜")
 
+    def test_sched_shape_without_worker(self):
+        """没有 worker 也要给「全 0 的形状」：调用方按固定键读，缺键就得判
+        "是没有还是没起"，判断多了迟早写错（前端调度行就靠 workers>0 决定画不画）。"""
+        st = detect.status_of(None, {"enable": False})
+        for k in ("workers", "queued", "queue_max", "dropped_full",
+                  "dropped_stale", "round_avg_ms", "round_cams"):
+            self.assertIn(k, st["sched"], "缺键 %s" % k)
+        self.assertEqual(st["sched"]["workers"], 0)
+
 
 class TestEngineCodes(unittest.TestCase):
     def setUp(self):

@@ -1275,6 +1275,17 @@ class DetectWorker:
 
 # ---------------------------------------------------------------- 统一状态
 
+def sched_blank():
+    """调度实况的空壳（没 worker 时的形状）。
+
+    为什么给一张"全 0 的形状"而不是 `{}`：调用方按固定键读，缺键就得判断
+    "是没有还是没起"，判断多了迟早写错。0 在这里是诚实的——真的没跑。
+    """
+    return {"workers": 0, "interval": 0, "queued": 0, "queue_max": 0,
+            "inflight": 0, "dropped_full": 0, "dropped_stale": 0,
+            "pending": 0, "round_ms": 0.0, "round_avg_ms": 0.0, "round_cams": 0}
+
+
 def status_of(worker=None, det_cfg=None, ffmpeg="", runtime=None):
     """`/api/status` 的 detect 块：**一个**判定口径，三处共用。
 
@@ -1335,7 +1346,7 @@ def status_of(worker=None, det_cfg=None, ffmpeg="", runtime=None):
     out.setdefault("error", "")
     out.setdefault("avg_ms", 0)
     out.setdefault("per_cam", {})
-    out.setdefault("sched", {})
+    out.setdefault("sched", sched_blank())
     if runtime is not None:
         out["runtime"] = runtime
     return out

@@ -139,6 +139,22 @@ def main():
         # 页面上的 CPU / 内存 / 核显必须来自这里，而不是 HTML 里写死
         res = st.get("res") or {}
         check("status 带 res 资源块", isinstance(res, dict) and res, list(st)[:8])
+        # AI 检测状态只有一个口径（0.9.122）：七项契约字段必须有，且"关着"
+        # 不许写成故障（error_code 空、state=disabled）——这条是防着有人把
+        # 状态判定又拆回接口层自己拼。
+        dt = st.get("detect") or {}
+        check("status 的 detect 带七项契约字段",
+              all(k in dt for k in ("enabled", "available", "running", "state",
+                                    "error_code", "error_message", "last_success_at")),
+              sorted(dt))
+        check("检测默认关闭 → state=disabled 且无错误码",
+              dt.get("state") == "disabled" and dt.get("error_code") == "",
+              (dt.get("state"), dt.get("error_code")))
+        check("detect 带调度实况（并发/队列/丢弃/一轮耗时）",
+              isinstance(dt.get("sched"), dict)
+              and all(k in dt["sched"] for k in ("workers", "queued", "dropped_full",
+                                                 "dropped_stale", "round_avg_ms")),
+              dt.get("sched"))
         check("res 含进程 CPU / 内存 / 整机 CPU 字段",
               all(k in res for k in ("proc_cpu", "mem_mb", "sys_cpu", "mem_total_mb")),
               sorted(res))
