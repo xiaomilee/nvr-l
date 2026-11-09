@@ -85,7 +85,7 @@ function renderDiagZone(){
     /* 缺口要扫当天分片目录，进诊断页才拉，且 60 秒内不重复拉 */
     if(!GAPS.data && !GAPS.loading && !GAPS.err) loadGaps(false);
     h += cardStorage() + cardRecCams() + cardGaps() + cardIngest() + cardEnv() + cardParts()
-       + cardDetectDiag() + cardLog() + cardMaint();
+       + cardShotDiag() + cardDetectDiag() + cardLog() + cardMaint();
   }else{
     h += '<div class="gcard genfold"><div class="genline" id="diagSum">' + diagSummary() + '</div>'
       + '<button class="minibtn" data-diagtoggle="1">查看</button></div>';
@@ -464,6 +464,104 @@ function cardParts(){
     + '</div>';
 }
 
+/* ---------------- 事件快照诊断卡（0.9.136） ----------------
+   0.9.134 / 0.9.135 连续两版出现「测试机有图、生产机没图」，而界面上看不到任何
+   证据：stored=0 可能是「录像目录找错」「分片已被清」「ffmpeg 跑不动」「目录写
+   不进」四件事之一，处置完全不同。这张卡把两池计数、最近几条处理轨迹摆出来，
+   再给一个当场自检按钮 —— 排障不用再靠猜。 */
+function cardShotDiag(){
+  return '<div class="dcard">'
+    + '<div class="dh">事件快照<span class="tg">AI 直存 · 运动补图</span></div>'
+    + '<div class="diagenv" id="diagShots" style="margin-top:0">'
+    + '<span class="empty">读取中…</span></div>'
+    + '</div>';
+}
+
+function shotTraceText(t){
+  const dirs = (t.dirs || []).join("/") || "?";
+  const seg = t.seg ? (" → " + t.seg + (t.offset != null ? "@" + t.offset + "s" : "")) : "";
+  return (t.ts || "") + " " + esc(String(t.cam || ""))
+    + " " + esc(String(t.start != null ? t.start : "")) + "s"
+    + " · 目录 " + esc(dirs) + ((t.dirs_seen && t.dirs_seen.length) ? "" : "（不存在）")
+    + " · 分片 " + (t.segs != null ? t.segs : "?") + seg
+    + " · " + esc(String(t.reason || t.step || ""));
+}
+
+async function loadDiagShots(){
+  const el = document.getElementById("diagShots");
+  if(!el) return;
+  let d;
+  try{
+    d = await API.get("/api/status");
+    if(!d || d.ok === false) throw new Error((d && d.error) || "status 失败");
+  }catch(e){
+    el.innerHTML = "读取失败：" + esc(String((e && e.message) || e));
+    return;
+  }
+  const sh = d.shots || {};
+  const ms = d.motion_shot || {};
+  const line = (k, v, warn) =>
+    '<div class="dline kv"><span class="k">' + k + '</span><span class="v"'
+    + (warn ? ' style="color:var(--warn)"' : '') + '>' + v + '</span></div>';
+  const ff = ms.ffmpeg || {};
+  const ffText = !ff.path
+    ? '<b class="bad">没有配置 ffmpeg</b>'
+    : (ff.ok == null
+        ? esc(String(ff.path)) + ' · 还没抽过帧'
+        : (ff.ok ? '<b class="ok">可用</b> ' : '<b class="bad">不可用</b> ')
+          + esc(String(ff.err || "")));
+  const tr = (ms.trace || []).slice(-4).reverse();
+  el.innerHTML =
+      line("运行版本", esc(String(d.version || "—")))
+    + line("AI 检测直存", '已写 <b>' + (sh.written|0) + '</b> · 限流挡 ' + (sh.rate_limited|0)
+           + ' · 日上限挡 ' + (sh.capped|0) + ' · 写盘失败 ' + (sh.failed|0)
+           + ' · 排队 ' + (sh.queued|0), (sh.failed|0) > 0)
+    + line("运动补图", (ms.running ? '<b class="ok">运行中</b>' : '<b class="bad">未运行</b>')
+           + ' · 入队 ' + (ms.queued|0) + ' · 已落盘 <b>' + (ms.stored|0) + '</b>'
+           + ' · 被拒 ' + (ms.rejected|0) + ' · 缺分片 ' + (ms.missed|0)
+           + ' · 抽帧失败 ' + (ms.failed|0) + ' · 队列 ' + (ms.qsize|0),
+           (ms.running === false) || (ms.failed|0) > 0 || (ms.rejected|0) > 0)
+    + line("ffmpeg", ffText, ff.ok === false)
+    + line("录像根", esc(String(ms.record_root || "—")))
+    + (ff.last_err
+        ? line("最近抽帧错误", esc(String(ff.last_err).slice(0, 160)), true) : "")
+    + (tr.length
+        ? '<div class="dline" style="margin-top:2px;font-size:10.5px;color:var(--faint)">'
+          + '最近处理（新→旧）：</div>'
+          + tr.map(t=>'<div class="dline" style="font-size:10.5px">'
+                      + shotTraceText(t) + '</div>').join("")
+        : '<div class="dline" style="font-size:10.5px;color:var(--faint)">'
+          + '还没有处理过任何事件（打开一次事件页就会开始补图）。</div>')
+    + '<button class="btnline" id="btnShotProbe" style="margin-top:9px">自检第一路（今天）</button>'
+    + '<div id="shotProbeOut"></div>';
+
+  const b = document.getElementById("btnShotProbe");
+  if(b) b.onclick = async ()=>{
+    const out = document.getElementById("shotProbeOut");
+    if(!out) return;
+    out.innerHTML = '<div class="dline">检查中…</div>';
+    try{
+      const cam = (CAMERAS[0] && CAMERAS[0].id) || "";
+      const r = await API.get("/api/motion_shot/probe?cam=" + encodeURIComponent(cam));
+      if(!r || !r.ok) throw new Error((r && r.error) || "接口无响应（服务端可能还是旧版本）");
+      const p = r.probe || {};
+      out.innerHTML =
+          line("自检机位", esc(String(p.cam || "—")) + " · " + esc(String(p.date || "—")))
+        + line("目录（尝试）", esc((p.dirs || []).join(" / ") || "—"))
+        + line("目录（命中）", esc((p.dirs_seen || []).join(" / ") || "一个都不在"),
+               !(p.dirs_seen || []).length)
+        + line("当天分片", (p.files|0) + " 个文件 / 可用 " + (p.segs|0) + " 片"
+               + (p.seg_first != null ? " · 首片 " + p.seg_first + "s" : ""), !(p.segs|0))
+        + line("快照目录可写", (p.shot_writable ? '<b class="ok">是</b>' : '<b class="bad">否</b>')
+               + " · " + esc(String(p.shot_write_to || "")), !p.shot_writable)
+        + line("当天已有快照", (p.shots_today == null ? "—" : p.shots_today + " 张"));
+    }catch(e){
+      out.innerHTML = '<div class="dline" style="color:var(--warn)">自检失败：'
+        + esc(String((e && e.message) || e)) + '</div>';
+    }
+  };
+}
+
 /* 状态口径（与 /api/record/parts 的 moov/kind 一一对应）：
      待重建 = 无 moov，需要 ffmpeg 扫 mdat 重建索引（静置够久后自动做）
      可封口 = 有 moov 只是没来得及改名（分片 MP4 下这是常态）
@@ -832,6 +930,8 @@ function bindSettings(body){
     el.onclick = ()=>{ SET.partsOpen = !SET.partsOpen; renderCamTabs(); };
   });
   if(body.querySelector("#diagParts")) loadDiagParts();
+  /* 事件快照：两池计数 + 最近处理轨迹（0.9.136）。一次 /api/status，进诊断页才拉 */
+  if(body.querySelector("#diagShots")) loadDiagShots();
   if(body.querySelector("#diagLogText")) loadDiagLog();
 
   /* ① 事件侦测总闸：开/关 */

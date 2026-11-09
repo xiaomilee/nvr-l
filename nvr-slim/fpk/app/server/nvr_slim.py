@@ -3589,6 +3589,33 @@ class Handler(BaseHTTPRequestHandler):
                                         runtime.load_config(STATE["var_dir"]))})
         if path == "/api/status":
             return self._send(200, status_payload())
+        if path == "/api/motion_shot/probe":
+            # 运动事件快照当场自检（0.9.136）：只读，不抽帧、不落盘、不改任何状态。
+            # 参数 cam / date / start 全可选（缺省=第一路 / 今天 / 不定位）。
+            # 存在理由：stored=0 可能是"目录找错""分片没了""ffmpeg 跑不动""目录
+            # 写不进"四件事之一，处置完全不同；这个接口一次问完，排障不用再猜。
+            qs = parse_qs(urlparse(self.path).query)
+
+            def _one(k, d=None):
+                return (qs.get(k) or [d])[0]
+
+            msvc = STATE.get("motion_shot")
+            if msvc is None:
+                return self._send(200, {"ok": False,
+                                        "error": "运动事件快照服务没有启动"})
+            try:
+                _cams = cameras()
+            except Exception:
+                _cams = []
+            cam = _one("cam") or (_cams[0]["id"] if _cams else "")
+            date = _one("date") or time.strftime("%Y-%m-%d")
+            _sv = _one("start")
+            try:
+                start = float(_sv) if _sv not in (None, "") else None
+            except (TypeError, ValueError):
+                start = None
+            return self._send(200, {"ok": True,
+                                    "probe": msvc.probe(cam, date, start)})
         if path == "/api/notify/history":
             # 通知发送历史：内存 recent 只有 20 条且重启即丢，这里读的是落盘事实。
             # 只在有人显式查时读盘；/api/status 的轮询走 Notifier 的内存计数。

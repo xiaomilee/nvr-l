@@ -281,5 +281,91 @@ class TestRobustness(Tmp):
             svc.stop()
 
 
+class TestDiag(Tmp):
+    """诊断能力（0.9.136）：连续两版"测试机绿、生产机没图"，靠计数看不出卡在哪。
+
+    这里守的是：probe 必须能分清「目录不存在 / 目录在但没分片 / 目录写不进」，
+    trace 必须留下失败原因 —— 否则下一轮排障还是只能猜。
+    """
+
+    def _seed(self, cam, date, names):
+        d = os.path.join(self.rec, cam, date)
+        os.makedirs(d, exist_ok=True)
+        for n in names:
+            with open(os.path.join(d, n), "wb") as f:
+                f.write(b"fake-mp4")
+        return d
+
+    def test_50_scan_day_separates_dirs_and_files(self):
+        date = day_str()
+        self._seed("cam-01", date,
+                   ["00-00-00.mp4", "00-05-05.mp4", "00-10-10.c01.mp4",
+                    "00-15-15.mp4.part", "note.txt"])
+        sealed, parts, dirs_seen, files = ms.scan_day(
+            self.rec, ["cam-01", "cam-gone"], date)
+        self.assertEqual(dirs_seen, ["cam-01"], "只报真实存在的目录")
+        self.assertEqual(files, 4, "只数 .mp4 / .mp4.part")
+        self.assertEqual(len(sealed), 2, "活动切片不是全时分片")
+        self.assertEqual(len(parts), 1)
+
+    def test_51_probe_missing_dir(self):
+        svc = ms.MotionShotService("", self.var, self.rec,
+                                   lambda cam: ["cam-01"], None)
+        p = svc.probe("cam-01", "2026-11-09")
+        self.assertEqual(p["dirs"], ["cam-01"])
+        self.assertEqual(p["dirs_seen"], [])
+        self.assertEqual(p["files"], 0)
+        self.assertEqual(p["segs"], 0)
+        self.assertIn("shot_writable", p, "目录可写性必须报出来")
+        self.assertIn("ffmpeg", p)
+
+    def test_52_probe_locate(self):
+        date = day_str()
+        self._seed("cam-01", date, ["00-00-00.mp4"])
+        svc = ms.MotionShotService("", self.var, self.rec,
+                                   lambda cam: ["cam-01"], None)
+        p = svc.probe("cam-01", date, 100.0)
+        self.assertEqual(p["segs"], 1)
+        self.assertEqual(p["dirs_seen"], ["cam-01"])
+        self.assertIsNotNone(p["locate"]["seg"], "给了 start 就该报出定位到的分片")
+        self.assertIsNotNone(p["locate"]["offset"])
+
+    def test_53_status_exposes_trace_and_ffmpeg(self):
+        svc = ms.MotionShotService("", self.var, self.rec,
+                                   lambda cam: ["cam-01"], None)
+        st = svc.status()
+        for k in ("trace", "ffmpeg", "record_root", "stored", "rejected", "missed"):
+            self.assertIn(k, st)
+        self.assertEqual(st["trace"], [])
+        self.assertIsNone(st["ffmpeg"]["ok"], "status 不该主动跑 ffmpeg 探测")
+
+    def test_54_trace_keeps_failure_reason(self):
+        date = day_str()
+        os.makedirs(os.path.join(self.rec, "cam-01", date), exist_ok=True)  # 空目录
+        svc = FakeExtractService("", self.var, self.rec,
+                                 lambda cam: ["cam-01"], None)
+        svc.start()
+        try:
+            ev = {"id": "cam-01_%s_000100" % date.replace("-", ""), "cam": "cam-01",
+                  "date": date, "start": 100.0, "end": 108.0}
+            svc.request(ev)
+            self.assertTrue(wait_for(lambda: svc.missed >= 1))
+        finally:
+            svc.stop()
+        tr = svc.status()["trace"]
+        self.assertTrue(tr, "失败也必须有轨迹，否则排障无从下手")
+        self.assertEqual(tr[-1]["step"], "locate")
+        self.assertEqual(tr[-1]["segs"], 0)
+        self.assertIn("分片", tr[-1]["reason"])
+
+    def test_55_ffmpeg_missing_is_reported(self):
+        svc = ms.MotionShotService("/no/such/ffmpeg-binary", self.var, self.rec,
+                                   lambda cam: ["cam-01"], None)
+        ok, why = svc.ffmpeg_ready()
+        self.assertFalse(ok)
+        self.assertTrue(why, "不可用时必须给原因，不能只说 False")
+        self.assertFalse(svc.ffmpeg_ready()[0], "结论要缓存，不重复探测")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

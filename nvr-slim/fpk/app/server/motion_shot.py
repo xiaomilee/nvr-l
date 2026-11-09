@@ -27,10 +27,12 @@ request(ev)。request 幂等：窗口内已有图就跳过；否则入队。抽�
 import os
 import queue
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
 import time
+from collections import deque
 
 import event_shot as es
 import event
@@ -50,6 +52,12 @@ MISS_TTL = 600.0
 # 负缓存最多记多少条：超了就把过期的清掉再放，避免长跑进程里无限增长。
 MISS_MAX = 4096
 
+# 最近几条处理轨迹（0.9.136）。为什么要有它：0.9.134/0.9.135 连续两版在测试机
+# 全绿、生产机却没图，而 status 只给聚合计数 —— 看得出「没成功」，看不出「卡在
+# 哪一步」。轨迹记的是每条事件的完整链路：解析出的目录、目录在不在、当天几个分片、
+# 定位到哪个文件、ffmpeg 报什么错、落盘收没收。一次截图就能定位。
+TRACE_MAX = 6
+
 
 def epoch_of(date, start):
     """(本地日期, 当天秒) → epoch。文件名与目录都靠它落到正确的那一天。
@@ -66,23 +74,28 @@ def epoch_of(date, start):
         return time.time()
 
 
-def locate_segment(record_root, cam_dirs, date, start):
-    """事件起点 → (分片绝对路径, 片内偏移秒) 或 None。
+def scan_day(record_root, cam_dirs, date):
+    """某路某天的分片清单 → (sealed, parts, dirs_seen, files_seen)。
 
-    复用 event.resolve：从文件名取钟点、未封口那片也算、mtime 判是否还在片内。
-    分片枚举不依赖全局 cameras/record_dir，是个纯函数，单测可以喂假目录。
+    `sealed`/`parts` 是 {起点秒: 文件名}，与 nvr_slim._day_files 同口径；
+    额外回两个**诊断**用数字：实际扫到了哪些目录、看过多少个 .mp4 条目。
+    补图失败时最需要分清的就是「目录没找对」和「目录对了但没这一片」——
+    聚合计数永远分不开，这两个数字能。
     """
     sealed, parts = {}, {}
+    dirs_seen, files_seen = [], 0
     for dn in (cam_dirs or ()):
         d = os.path.join(record_root, dn, date)
         try:
             names = os.listdir(d)
         except OSError:
             continue
+        dirs_seen.append(dn)
         for n in names:
             low = n.lower()
             if not (low.endswith(".mp4") or low.endswith(".mp4.part")):
                 continue
+            files_seen += 1
             st = ledger.src_start(n)
             if st is None:
                 continue
@@ -92,6 +105,11 @@ def locate_segment(record_root, cam_dirs, date, start):
             if _CLIP_SLICE_RE.match(n):
                 continue
             sealed[st] = n
+    return sealed, parts, dirs_seen, files_seen
+
+
+def _resolve(sealed, parts, record_root, cam_dirs, date, start):
+    """分片清单已在手时的定位（避免为了诊断再扫一遍目录）。"""
     loc = event.resolve(start, sorted(sealed.keys()), sorted(parts.keys()))
     if loc.get("missing_reason"):
         return None
@@ -101,6 +119,16 @@ def locate_segment(record_root, cam_dirs, date, start):
         if os.path.isfile(p):
             return (p, float(loc.get("offset_sec") or 0.0))
     return None
+
+
+def locate_segment(record_root, cam_dirs, date, start):
+    """事件起点 → (分片绝对路径, 片内偏移秒) 或 None。
+
+    复用 event.resolve：从文件名取钟点、未封口那片也算、mtime 判是否还在片内。
+    分片枚举不依赖全局 cameras/record_dir，是个纯函数，单测可以喂假目录。
+    """
+    sealed, parts, _dirs, _files = scan_day(record_root, cam_dirs, date)
+    return _resolve(sealed, parts, record_root, cam_dirs, date, start)
 
 
 class MotionShotService(object):
@@ -129,6 +157,10 @@ class MotionShotService(object):
         self.failed = 0       # 抽帧失败（没 ffmpeg / 坏的片 / 超时）
         self.missed = 0       # 分片定位不到（过期 / 被删）
         self._miss = {}       # (cam,date,start) -> 该时刻之前不再重试
+        self._trace = deque(maxlen=TRACE_MAX)   # 最近几条处理轨迹（诊断用）
+        self._ffmpeg_ok = None                  # None=没探过 / True / False
+        self._ffmpeg_err = ""
+        self._last_err = ""                     # 最近一次抽帧失败的原因
 
     # ---------------------------------------------------------- 生命周期
     def start(self):
@@ -144,6 +176,44 @@ class MotionShotService(object):
 
     def alive(self):
         return bool(self._th and self._th.is_alive())
+
+    # ---------------------------------------------------------- ffmpeg 可用性
+    def ffmpeg_ready(self):
+        """ffmpeg 能不能跑 → (bool, 说明)。结果缓存，不重复探测。
+
+        为什么单独探：`STATE["ffmpeg_bin"]` 拿到的可能是个**不存在或不可执行**的
+        路径（换机器、换系统镜像、包内路径变了）。那种情况下 ffmpeg 抽帧永远
+        失败、failed 一路涨，但计数看不出「根本没这个程序」。先 `os.access` 试
+        X_OK，能跑再 `-version` 确认不是空壳 —— 两层都便宜，各只做一次。
+        """
+        if self._ffmpeg_ok is not None:
+            return self._ffmpeg_ok, self._ffmpeg_err
+        p = self.ffmpeg
+        if not p:
+            self._ffmpeg_ok, self._ffmpeg_err = False, "没有配置 ffmpeg 路径"
+            return self._ffmpeg_ok, self._ffmpeg_err
+        cand = p
+        if not os.path.isabs(cand) or not os.path.exists(cand):
+            cand = shutil.which(p) or p        # 允许只配了个 "ffmpeg"，靠 PATH 找
+        self.ffmpeg = cand
+        if not os.path.isfile(cand):
+            self._ffmpeg_ok, self._ffmpeg_err = False, "找不到这个文件：%s" % cand
+            return self._ffmpeg_ok, self._ffmpeg_err
+        if not os.access(cand, os.X_OK):
+            self._ffmpeg_ok, self._ffmpeg_err = False, "没有执行权限：%s" % cand
+            return self._ffmpeg_ok, self._ffmpeg_err
+        try:
+            r = subprocess.run([cand, "-version"], timeout=8,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if r.returncode != 0:
+                self._ffmpeg_ok = False
+                self._ffmpeg_err = "-version 退出码 %d：%s" % (
+                    r.returncode, (r.stderr or b"")[:120].decode("utf-8", "replace"))
+            else:
+                self._ffmpeg_ok, self._ffmpeg_err = True, cand
+        except (OSError, subprocess.SubprocessError) as e:
+            self._ffmpeg_ok, self._ffmpeg_err = False, "无法执行：%r" % e
+        return self._ffmpeg_ok, self._ffmpeg_err
 
     # ---------------------------------------------------------- 入队（查询路径）
     def _is_miss(self, cam, date, start):
@@ -202,28 +272,54 @@ class MotionShotService(object):
 
     # ---------------------------------------------------------- 抽帧（后台线程）
     def _extract(self, path, offset):
-        """从分片抽一帧 → 字节；任何异常都返回 None（不抛）。"""
-        if not self.ffmpeg:
+        """从分片抽一帧 → 字节；任何异常都返回 None（不抛）。
+
+        失败原因写进 `self._last_err`，供诊断轨迹带走。0.9.135 之前这里一律
+        静默返回 None，线上只能看到 failed 涨，看不出是「没 ffmpeg」「解不了
+        这个编码」还是「时间点超出片长」—— 三种完全不同的处置方式。
+        """
+        ok, why = self.ffmpeg_ready()
+        if not ok:
+            self._last_err = why
             return None
+        base = [self.ffmpeg, "-hide_banner", "-loglevel", "error",
+                "-ss", "%.3f" % max(0.0, offset), "-i", path,
+                "-frames:v", "1", "-q:v", "4", "-f", "image2"]
+        # 先指定 mjpeg 编码器；失败再去掉 -c:v 重试一次：某些精简版 ffmpeg
+        # 没有独立 mjpeg encoder，但 image2 + .jpg 仍然出图。两次都失败才算失败。
+        for extra in (["-c:v", "mjpeg"], []):
+            data = self._run_ffmpeg(base + extra)
+            if data:
+                return data
+        return None
+
+    def _run_ffmpeg(self, cmd):
+        """跑一次 ffmpeg，产出字节或 None（失败原因写 _last_err）。"""
         fd, tmp = tempfile.mkstemp(suffix=".jpg.part", prefix="mshot-")
         os.close(fd)
-        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error",
-               "-ss", "%.3f" % max(0.0, offset), "-i", path,
-               "-frames:v", "1", "-q:v", "4", "-f", "image2",
-               "-c:v", "mjpeg", "-y", tmp]
         try:
-            proc = subprocess.run(cmd, timeout=20, stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.PIPE)
+            proc = subprocess.run(cmd + ["-y", tmp], timeout=20,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             if proc.returncode != 0:
+                tail = (proc.stderr or b"")[-300:].decode("utf-8", "replace").strip()
+                self._last_err = "ffmpeg 退出码 %d：%s" % (
+                    proc.returncode, tail.replace("\n", " ") or "(无输出)")
                 return None
-            if not os.path.isfile(tmp) or os.path.getsize(tmp) < 1024:
+            size = os.path.getsize(tmp) if os.path.isfile(tmp) else 0
+            if size < 1024:
+                self._last_err = "ffmpeg 没写出有效帧（%d 字节）" % size
                 return None
             with open(tmp, "rb") as f:
                 data = f.read(es.MAX_SHOT_BYTES + 1)
             if len(data) > es.MAX_SHOT_BYTES:
+                self._last_err = "这一帧超过上限（%d 字节）" % len(data)
                 return None
             return data
-        except (subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired:
+            self._last_err = "ffmpeg 超时（20 秒）"
+            return None
+        except OSError as e:
+            self._last_err = "ffmpeg 无法执行：%r" % e
             return None
         finally:
             try:
@@ -250,24 +346,62 @@ class MotionShotService(object):
                 except Exception:
                     pass
 
+    def _note(self, rec):
+        """记一条处理轨迹（诊断用，永不抛）。"""
+        try:
+            rec["ts"] = time.strftime("%H:%M:%S")
+            self._trace.append(rec)
+        except Exception:
+            pass
+
     def _handle(self, item):
         cam, date, start, end = item
+        t = {"cam": cam, "date": date, "start": round(float(start), 1)}
         # 再判一次幂等（多个请求竞态：先到的抽到后，后到的就不必抽）
         if es.find(self.var_dir, cam, date, start, end):
+            t["step"] = "skip"
+            t["reason"] = "窗口内已有图"
+            self._note(t)
             return
-        dirs = self.cam_dirs_fn(cam) if self.cam_dirs_fn else ()
-        loc = locate_segment(self.record_root, dirs, date, start)
+        dirs = list(self.cam_dirs_fn(cam) or ()) if self.cam_dirs_fn else []
+        sealed, parts, dirs_seen, files_seen = scan_day(self.record_root, dirs, date)
+        t["dirs"] = dirs
+        t["dirs_seen"] = dirs_seen
+        t["files"] = files_seen          # 当天扫到的 .mp4 条目数（含 .part 与切片）
+        t["segs"] = len(sealed)          # 其中能当全时分片用的
+        if not dirs_seen:
+            self.missed += 1
+            self._mark_miss(cam, date, start)
+            t["step"] = "dir"
+            t["reason"] = "录像目录不存在"
+            self._note(t)
+            return
+        loc = _resolve(sealed, parts, self.record_root, dirs, date, start)
         if loc is None:
             self.missed += 1
             self._mark_miss(cam, date, start)
+            t["step"] = "locate"
+            t["reason"] = ("目录里有文件但没有可用分片" if files_seen == 0
+                           else "事件起点所在分片已被清掉")
+            self._note(t)
             return
         path, offset = loc
+        t["seg"] = os.path.basename(path)
+        t["offset"] = round(offset, 1)
+        self._last_err = ""
         data = self._extract(path, offset)
         if not data:
             self.failed += 1
+            t["step"] = "extract"
+            t["reason"] = self._last_err or "抽帧失败（原因未知）"
+            self._note(t)
             return
         self.extracted += 1
+        t["bytes"] = len(data)
         if self.shot_store is None:
+            t["step"] = "extract"
+            t["reason"] = "抽到了帧但没有落盘层（shot_store 未就绪）"
+            self._note(t)
             return
         at = epoch_of(date, start)
         try:
@@ -280,21 +414,95 @@ class MotionShotService(object):
                 ok = self.shot_store.offer(cam, data, at)
             except Exception as e:
                 self.rejected += 1
+                t["step"] = "store"
+                t["reason"] = "落盘异常：%r" % e
+                self._note(t)
                 self.log("运动事件快照落盘异常（%s）：%r" % (cam, e))
                 return
         except Exception as e:
             self.rejected += 1
+            t["step"] = "store"
+            t["reason"] = "落盘异常：%r" % e
+            self._note(t)
             self.log("运动事件快照落盘异常（%s）：%r" % (cam, e))
             return
         if ok:
             self.stored += 1
+            t["step"] = "stored"
+            t["reason"] = "已落盘"
         else:
             self.rejected += 1
+            t["step"] = "store"
+            t["reason"] = "落盘层拒收（日上限 / 队列满 / 图片超限）"
+        self._note(t)
 
     # ---------------------------------------------------------- 诊断
     def status(self):
+        """诊断快照。**不探盘、不跑 ffmpeg** —— 这个接口几秒轮询一次。
+
+        ffmpeg 的真实可用性只在真正抽帧时探（`_ffmpeg_ok` 是那次的结果）：
+        这里报 None 就是"还没抽过帧"，报 False 才会带具体原因。
+        """
         return {"queued": self.queued, "dropped": self.dropped,
                 "extracted": self.extracted, "stored": self.stored,
                 "rejected": self.rejected, "failed": self.failed,
                 "missed": self.missed, "miss_cached": len(self._miss),
-                "running": self.alive(), "qsize": self._q.qsize()}
+                "running": self.alive(), "qsize": self._q.qsize(),
+                "record_root": self.record_root,
+                "ffmpeg": {"path": self.ffmpeg, "ok": self._ffmpeg_ok,
+                           "err": self._ffmpeg_err, "last_err": self._last_err},
+                "trace": [dict(x) for x in self._trace]}
+
+    def _writable_target(self, path):
+        """往上一层层找到第一个存在的目录 → (目录, 可写?)。"""
+        p = path
+        while p and not os.path.isdir(p):
+            np = os.path.dirname(p)
+            if np == p:
+                break
+            p = np
+        try:
+            return p, bool(os.access(p, os.W_OK))
+        except OSError:
+            return p, False
+
+    def probe(self, cam, date, start=None):
+        """按机位当场自检 → 一份人能读懂的报告。只读，不抽帧、不落盘。
+
+        为什么需要：`stored=0` 这一个数字，可能是"目录找错了""分片没了""ffmpeg
+        跑不动""目录写不进"四件事里的任何一件，而处理方式完全不同。这个接口
+        把四件事一次问完，排障不用再猜。
+        """
+        out = {"cam": cam, "date": date, "record_root": self.record_root}
+        try:
+            ok, why = self.ffmpeg_ready()
+            out["ffmpeg"] = {"path": self.ffmpeg, "ok": ok, "why": why}
+            dirs = list(self.cam_dirs_fn(cam) or ()) if self.cam_dirs_fn else []
+            out["dirs"] = dirs
+            sealed, parts, dirs_seen, files_seen = scan_day(self.record_root, dirs, date)
+            out["dirs_seen"] = dirs_seen
+            out["dirs_tried"] = [os.path.join(self.record_root, d, date) for d in dirs]
+            out["files"] = files_seen
+            out["segs"] = len(sealed)
+            out["parts"] = len(parts)
+            out["seg_first"] = min(sealed) if sealed else None
+            out["seg_last"] = max(sealed) if sealed else None
+            if start is not None:
+                st = float(start)
+                loc = _resolve(sealed, parts, self.record_root, dirs, date, st)
+                out["locate"] = {"start": st,
+                                 "seg": os.path.basename(loc[0]) if loc else None,
+                                 "offset": round(loc[1], 1) if loc else None}
+            try:
+                out["shots_today"] = len(es.list_for(self.var_dir, cam, date))
+            except Exception as e:
+                out["shots_today"] = None
+                out["shots_err"] = repr(e)
+            d = es.dir_of(self.var_dir, cam, date)
+            where, can = self._writable_target(d)
+            out["shot_dir"] = d
+            out["shot_write_to"] = where
+            out["shot_writable"] = can
+        except Exception as e:
+            out["error"] = repr(e)
+        return out
