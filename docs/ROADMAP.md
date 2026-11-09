@@ -152,6 +152,8 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 37 | 11-09 21:05 | **批次 15 立项 + 全量收尾**（按用户「移动侦测的事件记录，怎么实现快照功能？规划一下」→「执行」）：纯帧差运动事件（`KIND_MOTION`，AI 没框住）在 0.9.133 及之前 `ev.shot` 恒为 None。新增 `motion_shot.py`（`MotionShotService`）——事件查询发现某条 motion 且尚无图时，后台从 recorder 已录分片用 `ffmpeg -ss` 抽一帧补进 `event_shots/`，时间锚定事件起点（图片 mtime 锚到事件当天，不是「现在」）、幂等（窗口内已有图就跳过）、队列满丢、分片过期 / 没 ffmpeg 退化 None，复用 `ShotStore` 落盘与查询、前端零改动；`nvr_slim` 5 处接入（import / 启动挂载 start / 查询触发 / stop / status 暴露）。**真机核对抓到两处 bug 并修**：① `cam_dirs_fn` 收到 cam id 字符串却按 dict 传给 `cam_storage_dirs`（首条就 AttributeError 打死 worker）→ 新增 `cam_dirs_for(id)` 做 id→dict；② `_loop` 逐条处理未兜底（异常静默退出线程、队列只塞不抽）→ 拆 `_handle` + `_loop` try/except 计 `failed`。加 worker 存活回归测试（`test_motion_shot` 12 条） | e1fb14e | **出包** `dist/nvr-0.9.134_x86.fpk` **101249502 字节** md5 `44ec26c678672dd3a70b645de801a2ab`；闸门 validate **81** 项、后端全量绿（新增 `test_motion_shot.py` 12 条，`test_pixdiff` / `test_v0918` 版本守卫同步 0.9.134），前端零改动（index.html 未变）0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.134.json`），0.9.133→0.9.134 上线 **0.1s**、端口 18085；机上核对 `motion_shot` 状态 `running=true / extracted=34 / failed=0 / missed=0 / qsize=0`，`/api/events` 30 条里 24 条 motion 有 **16 条已带 shot**（样例 `at:17:37:04` 锚定事件起点），首轮 bug（`extracted=0 / running=false / dropped=169`）已修；两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**；**批次 15 标 done**，生产机 2.6 未碰 |
 | 38 | 11-09 22:55 | **批次 16 · 0.9.135 运动快照补图修正**（按用户「生产机已升级到 134 版本，但是未看到移动侦测的事件快照」）：0.9.134 在测试机 16/24 出图、生产机一张没有。静态审查 + 152 真机复现，定位**三个只在真实事件量下暴露**的病根：① `ShotStore.offer` 的 `min_gap`（30 秒/路）是给实时检测设的，补旧事件时 `at` 是历史时刻、翻页还会倒退，`at-last` 变负 → 被当重复确认整片丢；新增 `gap` 参数，补图走 `gap=False`（保留日上限与队列满丢，且不更新 `_last` 以免污染检测口径）。② 事件索引按时间**升序**返回（`reversed(rows)`），补图顺着投 → 最老的事件先占满队列，而它们录像早滚掉、`locate_segment` 恒 None，既不推进也不出图，最新事件永远排不上；改为 `reversed(evs)` 从最新往前投、`QUEUE_MAX` 16→32、`MISS_TTL=600` 秒负缓存。③ **日上限串池**：300 张/路/天原本只有 AI 快照一个消费者，AI 开着时上午就顶满，之后一整天补图全 `capped`（152 实测 `cam-test02` 当天 487 张 → `rejected` 44/44）；改为检测池 `_day_n` 与补图池 `_day_bf` 各 300，补图池每进程从 0 计。另：`_handle` 忽略 `offer` 返回值、抽到帧就计 `extracted`（计数器全绿而列表没图）→ 拆 `stored`/`rejected`；单条事件详情也触发一次补图 | 8e05c7f | **出包** `dist/nvr-0.9.135_x86.fpk` **101251712 字节** md5 `d567ab2c1acdb0ca16f67a262eaee742`；闸门 validate **81** 项、后端全量绿（`test_event_shot` **52** 条、`test_motion_shot` **14** 条，版本守卫同步 0.9.135，`test_doc_suite` 七份文档一致），前端零改动 0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.135.json`），0.9.134→0.9.135 上线 **0.1s**、端口 18085；机上核对 `motion_shot` `running=true / extracted=128 / stored=128 / rejected=0 / missed=0 / qsize=0`，200 条事件里 **165 条 motion 全部带图（100%）**，其中含此前被日上限挡死的 `cam-test02`（14/14）；`shots` `capped=2` 只剩检测池（AI 当天已顶满，符合预期）；两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**；**批次 16 标 done**，生产机 2.6 待用户升级 0.9.135 |
 
+| 39 | 11-09 23:30 | **批次 17 · 0.9.136 运动快照可自证**（按用户「还是没有」继续追）：生产机升 0.9.135 后仍无图，而前两版的失败是"看不见卡在哪"。本版只做可观测性：每条补图留处理轨迹（目录/命中/分片数/定位/ffmpeg 报错/落盘结果）、新增 `/api/motion_shot/probe` 当场自检、ffmpeg 先验可用性与失败原因回传、诊断页新增「事件快照」卡。152 实测 probe 命中中文目录 `测试A-137`（dir_name≠id）、trace 实录定位→落盘。**未解决生产机具体根因，等诊断页数据** |
+
 ## 测试平台（可以随便折腾，与生产隔离）
 
 | 项 | 值 |
@@ -1895,6 +1897,33 @@ ShotStore.offer(cam, data, epoch_of(date,start))   ← 时间锚定事件起点�
 
 ---
 
+## 批次 17 · 0.9.136 运动快照可自证（第 39 轮）
+
+**为什么现在做**：生产机升到 0.9.135 后，用户仍反馈「还是没有」。到这一步，问题已经不是「补图逻辑对不对」，而是**「没法知道它卡在哪」**：`stored=0` 可能是「录像目录找错」「分片已被清掉」「ffmpeg 跑不动」「目录写不进」四件事之一，四种处置完全不同，而聚合计数把它们混成一个 0。前两版都在猜，这版改成能看见。
+
+**做了什么（只加可观测性，不改判定、不改落盘规则）**：
+
+1. **处理轨迹**：每条补图留一条（`_trace` 环形 6 条）——解析出的目录、`dirs_seen`（真实命中）、`files`/`segs`（当天扫到几个 `.mp4`、几个能当全时分片）、定位到的分片与片内偏移、`ffmpeg` 的 stderr 摘要、落盘结果。随 `/api/status` 的 `motion_shot.trace` 暴露。
+2. **当场自检** `GET /api/motion_shot/probe?cam=&date=&start=`：只读、不抽帧、不落盘，一次答完四件事（目录尝试/命中、当天分片数、定位结果、`event_shots` 目录可写性——向上找第一个存在的祖先判 `W_OK`）。
+3. **ffmpeg 先验**：路径不存在时按 `PATH` 找（`shutil.which`）、查执行权限、`-version` 验真，结论缓存；抽帧失败去掉 `-c:v mjpeg` 再试一次；失败原因写进 `_last_err` 随轨迹带走（以前一律静默返回 `None`，线上只能看到 `failed` 涨）。
+4. **诊断页「事件快照」卡**：运行版本、检测池与补图池各自计数、`ffmpeg` 状态、最近 4 条轨迹、自检按钮。
+
+`scan_day` 拆出 `dirs_seen`/`files_seen`，`locate_segment` 行为不变（测试契约保留）；`event_shot.py` / `recorder.py` 一行未改。
+
+### 验收（152 真机）
+
+- `build.sh --check` 全绿：`test_motion_shot` **20** 条、`test_event_shot` 52 条、`test_doc_suite` 14 条，前端合成 173 项通过
+- 出包 `dist/nvr-0.9.136_x86.fpk` **101257734 字节** md5 `0dcc00a27e6c676854c35915352a6393`；152 部署九项全 OK（0.9.135→0.9.136，上线 0.1s）
+- `probe` 实测：`cam-test01` → `dirs=["测试A-137","cam-test01"]`、`dirs_seen=["测试A-137"]`（**中文 dir_name 与 id 不同，正是 `cam_dirs_for` 存在的理由**）、`files=301`/`segs=299`、`shot_writable=true`
+- `trace` 实录：`23-10-00.mp4@206s → 99176 字节 → 已落盘`；`motion_shot stored=1 / rejected=0 / failed=0 / missed=0`
+
+### 明确没做到
+
+**没有定位到生产机的具体根因**。`192.168.2.6` 的 SSH 凭证与测试机不同（`admin/admin` 被拒），API 全部要 Bearer token，读不到它的 `/api/status`。这版的价值是：下一次只需一张诊断页截图（或一段 `probe` 返回），就能直接指到那一步。
+
+---
+
+
 ## 不在本轮范围
 
 评审 P3 明确不建议投入：人脸识别、车牌识别、自定义模型训练、复杂多用户权限、实时滤镜。
@@ -1915,7 +1944,7 @@ ShotStore.offer(cam, data, epoch_of(date,start))   ← 时间锚定事件起点�
   ① 点图放大 → **批次 12（0.9.130）已交付**（浮层大图，点击不跳页）；
   ② 图上画框 → **批次 12 已交付，但换了实现**（框由浏览器叠层绘制，服务端不解码
   不重编码）；③ 服务端小图 → 不做，浏览器缩放即可，多传 100KB 不值得再解一次码；
-  ④ 移动侦测快照 → 见下面「移动侦测」那条，仍未做。
+  ④ 移动侦测快照 → **批次 15（0.9.134）已交付**，见上面那条（批次 17 再补了诊断能力）。
 - ~~「include 区」~~ → **批次 10 已交付**（0.9.128）。它确实是新语义而不是补漏：
   忽略区（`cam.masks.ignore`）管「这块别算」，include 区（`cam.masks.include`）管
   「只算这块」，两块重叠时忽略优先。只影响 AI 识别，移动侦测仍是整幅画面的像素差。
