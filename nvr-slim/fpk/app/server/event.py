@@ -29,6 +29,15 @@ import ledger
 # （detect 迟早会 import numpy/onnx 相关的东西，事件列表不该被它拖下水）。
 CATEGORIES = ("person", "two_wheeler", "vehicle")
 
+# 筛选项里的第四种取值，但它**不是类别**：它是"一条 AI 类别都没有"的兜底口径。
+# 批次 3 与批次 4 都把这件事往后推（"时间窗确认时一起考虑" / "留给高级筛选"），
+# 0.9.126 在事件检索里一次定死：`kind=motion` ⟺ categories 为空。
+# 单独给常量而不是塞进 CATEGORIES，是因为一旦进了 CATEGORIES，`categories_of()`
+# 会开始往事件里写一个从来不存在的类别，台账与索引就跟着脏了。
+MOTION = "motion"
+KIND_AI = "ai"
+KIND_MOTION = "motion"
+
 STATES = ("detected", "candidate", "confirmed", "active", "ended", "indexed")
 
 STATE_LABEL = {
@@ -290,6 +299,7 @@ def from_ledger(cam, date, data, now_sec=None, starts=None):
         except (TypeError, ValueError):
             mv = -1
         seg = segment_of(s, starts) if starts else None
+        cats = categories_of(cls)
         out.append({
             "id": eid,
             "cam": str(cam),
@@ -299,7 +309,10 @@ def from_ledger(cam, date, data, now_sec=None, starts=None):
             "start_at": iso_at(date, s),
             "end_at": iso_at(date, e),
             "duration": round(e - s, 2),
-            "categories": categories_of(cls),
+            "categories": cats,
+            # 与索引行同口径（event_index.from_row 也走 kind_of）：这条是"AI 认出
+            # 过东西"还是"只有移动"。列表与详情、筛选与摘要都读同一个键。
+            "kind": kind_of(cats),
             "cls": {str(k): int(v) for k, v in cls.items()
                     if isinstance(v, (int, float))},
             "density": round(_num(w.get("d"), 0.0), 3),
@@ -413,15 +426,35 @@ def merge(existing, fresh):
     return out, changed
 
 
+def kind_of(categories):
+    """类别列表 → 事件种类：`ai`（认出了至少一类目标）/ `motion`（什么类别都没有）。
+
+    这类判断必须只有一处实现：筛选（服务端 SQL）、列表（前端色条）、摘要
+    （`summary_of`）都按同一条线走。前端以前用 `categories.length === 0`
+    自己判了一遍，服务端没有对应口径，于是"移动侦测"只能在界面上当标签，
+    不能当筛选项。
+    """
+    return KIND_AI if (categories or ()) else KIND_MOTION
+
+
 def summary_of(events):
-    """列表头一行「N 条 · 人员 x / 车辆 y」的口径。
+    """列表头一行「N 条 · 人员 x / 车辆 y / 移动侦测 z」的口径。
 
     计数按类别列表算而不是按 cls 计数求和：一个人出现 5 帧是一条事件，
     不是 5 个人。cls 是判定用的原始计数，界面上给用户看的必须是事件条数。
+
+    `motion` 与 by_category 并列而不是塞进去：它不是类别，是"一条类别都没有"
+    的剩余集。混进 by_category 会让"人员 2 / 车辆 1 / 移动侦测 3"看起来像
+    四类各数各的，实际同一条事件可能既算人员又算移动（并不会 —— 有类别就不
+    算移动，但把这个不变式交给调用方去猜，早晚会被误读）。
     """
     cats = {k: 0 for k in CATEGORIES}
+    motion = 0
     for e in events or ():
-        for k in e.get("categories") or ():
+        cl = e.get("categories") or ()
+        if not cl:
+            motion += 1
+        for k in cl:
             if k in cats:
                 cats[k] += 1
-    return {"count": len(events or ()), "by_category": cats}
+    return {"count": len(events or ()), "by_category": cats, "motion": motion}

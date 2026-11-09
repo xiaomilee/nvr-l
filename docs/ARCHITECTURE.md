@@ -1,4 +1,4 @@
-# 架构说明（0.9.125）
+# 架构说明（0.9.126）
 
 这份文档回答「代码在哪、数据怎么流、某个数字是谁算出来的」。
 它是给要改代码的人看的：先在这里定位模块，再进源码，别在
@@ -96,7 +96,7 @@ LAN IP / `.local` / `.lan` / `.fnos.net`）。服务**不处理 CORS 预检**，
 | GET | `/api/live` | 直播快照态 | `live_payload()` |
 | GET | `/api/recordings` | 磁盘真实录像清单（3 秒缓存，`force=1`） | `recordings_payload()`（1747） |
 | GET | `/api/ledger` | 活动台账 | `ledger_payload()` |
-| GET | `/api/events` | 事件列表（`from/to/cam/cat/limit`） | `events_payload()` → `event_index` |
+| GET | `/api/events` | 事件列表（`from/to/cam/cat/limit/min_dur/motion`；`cam`/`cat` 支持逗号多值，同维 OR、跨维 AND） | `events_payload()` → `event_index` |
 | GET | `/api/events/` | 单条事件 / 事件定位（`<id>` / `<id>/clip`） | `event_payload` / `event_clip_payload` |
 | GET | `/api/archive` | 归档概览 | `archive_payload()` |
 | GET | `/api/archive/progress` | 归档进度（只回内存态，不扫盘） | `archive_progress()` |
@@ -178,7 +178,7 @@ last_seg / last_age_sec / error / kind / hint`。
 | `/api/link` | `link_payload()` `:2671` | 主体 ← `Link.status()`（`link.py:715`）；`record` ← `Recorder.status()`（`recorder.py:1524`）；出口补 `hstate` |
 | `/api/health` | 内联 `:2922` | 版本、uptime、cams 计数、ffmpeg/ffprobe 路径 |
 | `/api/health/gaps` | `health_gaps_payload()` `:2528` | 纯计算全在 `health.py` |
-| `/api/events` | `events_payload()` `:1526` | 筛选交给 `event_index.query()`，不拉全量 |
+| `/api/events` | `events_payload()` `:1549` | 筛选交给 `event_index.query()`（多类别 / 多机位 / 最短时长 / `motion`），不拉全量 |
 | `/api/recordings` | `recordings_payload()` `:1747` | 实扫 `full` 与 `_archive` 两套目录 + 3 秒 TTL |
 
 `detect.status_of()` 给的是七项契约（`enabled / available / running / state /

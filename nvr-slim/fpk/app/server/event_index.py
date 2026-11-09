@@ -166,6 +166,7 @@ def from_row(row):
     mc = row["motion_confirmed"]
     start = float(row["start_sec"] or 0.0)
     end = float(row["end_sec"] or 0.0)
+    cats = cat_list(row["categories"])
     return {
         "id": row["event_id"],
         "cam": row["camera_id"],
@@ -175,7 +176,10 @@ def from_row(row):
         "start_at": row["start_at"],
         "end_at": row["end_at"],
         "duration": round(end - start, 2),
-        "categories": cat_list(row["categories"]),
+        "categories": cats,
+        # 与筛选、摘要共用同一处判断（event.kind_of）。界面要"这条是移动侦测
+        # 还是 AI 认出过东西"，不该各自数一遍 categories 的长度。
+        "kind": event.kind_of(cats),
         "cls": cls if isinstance(cls, dict) else {},
         "density": row["density"],
         "confidence_max": row["confidence_max"],
@@ -282,14 +286,44 @@ def rebuild_index(conn, dates, loader, progress=None):
 
 # ---------------------------------------------------------------- 读取
 
-def query(conn, start_at=None, end_at=None, cam=None, cat=None, limit=200):
-    """按「时间窗 × 摄像头 × 类别」检索 → 事件列表（时间正序）。
+def parse_cats(text):
+    """查询串里的类别参数 → (真实类别列表, 是否要移动侦测, 不认识的词)。
+
+    逗号分隔、顺序无关、重复去掉。`motion` 单独提出来走"没有类别"分支，
+    不当作第四种类别（见 event.MOTION 的说明）。
+
+    不认识的词**不静默丢弃**：`cat=persn` 静默成"没有筛选"的话，用户会看到
+    一屏比预期多得多的事件，还以为筛过了。调用方拿 bad 去回一句明确的话。
+    """
+    cats, motion, bad = [], False, []
+    for raw in str(text or "").split(","):
+        k = raw.strip()
+        if not k:
+            continue
+        if k == event.MOTION:
+            motion = True
+        elif k in event.CATEGORIES:
+            if k not in cats:
+                cats.append(k)
+        elif k not in bad:
+            bad.append(k)
+    return cats, motion, bad
+
+
+def query(conn, start_at=None, end_at=None, cam=None, cat=None, limit=200,
+          cams=None, cats=None, min_dur=None, motion_only=False):
+    """按「时间窗 × 摄像头 × 类别 × 最短时长」检索 → 事件列表（时间正序）。
 
     时间窗是**交集**语义（`end_at >= 起点 且 start_at <= 终点`）：跨窗口边界的
     那条事件照样出现在两边，否则用户会以为"整点那一刻没有事件"。
 
     先按时间倒序取最近 limit 条再翻回正序：用户要的是"最近的事"，而列表本身
     按时间轴读（跟回放页一致）。limit 必须在 SQL 里生效，不能先取全量再截。
+
+    多维筛选的布尔口径（0.9.126，写在文档里也写在这里，免得下一个人猜）：
+      同一维内 OR —— 选了人员和车辆 = 有人员 **或** 有车辆；
+      不同维间 AND —— (某一路) 且 (某一类) 且 (时长够)。
+    单值 `cam` / `cat` 保留：老书签、外部脚本、旧版前端都还在用这两个参数。
     """
     where, args = [], []
     if start_at:
@@ -298,12 +332,33 @@ def query(conn, start_at=None, end_at=None, cam=None, cat=None, limit=200):
     if end_at:
         where.append("start_at <= ?")
         args.append(str(end_at))
-    if cam:
+    cams = [str(c) for c in (cams or ()) if str(c).strip()]
+    if cams:
+        where.append("camera_id IN (" + ",".join("?" * len(cams)) + ")")
+        args.extend(cams)
+    elif cam:
         where.append("camera_id = ?")
         args.append(str(cam))
-    if cat:
+    ors, or_args = [], []
+    for c in (cats or ()):
+        if c in event.CATEGORIES:
+            ors.append("categories LIKE ?")
+            or_args.append("%," + str(c) + ",%")
+    if motion_only:
+        # 空串就是"这条事件一个类别都没有"（cat_field([]) 的落盘形态）。
+        # 用 `= ''` 而不是 `NOT LIKE '%,%'`：后者在有 NULL 时会静默漏行。
+        ors.append("categories = ''")
+    if ors:
+        where.append("(" + " OR ".join(ors) + ")")
+        args.extend(or_args)
+    elif cat:
         where.append("categories LIKE ?")
         args.append("%," + str(cat) + ",%")
+    if min_dur:
+        # 一天的钟点秒，台账写入时已夹进 [0, 86400]，不会出现负时长；
+        # 跨零点的事件在日界被截断，这是台账本来的口径（按天分文件）。
+        where.append("(end_sec - start_sec) >= ?")
+        args.append(float(min_dur))
     sql = "SELECT * FROM events"
     if where:
         sql += " WHERE " + " AND ".join(where)

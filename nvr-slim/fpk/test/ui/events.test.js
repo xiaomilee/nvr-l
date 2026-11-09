@@ -186,14 +186,73 @@ ck("头部失败时写读取失败",
 
 /* ---- 查询串：筛选交给服务端 ---- */
 ck("默认只查当天（from=to）",
-   run('EV.day="2026-11-08"; EV.cam=""; EV.cat=""; evQuery()')
+   run('EV.day="2026-11-08"; EV.cams=[]; EV.cats=[]; EV.from=""; EV.to="";'
+     + ' EV.minDur=""; evQuery()')
      .indexOf("from=2026-11-08&to=2026-11-08") > 0);
 ck("带了机位就有 cam",
-   run('EV.day="2026-11-08"; EV.cam="c1"; evQuery()').indexOf("cam=c1") > 0);
+   run('EV.cams=["c1"]; evQuery()').indexOf("cam=c1") > 0);
+ck("多机位用逗号（同一维 OR）",
+   run('EV.cams=["c1","c2"]; evQuery()').indexOf("cam=c1%2Cc2") > 0);
 ck("带了类别就有 cat",
-   run('EV.day="2026-11-08"; EV.cat="person"; evQuery()').indexOf("cat=person") > 0);
+   run('EV.cats=["person"]; evQuery()').indexOf("cat=person") > 0);
+ck("多类别用逗号",
+   run('EV.cats=["person","two_wheeler"]; evQuery()').indexOf("cat=person%2Ctwo_wheeler") > 0);
+ck("移动侦测进 cat 参数（服务端 0.9.126 起认）",
+   run('EV.cats=["motion"]; evQuery()').indexOf("cat=motion") > 0);
 ck("没选机位就不带 cam",
-   run('EV.day="2026-11-08"; EV.cam=""; evQuery()').indexOf("cam=") < 0);
+   run('EV.cams=[]; evQuery()').indexOf("cam=") < 0);
+ck("时间范围带钟点（不是整天）",
+   run('EV.cats=[]; EV.from="09:00"; EV.to="10:30"; evQuery()')
+     .indexOf("from=2026-11-08%2009%3A00&to=2026-11-08%2010%3A30") > 0);
+ck("最短时长进 min_dur",
+   run('EV.from=""; EV.to=""; EV.minDur="30"; evQuery()').indexOf("min_dur=30") > 0);
+ck("没填时长就不带 min_dur",
+   run('EV.minDur=""; evQuery()').indexOf("min_dur") < 0);
+
+/* ---- 多选状态（0.9.126）：同维 OR，不同维 AND ---- */
+ck("再点一次取消选中", run('EV.cats=[]; evToggle(EV.cats,"person");'
+   + ' evToggle(EV.cats,"vehicle"); evToggle(EV.cats,"person"); JSON.stringify(EV.cats)')
+   === '["vehicle"]');
+ck("没有条件时 evAnyFilter 为假",
+   run('EV.cams=[]; EV.cats=[]; EV.from=""; EV.to=""; EV.minDur=""; evAnyFilter()') === false);
+ck("选了类别就算有筛选",
+   run('EV.cats=["motion"]; evAnyFilter()') === true);
+ck("只填时长也算有筛选",
+   run('EV.cats=[]; EV.minDur="10"; evAnyFilter()') === true);
+ck("条件写成人话", run('EV.cams=[]; EV.cats=["person","motion"];'
+   + ' EV.from="09:00"; EV.to="10:00"; EV.minDur="30"; evFilterText()')
+   === "人员 / 移动侦测 · 09:00–10:00 · ≥30 秒");
+
+/* ---- 筛选条结构：移动侦测必须是可点的筛选项 ---- */
+ck("类别条有「移动侦测」按钮",
+   run('renderEvChips(); document.getElementById("evCatBar").innerHTML')
+     .indexOf('data-evcat="motion"') > 0);
+ck("类别条有「全部类别」复位键",
+   run('document.getElementById("evCatBar").innerHTML').indexOf('data-evcat=""') > 0);
+ck("机位条是「全部机位」+ 每一路",
+   run('document.getElementById("evCamBar").innerHTML').indexOf("全部机位") > 0);
+ck("多选时全部机位不再高亮",
+   run('EV.cams=["c1"]; renderEvChips();'
+     + ' document.getElementById("evCamBar").innerHTML')
+     .indexOf('class="evchip on" data-evname=""') < 0);
+ck("更多筛选面板默认收起",
+   run('EV.more=false; renderEvChips(); document.getElementById("evMoreBox").hidden') === true);
+ck("点开后不再 hidden",
+   run('EV.more=true; renderEvChips(); document.getElementById("evMoreBox").hidden') === false);
+ck("面板有起始/结束/最短时长三个输入",
+   src.indexOf('id="evFrom"') > 0 && src.indexOf('id="evTo"') > 0
+   && src.indexOf('id="evMinDur"') > 0);
+ck("列表头写清当前条件",
+   run('EV.err=""; EV.cams=[]; EV.cats=["person"]; EV.from=""; EV.to=""; EV.minDur="";'
+     + ' EV.data={summary:{count:1,by_category:{person:1},motion:0},events:[]};'
+     + ' renderEvHead(); document.getElementById("evSum").textContent')
+     .indexOf("条件：人员") > 0);
+ck("摘要里移动侦测单独一档",
+   run('EV.cats=[]; EV.data={summary:{count:3,by_category:{person:1},motion:2},events:[]};'
+     + ' renderEvHead(); document.getElementById("evSum").textContent')
+     .indexOf("移动侦测 2") > 0);
+ck("卡片色条读服务端给的 kind（不再自己数 categories）",
+   src.indexOf('ev.kind === "motion"') > 0);
 
 /* ---- 查找 ---- */
 ck("按 id 找得到", run('EV.data=' + J(TWO) + '; evFind("c1_20261108_102341").start') === 37421);

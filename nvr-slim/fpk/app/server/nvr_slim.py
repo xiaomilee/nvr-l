@@ -1546,12 +1546,21 @@ def _dates_between(a, b, cap=EVENT_MAX_DAYS):
     return [(d0 + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n)]
 
 
-def events_payload(frm="", to="", cam="", cat="", limit=200):
+def events_payload(frm="", to="", cam="", cat="", limit=200,
+                   min_dur="", motion=""):
     """事件列表：先同步涉及的日子，再查索引。
 
     为什么要"先同步"：索引是台账的投影，而台账是判定引擎边跑边写的。
     页面随时可能来问"今天上午有哪些人"，同步一次就能答 —— 不必等定时任务，
     也不必让用户先按一个"重建索引"。指纹没变的日子会被跳过，代价只有几个 stat。
+
+    筛选参数（0.9.126 起，口径在 event_index.query 的 docstring 里）：
+      cam     单个机位 id，或逗号分隔多个（同一维 OR）
+      cat     单个类别，或逗号分隔多个；`motion` = 一条 AI 类别都没有的事件
+      min_dur 最短时长（秒），小数可以
+      motion=1 等价于在 cat 里塞一个 motion（给只认识布尔开关的调用方留的门）
+    不认识的类别直接报错而不是忽略：静默忽略会让人以为筛过了，看到一屏比预期
+    多的事件还找不到原因。
     """
     today = time.strftime("%Y-%m-%d")
     a = _norm_when(frm, today + " 00:00:00")
@@ -1561,6 +1570,22 @@ def events_payload(frm="", to="", cam="", cat="", limit=200):
                 "error": "from/to 无法识别（用 YYYY-MM-DD 或 YYYY-MM-DD HH:MM）"}
     if a > b:
         a, b = b, a
+    cats, want_motion, bad = event_index.parse_cats(cat)
+    if bad:
+        return {"ok": False,
+                "error": "不认识的类别：%s（可用：%s / motion）"
+                         % ("、".join(bad), " / ".join(event.CATEGORIES))}
+    if str(motion or "").strip().lower() in ("1", "true", "yes", "on"):
+        want_motion = True
+    cams = [x.strip() for x in str(cam or "").split(",") if x.strip()]
+    md = None
+    if str(min_dur or "").strip():
+        try:
+            md = float(min_dur)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "min_dur 必须是秒数（例：min_dur=30）"}
+        if md < 0:
+            return {"ok": False, "error": "min_dur 不能是负数"}
     dates = _dates_between(a[:10], b[:10])
     if not dates:
         return {"ok": False,
@@ -1574,12 +1599,18 @@ def events_payload(frm="", to="", cam="", cat="", limit=200):
             r = event_index.sync_day(conn, d, _events_of_day, _event_sig(d))
             if not r.get("skipped"):
                 synced.append(d)
-        evs = event_index.query(conn, a, b, cam or None, cat or None, limit)
+        evs = event_index.query(conn, a, b, None, None, limit,
+                               cams=cams, cats=cats, min_dur=md,
+                               motion_only=want_motion)
         st = event_index.stats(conn)
     finally:
         conn.close()
     return {"ok": True, "from": a, "to": b,
             "count": len(evs), "summary": event.summary_of(evs),
+            # 把服务端**实际用上**的条件回显一遍：前端拿它写列表头，用户看到的
+            # 就是"按哪几条筛的"，不用自己再拼一遍（两处拼，早晚不一致）。
+            "filters": {"from": a, "to": b, "cams": cams, "cats": cats,
+                        "motion": want_motion, "min_dur": md, "limit": limit},
             "synced": synced, "index": st, "events": evs}
 
 
@@ -3022,13 +3053,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, ledger_payload(
                 (qs.get("cam") or [""])[0], (qs.get("date") or [""])[0]))
         if path == "/api/events":
-            # 事件中心：?from=&to=&cam=&cat=&limit=
+            # 事件中心：?from=&to=&cam=&cat=&limit=&min_dur=&motion=
             # from/to 接受 YYYY-MM-DD 或 YYYY-MM-DD HH:MM；不给就是今天。
+            # cam / cat 支持逗号多值（0.9.126，见 event_index.query 的 OR/AND 口径）。
             q = parse_qs(urlparse(self.path).query)
             return self._send(200, events_payload(
                 (q.get("from") or [""])[0], (q.get("to") or [""])[0],
                 (q.get("cam") or [""])[0], (q.get("cat") or [""])[0],
-                (q.get("limit") or ["200"])[0]))
+                (q.get("limit") or ["200"])[0],
+                (q.get("min_dur") or [""])[0], (q.get("motion") or [""])[0]))
         if path.startswith("/api/events/"):
             # /api/events/<id> 与 /api/events/<id>/clip。id 里不会有 /，
             # 但 cam id 允许下划线，所以只按 / 切，不按 _ 猜。

@@ -1,6 +1,7 @@
 /* ================= pages/events.js =================
-   事件页：最近 7 天的事件列表、三段筛选、事件卡片，以及「点事件直接看」的
-   定位交接（哪一路 / 哪一天 / 从哪一秒）。只读 /api/events 与 clip 接口。
+   事件页：最近 7 天的事件列表、四段筛选（日期 / 机位 / 类别 / 时间与时长）、
+   事件卡片，以及「点事件直接看」的定位交接（哪一路 / 哪一天 / 从哪一秒）。
+   只读 /api/events 与 clip 接口。
    判断标准：围绕一条事件的取数、渲染、筛选与跳转放这里；真正把画面播出来
    是 player/player.js 与 pages/timeline.js 的事，播放逻辑只该有一处实现。
    为什么单独成文件：评审点名的差异化之一就是「从翻录像变成点事件直接看」。
@@ -20,8 +21,37 @@
    2. 播不了就说清原因：missing_reason 有多种（未封口 / 分片不在 / 结构坏），
       翻译文案由服务端给（event.MISSING_TEXT），前端不再维护第二份。
    3. 筛选全部交给服务端：拉全量再在前端过滤，会把"前 200 条里的全部"当成全部。 */
-const EV = {day: jsToday(), cam: "", cat: "", data: null, key: "", at: 0, err: "",
+const EV = {day: jsToday(), cams: [], cats: [], from: "", to: "", minDur: "",
+            more: false, data: null, key: "", at: 0, err: "",
             loading: false, open: "", focus: "", clip: null, clipErr: ""};
+
+/* 筛选状态一律是数组 + 字符串，且**只在发请求时拼成参数**：
+   界面上"选中"只是数组里有这一项，服务端只认拼好的查询串。中间不留第二份
+   布尔状态（`catPerson: true` 之类），否则迟早出现"按钮亮着但查询没带"。 */
+function evToggle(arr, v){
+  const i = arr.indexOf(v);
+  if(i >= 0) arr.splice(i, 1); else arr.push(v);
+  return arr;
+}
+function evAnyFilter(){
+  return !!(EV.cams.length || EV.cats.length || EV.from || EV.to || EV.minDur);
+}
+/* 筛选条件的人话版（列表头用）。只描述**当前真的在生效**的条件，
+   不做"上次用过"的记忆 —— 界面上的高亮已经是唯一事实来源。 */
+function evFilterText(){
+  const parts = [];
+  if(EV.cams.length){
+    const names = EV.cams.map(id => (CAMERAS.find(c => c.id === id) || {}).name || id);
+    parts.push(names.length > 2 ? names.length + " 路" : names.join(" / "));
+  }
+  if(EV.cats.length){
+    parts.push(EV.cats.length > 2 ? EV.cats.length + " 类"
+             : EV.cats.map(evCatText).join(" / "));
+  }
+  if(EV.from || EV.to) parts.push((EV.from || "00:00") + "–" + (EV.to || "24:00"));
+  if(EV.minDur) parts.push("≥" + EV.minDur + " 秒");
+  return parts.join(" · ");
+}
 
 /* 日期条 = 最近 7 天（今天在最前）。
    不做任意日期选择器：台账按天同步，而录像保留期默认就是 7 天；
@@ -71,8 +101,11 @@ function evCatCls(k){
        : (k === "vehicle" || k === "two_wheeler") ? "vehicle" : "motion";
 }
 /* 卡片左侧色条取"最值得说"的类别：人 > 车 > 移动。
-   一条事件常常同时有人员和车辆，色条只能有一个颜色，挑最能代表它的那个。 */
+   一条事件常常同时有人员和车辆，色条只能有一个颜色，挑最能代表它的那个。
+   0.9.126 起优先读服务端给的 `kind`：那是筛选与摘要共用的同一处判断，
+   前端不再自己数 categories 的长度（两处判断迟早会分叉）。 */
 function evMainCat(ev){
+  if(ev && ev.kind === "motion") return "motion";
   const c = (ev && ev.categories) || [];
   if(c.indexOf("person") >= 0) return "person";
   if(c.indexOf("vehicle") >= 0 || c.indexOf("two_wheeler") >= 0) return "vehicle";
@@ -158,67 +191,119 @@ function renderEvHead(){
   ["person", "vehicle", "two_wheeler"].forEach(k=>{
     if(by[k]) parts.push(evCatText(k) + " " + by[k]);
   });
-  el.textContent = (s.count || 0) + " 条" + (parts.length ? " · " + parts.join(" / ") : "");
+  /* 移动侦测单独一档，不进 by_category：它不是类别，是"一条类别都没有"的
+     剩余集（服务端 event.summary_of 同口径）。 */
+  if(s.motion) parts.push("移动侦测 " + s.motion);
+  const cond = evFilterText();
+  el.textContent = (s.count || 0) + " 条"
+    + (parts.length ? " · " + parts.join(" / ") : "")
+    + (cond ? " · 条件：" + cond : "");
 }
 
-/* 三段筛选条。类别只给台账里真实存在的三种（person / vehicle / two_wheeler）：
-   「移动侦测」不是类别，是"一条 AI 类别都没有"的兜底口径，服务端没有这个键；
-   再补一层前端过滤会让人以为筛出来的就是全部（列表被 limit 截过）。 */
+/* 四段筛选条（0.9.126）。类别里含「移动侦测」—— 服务端从这一版起认
+   `cat=motion`（= 一条 AI 类别都没有的事件），它不再是只能在界面上兜底的标签。
+   多选口径：同一维内 OR，不同维之间 AND（与 `event_index.query` 一致）。 */
+function evReload(){
+  EV.open = ""; EV.focus = ""; EV.clip = null; EV.clipErr = "";
+  EV.data = null;                     /* 换了条件：旧列表不许冒充新结果 */
+  renderEvChips(); renderEvHead(); loadEvents(true);
+}
+
 function renderEvChips(){
   const dayBar = document.getElementById("evDayBar");
   if(dayBar){
+    /* 日期仍是单选：一次看一天。台账按天分文件，跨天就得逐天同步，
+       不该藏在一次点击后面。 */
     dayBar.innerHTML = evDayList().map(d =>
       '<button class="evchip' + (d === EV.day ? " on" : "") + '" data-evday="' + d + '">'
       + (d === jsToday() ? "今天" : d.slice(5)) + '</button>').join("");
     dayBar.querySelectorAll("[data-evday]").forEach(b=>{
-      b.onclick = ()=>{
-        EV.day = b.getAttribute("data-evday");
-        EV.open = ""; EV.focus = ""; EV.clip = null; EV.clipErr = "";
-        EV.data = null;                    /* 换日期：旧列表不许冒充新结果 */
-        renderEvChips(); renderEvHead(); loadEvents(true);
-      };
+      b.onclick = ()=>{ EV.day = b.getAttribute("data-evday"); evReload(); };
     });
   }
   const camBar = document.getElementById("evCamBar");
   if(camBar){
     const opts = [{id: "", name: "全部机位"}].concat(
       (CAMERAS || []).map(c => ({id: c.id, name: c.name || c.id})));
-    camBar.innerHTML = opts.map(o =>
-      '<button class="evchip' + (o.id === EV.cam ? " on" : "") + '" data-evname="'
-      + esc(o.id) + '">' + esc(o.name) + '</button>').join("");
+    camBar.innerHTML = opts.map(o => {
+      const on = o.id ? EV.cams.indexOf(o.id) >= 0 : EV.cams.length === 0;
+      return '<button class="evchip' + (on ? " on" : "") + '" data-evname="'
+        + esc(o.id) + '">' + esc(o.name) + '</button>';
+    }).join("");
     camBar.querySelectorAll("[data-evname]").forEach(b=>{
       b.onclick = ()=>{
-        EV.cam = b.getAttribute("data-evname");
-        EV.open = ""; EV.focus = ""; EV.clip = null; EV.clipErr = "";
-        EV.data = null;
-        renderEvChips(); renderEvHead(); loadEvents(true);
+        const id = b.getAttribute("data-evname");
+        if(id) evToggle(EV.cams, id); else EV.cams = [];
+        evReload();
       };
     });
   }
   const catBar = document.getElementById("evCatBar");
   if(catBar){
+    /* motion 放最后：前三个是真实类别，它是"一条类别都没有"的剩余集。 */
     const opts = [{id: "", name: "全部类别"}, {id: "person", name: "人员"},
-                  {id: "vehicle", name: "车辆"}, {id: "two_wheeler", name: "两轮车"}];
-    catBar.innerHTML = opts.map(o =>
-      '<button class="evchip' + (o.id === EV.cat ? " on" : "") + '" data-evcat="'
-      + esc(o.id) + '">' + esc(o.name) + '</button>').join("");
+                  {id: "vehicle", name: "车辆"}, {id: "two_wheeler", name: "两轮车"},
+                  {id: "motion", name: "移动侦测"}];
+    catBar.innerHTML = opts.map(o => {
+      const on = o.id ? EV.cats.indexOf(o.id) >= 0 : EV.cats.length === 0;
+      return '<button class="evchip' + (on ? " on" : "") + '" data-evcat="'
+        + esc(o.id) + '">' + esc(o.name) + '</button>';
+    }).join("");
     catBar.querySelectorAll("[data-evcat]").forEach(b=>{
       b.onclick = ()=>{
-        EV.cat = b.getAttribute("data-evcat");
-        EV.open = ""; EV.focus = ""; EV.clip = null; EV.clipErr = "";
-        EV.data = null;
-        renderEvChips(); renderEvHead(); loadEvents(true);
+        const id = b.getAttribute("data-evcat");
+        if(id) evToggle(EV.cats, id); else EV.cats = [];
+        evReload();
       };
     });
+  }
+  const moreBar = document.getElementById("evMoreBar");
+  if(moreBar){
+    const extra = [];
+    if(EV.from || EV.to) extra.push((EV.from || "00:00") + "–" + (EV.to || "24:00"));
+    if(EV.minDur) extra.push("≥" + EV.minDur + " 秒");
+    let html = '<button class="evchip' + (EV.more || extra.length ? " on" : "")
+      + '" data-evmore="1">' + (EV.more ? "收起" : "更多筛选") + '</button>';
+    if(extra.length)
+      html += '<span class="evchip on">' + esc(extra.join(" ")) + '</span>';
+    if(evAnyFilter())
+      html += '<button class="evchip" data-evclear="1">清空筛选</button>';
+    moreBar.innerHTML = html;
+    moreBar.querySelectorAll("[data-evmore]").forEach(b=>{
+      b.onclick = ()=>{ EV.more = !EV.more; renderEvChips(); };
+    });
+    moreBar.querySelectorAll("[data-evclear]").forEach(b=>{
+      b.onclick = ()=>{
+        EV.cams = []; EV.cats = []; EV.from = ""; EV.to = ""; EV.minDur = "";
+        evReload();
+      };
+    });
+  }
+  const box = document.getElementById("evMoreBox");
+  if(box){
+    box.hidden = !EV.more;
+    /* 只在值不同才写回：每次渲染都重新赋值会让正在输入的秒数跳光标。 */
+    const setv = (id, v)=>{
+      const el = document.getElementById(id);
+      if(el && el.value !== v) el.value = v;
+    };
+    setv("evFrom", EV.from);
+    setv("evTo", EV.to);
+    setv("evMinDur", EV.minDur);
   }
 }
 
 function evQuery(){
   const day = EV.day || jsToday();
-  let u = "/api/events?from=" + encodeURIComponent(day)
-        + "&to=" + encodeURIComponent(day) + "&limit=200";
-  if(EV.cam) u += "&cam=" + encodeURIComponent(EV.cam);
-  if(EV.cat) u += "&cat=" + encodeURIComponent(EV.cat);
+  /* 带钟点的时间窗：`from=YYYY-MM-DD HH:MM` 服务端认（`_norm_when`），
+     不带钟点时仍是整天。from/to 谁先谁后由服务端交换，前端不猜。 */
+  const from = EV.from ? day + " " + EV.from : day;
+  const to = EV.to ? day + " " + EV.to : day;
+  let u = "/api/events?from=" + encodeURIComponent(from)
+        + "&to=" + encodeURIComponent(to) + "&limit=200";
+  if(EV.cams.length) u += "&cam=" + encodeURIComponent(EV.cams.join(","));
+  if(EV.cats.length) u += "&cat=" + encodeURIComponent(EV.cats.join(","));
+  if(EV.minDur) u += "&min_dur=" + encodeURIComponent(EV.minDur);
   return u;
 }
 
@@ -341,4 +426,20 @@ function evGo(delta){
   };
   const rf = document.getElementById("btnEvRefresh");
   if(rf) rf.onclick = ()=>{ loadEvents(true); };
+  /* 「更多筛选」的两个时间框与最短时长：用 change（失焦/回车）而不是 input，
+     否则每敲一个数字就发一次请求 —— 服务端一次要按天跑指纹同步，不是免费的。
+     最短时长只收非负整数秒：小数在这里没有意义（事件精度就是秒）。 */
+  const bind = (id, key, num)=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.onchange = ()=>{
+      let v = String(el.value || "").trim();
+      if(num) v = v.replace(/[^\d]/g, "");
+      EV[key] = v;
+      evReload();
+    };
+  };
+  bind("evFrom", "from", false);
+  bind("evTo", "to", false);
+  bind("evMinDur", "minDur", true);
 })();

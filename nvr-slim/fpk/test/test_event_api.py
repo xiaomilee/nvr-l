@@ -119,6 +119,21 @@ class Base(unittest.TestCase):
         self.assertTrue(d["ok"], d)
         return d
 
+    def add_motion(self, s, e, start=None):
+        """给台账补一条**纯帧差**源（源名不以 ai: 开头 = 运动簇）。
+
+        窗口坐标与 ai 源一致，都是当天钟点秒；放在离 AI 窗口足够远的地方，
+        免得被 `MOTION_EDGE_SEC` 吸收进上一条 AI 事件 —— 这里要的是
+        "一条 AI 类别都没有的事件"，被吸收掉就造不出来了。
+        """
+        start = hms(7, 35) if start is None else start
+        with open(self.led_path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["sources"]["mv:07-35-00.mp4"] = {
+            "start": start, "d": 0.2, "windows": [[s, e]]}
+        with open(self.led_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
     def first_id(self, **kw):
         return self.listing(**kw)["events"][0]["id"]
 
@@ -165,6 +180,56 @@ class TestList(Base):
         d = self.listing(limit="1")
         self.assertEqual(d["count"], 1)
         self.assertEqual(d["events"][0]["categories"], ["vehicle"])
+
+    # ---- 0.9.126 高级筛选 ------------------------------------------
+    def test_motion_filter_means_no_ai_category(self):
+        """`cat=motion` = 一条 AI 类别都没有。这条口径以前挂了两轮账。"""
+        self.add_motion(hms(7, 35), hms(7, 35, 30))
+        d = self.listing(cat="motion")
+        self.assertEqual(d["count"], 1)
+        ev0 = d["events"][0]
+        self.assertEqual(ev0["categories"], [])
+        self.assertEqual(ev0["kind"], "motion")
+        # 纯帧差事件在列表面也要能定位：起点落在 07-35-00 这一片里
+        self.assertEqual(ev0["source_segment"], "07-35-00.mp4")
+        self.assertEqual(d["summary"]["motion"], 1)
+
+    def test_multi_cat_plus_motion(self):
+        self.add_motion(hms(7, 35), hms(7, 35, 30))
+        d = self.listing(cat="person,vehicle,motion")
+        self.assertEqual(d["count"], 3)
+        self.assertEqual(d["filters"]["cats"], ["person", "vehicle"])
+        self.assertTrue(d["filters"]["motion"])
+
+    def test_motion_flag_is_alias(self):
+        self.add_motion(hms(7, 35), hms(7, 35, 30))
+        self.assertEqual(self.listing(motion="1")["count"], 1)
+
+    def test_multi_cam_in(self):
+        d = self.listing(cam="c1,c9")
+        self.assertEqual(d["count"], 2)
+
+    def test_min_dur(self):
+        self.add_motion(hms(7, 35), hms(7, 35, 30))
+        d = self.listing(min_dur="20")
+        self.assertEqual(d["count"], 1)         # 两条 AI 事件各 10 秒
+
+    def test_unknown_cat_is_an_error(self):
+        """静默忽略 = 用户以为筛过了，看到一屏多余的事件还找不到原因。"""
+        d = nvr_slim.events_payload(frm=DATE, to=DATE, cat="dog")
+        self.assertFalse(d["ok"])
+        self.assertIn("dog", d["error"])
+
+    def test_bad_min_dur_is_an_error(self):
+        d = nvr_slim.events_payload(frm=DATE, to=DATE, min_dur="ten")
+        self.assertFalse(d["ok"])
+        self.assertIn("min_dur", d["error"])
+
+    def test_filters_echoed(self):
+        d = self.listing(cat="person", min_dur="5")
+        self.assertEqual(d["filters"]["cats"], ["person"])
+        self.assertEqual(d["filters"]["min_dur"], 5.0)
+        self.assertEqual(d["filters"]["from"][:10], DATE)
 
     def test_bad_range_rejected(self):
         """给了但认不出的时间必须报错：悄悄换成"今天"会让人以为昨天没有事件。"""
