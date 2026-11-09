@@ -23,6 +23,13 @@ event_shot.ShotStore 的图只来自 AI 确认那一拍（detect.py 调 offer）
 
 调用方：nvr_slim 的 /api/events 对每条 kind=="motion" 且尚无图的事件调一次
 request(ev)。request 幂等：窗口内已有图就跳过；否则入队。抽帧在后台线程跑。
+
+AI 复核（0.9.137）：抽帧时同一次 ffmpeg 运行多出一份 PPM（原始像素），
+若 AI 检测总闸开着、推理引擎就绪，就对这一帧再跑一次 YOLO —— 推得出人员/
+车辆就把框随图旁挂（与 AI 确认事件同一份 .json 格式），放大时前端零改动
+直接叠框。**事件的 kind 不变**：台账记的是"当时 AI 没确认"，事后复核只是
+给图补证据，不改写历史（kind_of 只有一处实现，这条红线不动）。复核开着也
+好关着也好，快照都照补 —— 图是本体，框是附属物的附属物。
 """
 import os
 import queue
@@ -37,6 +44,13 @@ from collections import deque
 import event_shot as es
 import event
 import ledger
+
+try:
+    # AI 复核（0.9.137）要用 detect 的纯函数（parse_ppm / CATEGORIES）。同目录
+    # 模块，模块级只有 stdlib 导入（numpy 在函数内才 import），单独跑测试也能进。
+    import detect
+except ImportError:
+    detect = None
 
 # 活动切片（.cNN.mp4）不是全时录像分片：事件定位要开的是事实链上那一片，
 # 切片是压缩产物，不是证据本身（同 nvr_slim._day_files 的口径）。
@@ -139,13 +153,18 @@ class MotionShotService(object):
     """
 
     def __init__(self, ffmpeg, var_dir, record_root, cam_dirs_fn, shot_store,
-                 log=None, queue_max=QUEUE_MAX):
+                 log=None, queue_max=QUEUE_MAX, detect_ref=None):
         self.ffmpeg = ffmpeg or ""
         self.var_dir = var_dir
         self.record_root = record_root
         self.cam_dirs_fn = cam_dirs_fn
         self.shot_store = shot_store
         self.log = log or (lambda m: None)
+        # AI 复核（0.9.137）：detect_ref() → {"engine", "conf_map"} 或 None。
+        # 由 nvr_slim 注入一个"每次处理时现查"的函数：AI 检测总闸关、worker 没起、
+        # 模型没加载，任一条不满足就返回 None —— 复核跳过，快照照补。不持有
+        # Engine 引用本身：设备切换时 worker 会重建，持有旧引用就推理到旧会话。
+        self.detect_ref = detect_ref
         self._q = queue.Queue(maxsize=queue_max)
         self._stop = threading.Event()
         self._th = None
@@ -156,6 +175,8 @@ class MotionShotService(object):
         self.rejected = 0     # 抽到帧但落盘层没收（日上限 / 限流 / 写盘异常）
         self.failed = 0       # 抽帧失败（没 ffmpeg / 坏的片 / 超时）
         self.missed = 0       # 分片定位不到（过期 / 被删）
+        self.redetected = 0   # 复核出框并随图旁挂的张数（0.9.137）
+        self._detect_err = ""   # 最近一次复核跳过/失败的原因（诊断用）
         self._miss = {}       # (cam,date,start) -> 该时刻之前不再重试
         self._trace = deque(maxlen=TRACE_MAX)   # 最近几条处理轨迹（诊断用）
         self._ffmpeg_ok = None                  # None=没探过 / True / False
@@ -272,8 +293,11 @@ class MotionShotService(object):
 
     # ---------------------------------------------------------- 抽帧（后台线程）
     def _extract(self, path, offset):
-        """从分片抽一帧 → 字节；任何异常都返回 None（不抛）。
+        """从分片抽一帧 → (jpg 字节, ppm 字节)；jpg None = 失败（不抛）。
 
+        ppm 是给 AI 复核用的：推理吃的是原始像素，JPEG 已经编码过一次再解码
+        一次纯属浪费 —— 干脆同一次 ffmpeg 运行里两个输出，jpg 给快照、ppm 给
+        推理。ppm 没出来不影响快照（复核跳过、图照存）；jpg 没出来才算失败。
         失败原因写进 `self._last_err`，供诊断轨迹带走。0.9.135 之前这里一律
         静默返回 None，线上只能看到 failed 涨，看不出是「没 ffmpeg」「解不了
         这个编码」还是「时间点超出片长」—— 三种完全不同的处置方式。
@@ -281,7 +305,16 @@ class MotionShotService(object):
         ok, why = self.ffmpeg_ready()
         if not ok:
             self._last_err = why
-            return None
+            return None, None
+        jpg, ppm = self._run_both(offset, path)
+        if ppm:
+            # 字节 → (w, h, rgb) 三元组（detect.parse_ppm 纯函数）。解析失败
+            # （截断/不像 P6）就放弃复核，图不受影响。
+            ppm = detect.parse_ppm(ppm) if ppm.startswith(b"P6") else None
+        if jpg:
+            return jpg, ppm
+        # 两个输出都没出：退回单输出老路（某些精简版 ffmpeg 对双输出挑刺，
+        # 但单输出 image2 + .jpg 仍然出图）。ppm 没了复核跳过，快照优先。
         base = [self.ffmpeg, "-hide_banner", "-loglevel", "error",
                 "-ss", "%.3f" % max(0.0, offset), "-i", path,
                 "-frames:v", "1", "-q:v", "4", "-f", "image2"]
@@ -290,12 +323,69 @@ class MotionShotService(object):
         for extra in (["-c:v", "mjpeg"], []):
             data = self._run_ffmpeg(base + extra)
             if data:
-                return data
-        return None
+                return data, None
+        return None, None
+
+    _PPM_CAP = 16 * 1024 * 1024   # 1080p P6 ≈ 6MB，留一倍余量防呆
+
+    def _run_both(self, offset, path):
+        """一次 ffmpeg 运行出 jpg + ppm → (jpg, ppm)。jpg 为 None 时 ppm 也不可信。
+
+        临时文件**必须用真扩展名**（.jpg / .ppm，不用 .part）：ffmpeg 8 靠
+        扩展名猜输出格式，怪后缀会拒开输出（退出码 234），即使显式给了
+        -f image2 也可能把第二个输出的编码器弄成 mjpeg（0.9.137 真机实测，
+        产物头是 FF D8 而不是 P6）。这些是 /tmp 里前缀唯一的私有临时文件，
+        写完即读即删，不需要 .part 那种原子性。
+        """
+        fd, jp = tempfile.mkstemp(suffix=".jpg", prefix="mshot-")
+        os.close(fd)
+        fd2, pp = tempfile.mkstemp(suffix=".ppm", prefix="mshot-")
+        os.close(fd2)
+        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error",
+               "-ss", "%.3f" % max(0.0, offset), "-i", path,
+               "-frames:v", "1", "-q:v", "4", "-c:v", "mjpeg", "-y", jp,
+               "-frames:v", "1", "-y", pp]
+        try:
+            proc = subprocess.run(cmd, timeout=20,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if proc.returncode != 0:
+                tail = (proc.stderr or b"")[-300:].decode("utf-8", "replace").strip()
+                self._last_err = "ffmpeg 退出码 %d：%s" % (
+                    proc.returncode, tail.replace("\n", " ") or "(无输出)")
+                return None, None
+            js = os.path.getsize(jp) if os.path.isfile(jp) else 0
+            ps = os.path.getsize(pp) if os.path.isfile(pp) else 0
+            if js < 1024:
+                self._last_err = "ffmpeg 没写出有效帧（jpg %d 字节）" % js
+                return None, None
+            if js > es.MAX_SHOT_BYTES:
+                self._last_err = "这一帧超过上限（%d 字节）" % js
+                return None, None
+            with open(jp, "rb") as f:
+                jpg = f.read(es.MAX_SHOT_BYTES + 1)
+            ppm = None
+            if ps > 0:
+                with open(pp, "rb") as f:
+                    ppm = f.read(self._PPM_CAP + 1)
+                if len(ppm) > self._PPM_CAP or not ppm.startswith(b"P6"):
+                    ppm = None       # 超限/不像 PPM：复核放弃，图不受影响
+            return jpg, ppm
+        except subprocess.TimeoutExpired:
+            self._last_err = "ffmpeg 超时（20 秒）"
+            return None, None
+        except OSError as e:
+            self._last_err = "ffmpeg 无法执行：%r" % e
+            return None, None
+        finally:
+            for p in (jp, pp):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
     def _run_ffmpeg(self, cmd):
         """跑一次 ffmpeg，产出字节或 None（失败原因写 _last_err）。"""
-        fd, tmp = tempfile.mkstemp(suffix=".jpg.part", prefix="mshot-")
+        fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="mshot-")
         os.close(fd)
         try:
             proc = subprocess.run(cmd + ["-y", tmp], timeout=20,
@@ -354,6 +444,61 @@ class MotionShotService(object):
         except Exception:
             pass
 
+    # ---------------------------------------------------------- AI 复核（0.9.137）
+    def detect_ready(self):
+        """AI 复核现在能不能跑 → (engine, conf_map) 或 (None, 原因)。
+
+        每次处理都现查（不缓存）总闸与 worker 状态：用户中途开/关 AI 检测，
+        复核应跟着变，而不是等重启。推理输入是 PPM 解出的原始像素，不存在
+        "图变了框错位"的问题（框与图是同一次抽帧的产物）。
+        """
+        if detect is None:
+            return None, "detect 模块不可用"
+        if self.detect_ref is None:
+            return None, "未配置 AI 复核"
+        try:
+            ref = self.detect_ref()
+        except Exception as e:
+            return None, "复核引用异常：%r" % e
+        if not ref:
+            return None, "AI 检测总闸关闭或检测进程未运行"
+        engine = ref.get("engine")
+        conf_map = ref.get("conf_map") or {}
+        if engine is None:
+            return None, "推理引擎未就绪"
+        return engine, conf_map
+
+    def _redetect(self, ppm):
+        """抽出的那一帧 → (dets, 说明)。dets None = 没复核出框（原因进轨迹）。
+
+        只做类别白名单过滤，不做忽略区/只统计区：忽略区是"检测确认"的口径，
+        复核是"图上有什么"的口径 —— 用户只想知道框里是不是人，不该被忽略区
+        吃掉。没认出目标、引擎没就绪都如实写轨迹，绝不硬造框。
+        """
+        if ppm is None:
+            self._detect_err = "无原始像素（ffmpeg 双输出失败，复核跳过）"
+            return None, self._detect_err
+        engine, conf_map = self.detect_ready()
+        if engine is None:
+            self._detect_err = conf_map
+            return None, self._detect_err
+        try:
+            w, h, rgb = ppm
+            raw = engine.infer(rgb, w, h, conf_map)
+        except Exception as e:
+            self._detect_err = "推理异常：%r" % e
+            return None, self._detect_err
+        if raw is None:
+            self._detect_err = "推理不可用：%s" % (getattr(engine, "error", "") or "未知")
+            return None, self._detect_err
+        dets = [d for d in raw or ()
+                if isinstance(d, dict) and d.get("c") in (detect.CATEGORIES or ())]
+        if not dets:
+            self._detect_err = "复核完成：没认出人员/车辆"
+            return None, self._detect_err
+        self._detect_err = ""
+        return dets, "复核出 %d 框" % len(dets)
+
     def _handle(self, item):
         cam, date, start, end = item
         t = {"cam": cam, "date": date, "start": round(float(start), 1)}
@@ -389,7 +534,7 @@ class MotionShotService(object):
         t["seg"] = os.path.basename(path)
         t["offset"] = round(offset, 1)
         self._last_err = ""
-        data = self._extract(path, offset)
+        data, ppm = self._extract(path, offset)
         if not data:
             self.failed += 1
             t["step"] = "extract"
@@ -398,6 +543,14 @@ class MotionShotService(object):
             return
         self.extracted += 1
         t["bytes"] = len(data)
+        # AI 复核（0.9.137）：对抽出的这一帧再跑一次推理。推得出框就随图旁挂
+        # （放大可见「人员 0.87」式的框），推不出就只存图 —— 复核是附属物的
+        # 附属物，任何失败都只写轨迹，绝不影响快照本身。
+        dets, ai_why = self._redetect(ppm)
+        t["ai"] = ai_why
+        if dets:
+            self.redetected += 1
+            t["dets"] = len(dets)
         if self.shot_store is None:
             t["step"] = "extract"
             t["reason"] = "抽到了帧但没有落盘层（shot_store 未就绪）"
@@ -407,7 +560,12 @@ class MotionShotService(object):
         try:
             # gap=False：补的是**不同事件**，各自该有一张；不关这条闸，30 秒内
             # 的事件会被当成"同一条重复确认"整片丢掉（0.9.135 真机问题）。
-            ok = self.shot_store.offer(cam, data, at, gap=False)
+            # dets（0.9.137）：复核出的框跟着图走，落盘层写成旁挂 .json，
+            # 与 AI 确认事件的框同一份格式 —— 前端放大时零改动直接叠。
+            if dets:
+                ok = self.shot_store.offer(cam, data, at, dets, gap=False)
+            else:
+                ok = self.shot_store.offer(cam, data, at, gap=False)
         except TypeError:
             # 老签名 / 测试替身不带 gap：退回按位置调用，宁可被限流也别丢图。
             try:
@@ -447,10 +605,12 @@ class MotionShotService(object):
                 "extracted": self.extracted, "stored": self.stored,
                 "rejected": self.rejected, "failed": self.failed,
                 "missed": self.missed, "miss_cached": len(self._miss),
+                "redetected": self.redetected,
                 "running": self.alive(), "qsize": self._q.qsize(),
                 "record_root": self.record_root,
                 "ffmpeg": {"path": self.ffmpeg, "ok": self._ffmpeg_ok,
                            "err": self._ffmpeg_err, "last_err": self._last_err},
+                "detect": {"err": self._detect_err},
                 "trace": [dict(x) for x in self._trace]}
 
     def _writable_target(self, path):
@@ -477,6 +637,10 @@ class MotionShotService(object):
         try:
             ok, why = self.ffmpeg_ready()
             out["ffmpeg"] = {"path": self.ffmpeg, "ok": ok, "why": why}
+            # 复核能力（0.9.137）：探一遍"现在这一刻"能不能跑推理，不真推理。
+            engine, conf_map = self.detect_ready()
+            out["redetect"] = {"ok": engine is not None,
+                               "why": ("" if engine is not None else conf_map)}
             dirs = list(self.cam_dirs_fn(cam) or ()) if self.cam_dirs_fn else []
             out["dirs"] = dirs
             sealed, parts, dirs_seen, files_seen = scan_day(self.record_root, dirs, date)

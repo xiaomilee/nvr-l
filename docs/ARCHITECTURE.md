@@ -191,6 +191,8 @@ var/event_shots/<cam>/<日期>/<HHMMSS>_<mmm>.jpg   （独立单线程写，7 �
 
 `ffmpeg` 也从「拿到路径就用」改成先验：路径不存在时按 `PATH` 找（`shutil.which`）、查执行权限、`-version` 确认真能跑，结论缓存；抽帧失败会去掉 `-c:v mjpeg` 再试一次（精简版 ffmpeg 可能没有独立 mjpeg 编码器）。失败原因写进 `_last_err` 随轨迹带走 —— 以前一律静默返回 `None`，线上只能看到 `failed` 涨。
 
+**AI 复核（0.9.137）：补图快照也能带识别框**。抽帧的**同一次** ffmpeg 运行多出一份 PPM 输出（原始像素，推理吃的就是它，JPEG 解来解去纯属浪费）；AI 检测总闸开着、`DetectWorker` 活着时（`_motion_detect_ref` 每条现查，不缓存引擎引用——换设备重建 worker 时复核自动跟着新会话），后台线程对这一帧再跑一次 `engine.infer`，推得出人员/车辆就把 `dets` 随图传给 `offer()`，落盘层写成与 AI 确认事件同一格式的旁挂 `.json` —— 前端放大时零改动直接叠框。**事件的 `kind` 不变**：台账记的是「当时 AI 没确认」，事后复核只补证据不改写历史，`event.kind_of` 单一实现的红线不动。复核是附属物的附属物：没配、总闸关、引擎报错、没认出目标、PPM 没出——任何一种都只影响框，快照照存；计数加 `redetected`，失败原因进 `motion_shot.detect.err` 与轨迹。
+
 **空间预警（0.9.131）复用存储统计，不另扫一遍盘**：
 ```
 storage_usage()   扫 <cam>/<日期>/ 目录元数据（30 分钟缓存）

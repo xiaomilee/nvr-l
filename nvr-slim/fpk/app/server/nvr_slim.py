@@ -2957,6 +2957,24 @@ def cleanup_loop(stop_event):
             log_line("cleanup error: %s" % e)
 
 
+def _motion_detect_ref():
+    """运动事件 AI 复核的引用源（0.9.137）：现在这一刻能不能跑推理。
+
+    每次都现查而不是启动时快照：AI 总闸热开关、worker 因换设备重建，复核都
+    要跟着变。总闸关着就返回 None —— 复核不该背着"用户明确关掉的开关"偷偷
+    加载模型吃 CPU。引擎直接复用 DetectWorker 的那一个：模型只加载一次，
+    会话线程安全，复核与正常检测共用不冲突。
+    """
+    w = STATE.get("detect_worker")
+    if w is None or not w.alive():
+        return None
+    det, _cams = _detect_cfg_snapshot()
+    if not detect._as_bool(det.get("enable"), False):
+        return None
+    conf_map = det.get("conf") or detect.conf_from_sensitivity("std")
+    return {"engine": w.engine, "conf_map": conf_map}
+
+
 # ---------------------------------------------------------------- AI 检测 worker
 
 def _detect_cfg_snapshot():
@@ -4822,7 +4840,8 @@ def main():
         _mshot = motion_shot.MotionShotService(
             STATE.get("ffmpeg_bin"), a.var, record_dir(),
             cam_dirs_fn=cam_dirs_for,
-            shot_store=STATE.get("shots"), log=_log_line)
+            shot_store=STATE.get("shots"), log=_log_line,
+            detect_ref=_motion_detect_ref)
         _mshot.start()
         STATE["motion_shot"] = _mshot
     except Exception as e:

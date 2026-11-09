@@ -105,22 +105,43 @@ class TestLocate(Tmp):
 
 
 class FakeStore(object):
-    """落盘层替身：记下调用参数，尤其是 gap（补图必须为 False）。"""
+    """落盘层替身：记下调用参数，尤其是 gap（补图必须为 False）与 dets（复核框）。"""
 
     def __init__(self, ok=True):
         self.got = []
         self.ok = ok
 
     def offer(self, cam, data, at=None, dets=None, gap=True):
-        self.got.append((cam, data, at, gap))
+        self.got.append({"cam": cam, "data": data, "at": at,
+                         "gap": gap, "dets": dets})
         return self.ok
 
 
+class FakeEngine(object):
+    """推理引擎替身：infer 返回预置 dets；None = 引擎不可用（记 error）。"""
+
+    def __init__(self, dets=None, err=None):
+        self._dets = dets
+        self.error = err or ""
+        self.seen = []
+
+    def infer(self, rgb, w, h, conf_map):
+        self.seen.append((w, h, conf_map))
+        return self._dets
+
+
+PPM = (64, 48, b"\x00" * (64 * 48 * 3))   # 假 PPM 三元组：宽 高 RGB 字节
+
+
 class FakeExtractService(ms.MotionShotService):
-    """抽帧用假字节，免去真 ffmpeg 依赖。"""
+    """抽帧用假字节，免去真 ffmpeg 依赖。返回 (jpg, ppm) 二元组（0.9.137）。"""
+
+    def __init__(self, *a, ppm=None, **kw):
+        self._ppm = ppm
+        super(FakeExtractService, self).__init__(*a, **kw)
 
     def _extract(self, path, offset):
-        return JPEG
+        return JPEG, self._ppm
 
 
 class TestRequest(Tmp):
@@ -171,7 +192,9 @@ class TestServiceFlow(Tmp):
             self.assertTrue(wait_for(lambda: len(store.got) >= 1))
         finally:
             svc.stop()
-        cam, data, at, gap = store.got[0]
+        g = store.got[0]
+        cam, data, at, gap, dets = (g["cam"], g["data"], g["at"],
+                                    g["gap"], g["dets"])
         self.assertEqual(cam, "cam-01")
         self.assertEqual(data, JPEG)
         self.assertEqual(time.strftime("%Y-%m-%d", time.localtime(at)), date)
@@ -281,6 +304,151 @@ class TestRobustness(Tmp):
             svc.stop()
 
 
+class TestRedetect(Tmp):
+    """AI 复核（0.9.137）：抽到的帧再跑一次推理，推得出框就随图旁挂。
+
+    守三条：
+    1. kind 不变 —— 复核只写旁挂框，绝不改事件分类（台账是事实）。
+    2. 复核失败/未启用只影响框，不影响快照本身（框是附属物的附属物）。
+    3. 框必须真的传给落盘层（offer 的 dets 参数），不能"推了个寂寞"。
+    """
+
+    DETS = [{"c": "person", "s": 0.82, "b": [0.5, 0.5, 0.2, 0.4]},
+            {"c": "vehicle", "s": 0.61, "b": [0.7, 0.6, 0.3, 0.25]},
+            {"c": "cat", "s": 0.99, "b": [0.1, 0.1, 0.1, 0.1]}]   # cat 不在白名单
+
+    def _seed(self):
+        date = day_str()
+        os.makedirs(os.path.join(self.rec, "cam-01", date), exist_ok=True)
+        with open(os.path.join(self.rec, "cam-01", date, "00-00-00.mp4"), "wb") as f:
+            f.write(b"fake-mp4")
+        return date
+
+    def _run(self, svc, date):
+        ev = {"id": "cam-01_%s_000100" % date.replace("-", ""), "cam": "cam-01",
+              "date": date, "start": 100.0, "end": 108.0}
+        svc.start()
+        try:
+            self.assertTrue(svc.request(ev))
+            self.assertTrue(wait_for(lambda: svc.extracted >= 1))
+        finally:
+            svc.stop()
+        return ev
+
+    def test_60_dets_flow_to_store(self):
+        """复核出框 → dets 传给 offer（白名单外的类别被滤掉），redetected 计数。"""
+        date = self._seed()
+        eng = FakeEngine(dets=self.DETS)
+        store = FakeStore()
+        svc = FakeExtractService("", self.var, self.rec,
+                                 lambda cam: ["cam-01"], store,
+                                 ppm=PPM, detect_ref=lambda: {
+                                     "engine": eng, "conf_map": {"person": 0.5}})
+        self._run(svc, date)
+        self.assertEqual(svc.redetected, 1)
+        self.assertEqual(len(eng.seen), 1, "每张图正好跑一次推理")
+        self.assertEqual(eng.seen[0], (64, 48, {"person": 0.5}))
+        g = store.got[0]
+        self.assertEqual([d["c"] for d in g["dets"]], ["person", "vehicle"],
+                         "白名单外的类别（cat）必须滤掉")
+        self.assertFalse(g["gap"])
+
+    def test_61_no_detect_ref_stores_plain(self):
+        """没配复核（AI 总闸关/worker 没起）：快照照补，offer 不带 dets。"""
+        date = self._seed()
+        store = FakeStore()
+        svc = FakeExtractService("", self.var, self.rec,
+                                 lambda cam: ["cam-01"], store, ppm=PPM)
+        self._run(svc, date)
+        self.assertEqual(svc.redetected, 0)
+        self.assertIsNone(store.got[0]["dets"])
+        self.assertEqual(store.got[0]["data"], JPEG)
+        engine, why = svc.detect_ready()
+        self.assertIsNone(engine)
+        self.assertTrue(why, "不能跑必须给原因")
+
+    def test_62_engine_failure_degrades_gracefully(self):
+        """推理引擎不可用：图照落盘、redetected=0，原因进 detect.err。"""
+        date = self._seed()
+        eng = FakeEngine(dets=None, err="模型加载失败")
+        store = FakeStore()
+        svc = FakeExtractService("", self.var, self.rec,
+                                 lambda cam: ["cam-01"], store,
+                                 ppm=PPM, detect_ref=lambda: {
+                                     "engine": eng, "conf_map": {}})
+        self._run(svc, date)
+        self.assertEqual(svc.redetected, 0)
+        self.assertEqual(svc.stored, 1, "复核失败不许拖累快照本体")
+        self.assertIn("推理不可用", svc.status()["detect"]["err"])
+        self.assertIn("模型加载失败", svc.status()["detect"]["err"])
+
+    def test_63_unknown_target_still_stores(self):
+        """推完了但没认出人员/车辆：照存图，轨迹如实说「没认出」。"""
+        date = self._seed()
+        eng = FakeEngine(dets=[{"c": "cat", "s": 0.9, "b": [0.5, 0.5, 0.2, 0.2]}])
+        store = FakeStore()
+        svc = FakeExtractService("", self.var, self.rec,
+                                 lambda cam: ["cam-01"], store,
+                                 ppm=PPM, detect_ref=lambda: {
+                                     "engine": eng, "conf_map": {}})
+        self._run(svc, date)
+        self.assertEqual(svc.redetected, 0)
+        self.assertEqual(svc.stored, 1)
+        self.assertIsNone(store.got[0]["dets"])
+
+    def test_64_no_ppm_skips_inference(self):
+        """ffmpeg 双输出只出了 jpg 没出 ppm：复核跳过，图照存。"""
+        date = self._seed()
+        eng = FakeEngine(dets=self.DETS)
+        store = FakeStore()
+        svc = FakeExtractService("", self.var, self.rec,
+                                 lambda cam: ["cam-01"], store,
+                                 ppm=None, detect_ref=lambda: {
+                                     "engine": eng, "conf_map": {}})
+        self._run(svc, date)
+        self.assertEqual(len(eng.seen), 0, "没像素就不该跑推理")
+        self.assertEqual(svc.stored, 1)
+        self.assertIn("无原始像素", svc.status()["detect"]["err"])
+
+    def test_65_probe_reports_redetect_availability(self):
+        svc = ms.MotionShotService("", self.var, self.rec,
+                                   lambda cam: ["cam-01"], None)
+        p = svc.probe("cam-01", "2026-11-09")
+        self.assertIn("redetect", p)
+        self.assertFalse(p["redetect"]["ok"])
+        self.assertTrue(p["redetect"]["why"], "不可用要给原因")
+        # 配上复核引用后 probe 应报 ok
+        svc2 = ms.MotionShotService("", self.var, self.rec,
+                                    lambda cam: ["cam-01"], None,
+                                    detect_ref=lambda: {
+                                        "engine": FakeEngine(dets=[]),
+                                        "conf_map": {}})
+        p2 = svc2.probe("cam-01", "2026-11-09")
+        self.assertTrue(p2["redetect"]["ok"])
+
+    def test_66_extract_failure_counts_failed(self):
+        """抽帧彻底失败（jpg 都没出）：failed 计数、不进落盘层。"""
+        date = self._seed()
+        store = FakeStore()
+
+        class Boom(ms.MotionShotService):
+            def _extract(self, path, offset):
+                return None, None
+
+        svc = Boom("", self.var, self.rec, lambda cam: ["cam-01"], store)
+        svc.start()
+        try:
+            ev = {"id": "cam-01_%s_000100" % date.replace("-", ""), "cam": "cam-01",
+                  "date": date, "start": 100.0, "end": 108.0}
+            self.assertTrue(svc.request(ev))
+            self.assertTrue(wait_for(lambda: svc.failed >= 1))
+        finally:
+            svc.stop()
+        self.assertEqual(svc.failed, 1)
+        self.assertEqual(svc.extracted, 0)
+        self.assertEqual(store.got, [])
+
+
 class TestDiag(Tmp):
     """诊断能力（0.9.136）：连续两版"测试机绿、生产机没图"，靠计数看不出卡在哪。
 
@@ -334,7 +502,8 @@ class TestDiag(Tmp):
         svc = ms.MotionShotService("", self.var, self.rec,
                                    lambda cam: ["cam-01"], None)
         st = svc.status()
-        for k in ("trace", "ffmpeg", "record_root", "stored", "rejected", "missed"):
+        for k in ("trace", "ffmpeg", "record_root", "stored", "rejected",
+                  "missed", "redetected", "detect"):
             self.assertIn(k, st)
         self.assertEqual(st["trace"], [])
         self.assertIsNone(st["ffmpeg"]["ok"], "status 不该主动跑 ffmpeg 探测")

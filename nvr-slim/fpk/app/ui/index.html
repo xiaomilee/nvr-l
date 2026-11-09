@@ -8035,10 +8035,14 @@ function cardShotDiag(){
 function shotTraceText(t){
   const dirs = (t.dirs || []).join("/") || "?";
   const seg = t.seg ? (" → " + t.seg + (t.offset != null ? "@" + t.offset + "s" : "")) : "";
+  /* AI 复核结果（0.9.137）：推得出框带框数，推不出带原因 —— 看轨迹就能分清
+     「没开复核」「没认出」「引擎坏了」三种完全不同的「没有框」。 */
+  const ai = t.ai ? (" · AI " + esc(String(t.ai))) : "";
   return (t.ts || "") + " " + esc(String(t.cam || ""))
     + " " + esc(String(t.start != null ? t.start : "")) + "s"
     + " · 目录 " + esc(dirs) + ((t.dirs_seen && t.dirs_seen.length) ? "" : "（不存在）")
     + " · 分片 " + (t.segs != null ? t.segs : "?") + seg
+    + ai
     + " · " + esc(String(t.reason || t.step || ""));
 }
 
@@ -8076,6 +8080,10 @@ async function loadDiagShots(){
            + ' · 被拒 ' + (ms.rejected|0) + ' · 缺分片 ' + (ms.missed|0)
            + ' · 抽帧失败 ' + (ms.failed|0) + ' · 队列 ' + (ms.qsize|0),
            (ms.running === false) || (ms.failed|0) > 0 || (ms.rejected|0) > 0)
+    + line("AI 复核框", (ms.redetected|0) + " 张"
+           + ((ms.detect && ms.detect.err && !(ms.redetected|0))
+              ? " · " + esc(String(ms.detect.err).slice(0, 90)) : ""),
+           false)
     + line("ffmpeg", ffText, ff.ok === false)
     + line("录像根", esc(String(ms.record_root || "—")))
     + (ff.last_err
