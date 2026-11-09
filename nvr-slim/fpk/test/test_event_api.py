@@ -137,6 +137,16 @@ class Base(unittest.TestCase):
     def first_id(self, **kw):
         return self.listing(**kw)["events"][0]["id"]
 
+    def put_shot(self, sec, cam="c1"):
+        """造一张"当时"的事件快照（0.9.129）。文件名就是它的时间。"""
+        p = nvr_slim.event_shot.path_of(self.var, cam, DATE,
+                                        nvr_slim.event_shot.name_of(sec))
+        self.assertIsNotNone(p, "路径拼接不该拒绝合法输入")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as f:
+            f.write(b"\xff\xd8" + b"x" * 32 + b"\xff\xd9")
+        return p
+
 
 class TestList(Base):
     def test_events_from_ledger(self):
@@ -150,6 +160,30 @@ class TestList(Base):
         self.assertEqual(evs[0]["source_segment"], "07-30-00.mp4")
         self.assertEqual(evs[1]["categories"], ["vehicle"])
         self.assertEqual(d["summary"]["by_category"]["person"], 1)
+
+    def test_list_carries_shot(self):
+        """有图就在事件上带 shot{url,at,offset}，没有就是 null（键始终存在）。
+
+        `url` 由服务端给，前端不拼 —— 与 clip 的契约一致（这一页一直不肯
+        让前端自己拼地址，图片同理）。
+        """
+        self.put_shot(hms(7, 30, 11))          # 事件 07:30:05 开始后 6 秒
+        d = self.listing()
+        shot = d["events"][0]["shot"]
+        self.assertEqual(shot["url"], "/api/events/c1_20261106_073005/shot")
+        self.assertEqual(shot["at"], "07:30:11")
+        self.assertAlmostEqual(shot["offset"], 6.0, delta=0.1)
+        # 第二条事件窗口里没有图 → null，不是空对象
+        self.assertIn("shot", d["events"][1])
+        self.assertIsNone(d["events"][1]["shot"])
+
+    def test_shot_key_always_present(self):
+        """键必须始终在：前端只判 `if(ev.shot)`，少一个键会变成 undefined。"""
+        d = self.listing()
+        for ev in d["events"]:
+            with self.subTest(id=ev["id"]):
+                self.assertIn("shot", ev)
+                self.assertIsNone(ev["shot"])
 
     def test_second_call_is_incremental(self):
         """指纹没变就不重算：页面每次刷新都全量重扫，5 路 × 30 天就是几十秒。"""

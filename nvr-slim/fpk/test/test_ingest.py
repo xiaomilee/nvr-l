@@ -295,7 +295,7 @@ class TestDetectUrl(unittest.TestCase):
         w = detect.DetectWorker(None, "ffmpeg", "/tmp", lambda: "/tmp",
                                 lambda: [], lambda: ({}, []),
                                 frame_path_fn=lambda cid: None)
-        ok, data, err = w._grab({"id": "c1"}, RTSPS)
+        ok, data, err, src = w._grab({"id": "c1"}, RTSPS)
         self.assertFalse(ok)
         self.assertIn("取帧层", err)
 
@@ -430,7 +430,7 @@ class TestNoNewFrameNotAFailure(unittest.TestCase):
         w = detect.DetectWorker(None, "ffmpeg", "/tmp", lambda: "/tmp",
                                 lambda: [], lambda: ({}, []),
                                 frame_path_fn=lambda cid: "")
-        ok, data, err = w._grab({"id": "c1"}, RTSPS)
+        ok, data, err, src = w._grab({"id": "c1"}, RTSPS)
         self.assertFalse(ok)
         self.assertEqual(err, detect.NO_NEW_FRAME,
                          "空串路径 = 没有新图，要能和真正的故障区分开")

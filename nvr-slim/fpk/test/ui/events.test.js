@@ -265,5 +265,38 @@ ck("没有定位时 ±30 不动作", run('EV.clip=null; EV.open="c1_20261108_102
 ck("定位缺失时 ±30 也不动作",
    run('EV.clip={missing_reason:"not_sealed",missing_text:"x"}; evGo(-30)') === false);
 
+/* ---- 事件快照（0.9.129）：那一眼 ----
+   五条口径各一条：有图才占位 / 图地址用服务端给的 / 说明写真实时刻与偏移 /
+   没有图如实说原因 / 拿不到图不许留破图。 */
+const EVS = Object.assign({}, EV1, {shot:{url:"/api/events/c1_20261108_102341/shot",
+                                          at:"10:23:47", offset:6}});
+ck("有快照：卡片出现缩略图",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf("evthumb") > 0);
+ck("缩略图地址用服务端给的（不自己拼）",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')')
+     .indexOf("/api/events/c1_20261108_102341/shot") > 0);
+ck("缩略图懒加载 + 异步解码（一次 200 条）",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf('loading="lazy"') > 0);
+ck("拿不到图就隐藏，不留破图",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf("this.style.display=\'none\'") > 0);
+ck("没有快照：卡片不塞占位图",
+   run('EV.open=""; evCardHtml(' + J(EV1) + ')').indexOf("evthumb") < 0);
+ck("展开时有宽图",
+   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
+     .indexOf('class="evshot"') > 0);
+ck("展开时写清快照时刻与偏移",
+   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
+     .indexOf("快照 10:23:47 · 事件开始后 6 秒") > 0);
+ck("图早于事件起点：写\"开始前\"而不是负号",
+   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(Object.assign({}, EVS,
+     {shot:{url:"/api/events/x/shot", at:"10:23:35", offset:-6}})) + ')')
+     .indexOf("事件开始前 6 秒") > 0);
+ck("没有快照：展开区说清原因（不是播放失败）",
+   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EV1) + ')')
+     .indexOf("这条没有留快照") > 0);
+ck("没有快照时也照常给三个动作按钮",
+   run('EV.clipErr=""; EV.clip={ok:true,segment:"10-23-41.mp4",offset_sec:0};'
+     + ' evOpenHtml(' + J(EV1) + ')').indexOf("data-evgo=\"0\"") > 0);
+
 console.log((fail ? "FAIL" : "OK") + "  events  " + pass + " 通过 / " + fail + " 失败");
 process.exit(fail ? 1 : 0);

@@ -118,6 +118,34 @@ function evFind(id){
   return null;
 }
 
+/* 缩略图 onerror：拿不到图（404 / 没登录 / 断网）就把 <img> 自己藏掉。
+   留一个破图图标比"没有图"更难看，也更容易被当成页面坏了。
+   用内联属性而不是 addEventListener：这些卡片是 innerHTML 一次性生成的，
+   逐个绑定会在 200 条列表上多 200 次查询。 */
+const EV_IMG_ONERR = "this.style.display='none'";
+
+/* 快照那一眼（0.9.129）。三件事：
+   - 图从**服务端给的 url** 来，前端不拼（与 clip 同一套契约）；
+   - 说明写"快照 HH:MM:SS · 事件开始后 N 秒"，N 用服务端算好的 offset，
+     前端不重新减（两处算早晚会不一致）；
+   - 没有图就如实说原因，并且明确"这不是播放失败" —— 老事件本来就没存，
+     不该让用户以为坏了。 */
+function evShotHtml(ev){
+  const sh = (ev && ev.shot) || null;
+  if(!sh || !sh.url)
+    return '<div class="evshotcap">这条没有留快照（0.9.129 之前的事件不存图，'
+      + '或检测当时还没确认）。</div>';
+  const off = (typeof sh.offset === "number") ? sh.offset : null;
+  let when = "快照 " + esc(sh.at);
+  if(off !== null){
+    const n = Math.round(Math.abs(off));
+    when += off >= 0 ? " · 事件开始后 " + n + " 秒" : " · 事件开始前 " + n + " 秒";
+  }
+  return '<img class="evshot" src="' + esc(sh.url) + '" alt="" loading="lazy"'
+    + ' decoding="async" onerror="' + EV_IMG_ONERR + '">'
+    + '<div class="evshotcap">' + when + '</div>';
+}
+
 /* 打开一条事件后展开的操作区。播不了时把服务端的中文原因摆出来 ——
    需求里"点击直接播放"的前提是这一段真的还在，不在就得说清是哪一种不在。 */
 function evOpenHtml(ev){
@@ -130,7 +158,7 @@ function evOpenHtml(ev){
   }else if(EV.clip && EV.clip.clamped){
     note = '<div class="evnote info">事件前面那段被片头截断，入点从片首开始。</div>';
   }
-  return note + '<div class="evacts">'
+  return note + evShotHtml(ev) + '<div class="evacts">'
     + '<button class="evbtn" data-evgo="-30">◀ 前 30 秒</button>'
     + '<button class="evbtn main" data-evgo="0">▶ 打开回放</button>'
     + '<button class="evbtn" data-evgo="30">后 30 秒 ▶</button>'
@@ -152,7 +180,14 @@ function evCardHtml(ev){
       + '<div class="evmeta">' + esc(cam) + " · " + gfmtDur(ev.duration) + conf + '</div>'
       + (open ? evOpenHtml(ev) : "")
     + '</div>'
-    + '<div class="evtags">' + cats.map(k =>
+    + '<div class="evtags">'
+      /* 缩略图只在真有图时出现：没有就不占位 —— 一屏 200 条里大多数是
+         0.9.129 之前的老事件，塞满灰块等于把列表变成一片占位符。 */
+      + (ev.shot && ev.shot.url
+          ? '<img class="evthumb" src="' + esc(ev.shot.url) + '" alt=""'
+            + ' loading="lazy" decoding="async" onerror="' + EV_IMG_ONERR + '">'
+          : "")
+      + cats.map(k =>
         '<span class="evtag ' + evCatCls(k) + '">' + esc(evCatText(k)) + '</span>').join("")
     + '</div></div>';
 }

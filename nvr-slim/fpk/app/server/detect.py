@@ -134,6 +134,10 @@ SCHED_DEFAULT_WORKERS = 2        # 默认并发：单路推理已用 2 个 intra
 SCHED_MAX_WORKERS = 4            # 封顶：再多只会让单帧耗时翻倍、总吞吐反降
 SCHED_TICK_SEC = 0.5             # 到点判定精度（节拍是 5 秒，0.5 足够且几乎不耗 CPU）
 
+# 事件快照单张上限（0.9.129）：取帧层出的是 q:v4 / 720p（真机 45~180KB）。
+# 超过 2MB 只可能是读到了别的文件或写坏了，存进去只是白占盘。
+SHOT_MAX_BYTES = 2 * 1024 * 1024
+
 # 三态。hit=有检出；miss=推理成功但没检出（**只有**这个才叫"无活动"）；
 # unknown=这一拍没有可信结论。三态必须分开：把 unknown 记成 miss，
 # 等于在摄像头掉线时告诉用户"没人来过"——监控里这种"看起来对"的数据
@@ -1085,7 +1089,8 @@ class DetectWorker:
 
     def __init__(self, engine, ffmpeg, var_dir, record_root_fn, cams_fn,
                  cfg_fn, interval=5, timeout=10, log=None, notifier=None,
-                 frame_path_fn=None, workers=None, queue_size=None):
+                 frame_path_fn=None, workers=None, queue_size=None,
+                 shot_store=None):
         self.engine = engine
         self.ffmpeg = ffmpeg
         self.var_dir = var_dir
@@ -1106,6 +1111,9 @@ class DetectWorker:
         self.queue_size = max(1, int(queue_size or self.workers * 2))
         self.log = log or (lambda m: None)
         self.notifier = notifier        # Notifier.offer(cam_name, cat)——None=不通知
+        # 事件快照（0.9.129）：None = 不存图，行为与 0.9.128 逐字一致。
+        # 只在这里持有一个引用，调用点是 _shot()，它绝不阻塞、绝不抛。
+        self.shot_store = shot_store
         self.stop_event = threading.Event()
         self.thread = None              # ticker
         self._threads = []              # 工作者
@@ -1279,7 +1287,7 @@ class DetectWorker:
 
     # ---------------------------------------------------------- 单路一拍
     def _one(self, cam, url, conf_map, classes, now):
-        ok, data, err = self._grab(cam, url)
+        ok, data, err, src = self._grab(cam, url)
         cid = cam["id"]
         if not ok:
             if err == NO_NEW_FRAME:
@@ -1310,6 +1318,10 @@ class DetectWorker:
             wins = self._confirm(cam, dets, now)
             if wins:
                 self._write_ledger(cam, wins, now)
+                # 顺序是刻意的（0.9.129）：先落台账（事实），再存图（附属物），
+                # 最后通知。图存不下来不许影响前两步与通知 —— _shot 内部吞掉
+                # 一切异常，返回值也没人看。
+                self._shot(cam, src, now)
                 self._notify(cam, {k for _s, _e, c in wins for k in c})
         self._ok_stat(cid, dets)
 
@@ -1357,18 +1369,56 @@ class DetectWorker:
         **取帧层在跑时不再退回直连**：退回等于把刚拆掉的连接风暴重新装回来，
         而且是在摄像头本来就异常的时候。宁可这一轮不出检测结果（诊断页会
         显示「取帧层还没有新画面」），也不要偷偷多开一路 RTSP。
+
+        返回 `(ok, data, err, src)`：`src` 是这次推理读的那张 jpg 的路径
+        （直连抽帧时为空串）。事件快照（0.9.129）靠它拿到"当时那一帧" ——
+        让调用方自己去问 `frame_path_fn` 会拿到**下一张**图的路径，那正好是
+        「拍现在、不拍当时」的假数据。
         """
         if self.frame_path_fn is not None:
             try:
                 path = self.frame_path_fn(cam["id"])
             except Exception as e:
-                return False, "", "取帧层异常：%r" % e
+                return False, "", "取帧层异常：%r" % e, ""
             if path == "":
-                return False, "", NO_NEW_FRAME
+                return False, "", NO_NEW_FRAME, ""
             if not path:
-                return False, "", "取帧层还没有新画面"
-            return grab_ppm_image(self.ffmpeg, path, timeout=self.timeout)
-        return grab_ppm(self.ffmpeg, url, timeout=self.timeout)
+                return False, "", "取帧层还没有新画面", ""
+            ok, data, err = grab_ppm_image(self.ffmpeg, path, timeout=self.timeout)
+            return ok, data, err, (path if ok else "")
+        ok, data, err = grab_ppm(self.ffmpeg, url, timeout=self.timeout)
+        return ok, data, err, ""
+
+    def _shot(self, cam, src, now):
+        """把"确认那一刻"的那一帧交给快照层（0.9.129）。
+
+        三条自我约束，改的时候一条都别松：
+
+        - **不阻塞**。只做一次 `open().read()`（≤2MB）与一次非阻塞入队。
+          写盘、建目录、清过期都在 ShotStore 自己的线程里。
+        - **不抛**。快照是附属物，任何异常都不许冒到 `_work()` 上去 ——
+          那会被记成「检测任务异常」，一条通知与一条台账都可能跟着丢。
+        - **拍当时**。时间取源图自己的 mtime（取帧层落盘的时刻），不是 now。
+          检测节拍比取帧慢时，两者能差一个抽帧间隔；用 now 会把图说成比实际晚。
+        """
+        st = self.shot_store
+        if st is None or not src:
+            return
+        try:
+            at = os.path.getmtime(src)
+        except OSError:
+            at = now
+        try:
+            with open(src, "rb") as f:
+                data = f.read(SHOT_MAX_BYTES + 1)
+        except OSError:
+            return
+        if not data or len(data) > SHOT_MAX_BYTES:
+            return
+        try:
+            st.offer(cam.get("id"), data, at)
+        except Exception as e:
+            self.log("事件快照入队异常（%s）：%r" % (cam.get("id"), e))
 
     def _notify(self, cam, cats):
         """确认过的类别 → 通知入队（person/vehicle 口径；two_wheeler 归 vehicle）。

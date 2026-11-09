@@ -63,6 +63,7 @@ import ffmpeg_cmd  # noqa: E402
 import pixdiff  # noqa: E402
 import ledger  # noqa: E402
 import detect  # noqa: E402
+import event_shot  # noqa: E402
 import notify  # noqa: E402
 import archive  # noqa: E402
 import health  # noqa: E402
@@ -92,6 +93,8 @@ STATE = {
     # 当前检测 worker 用的推理设备（0.9.125）：配置一变就重建 worker，
     # 这个值只用于判断"要不要重建"，不是给人看的。
     "detect_device": None,
+    # 事件快照（0.9.129）：ShotStore 或 None。None = 不存图（与 0.9.128 同行为）
+    "shots": None,
     "shutdown": False,
 }
 
@@ -1583,6 +1586,25 @@ def _dates_between(a, b, cap=EVENT_MAX_DAYS):
     return [(d0 + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(n)]
 
 
+def _attach_shots(evs):
+    """给事件列表逐条补 `shot`（0.9.129）：有图就是 {url, at, offset}，没有就是 None。
+
+    为什么在列表里一次算完，而不是让页面一条条再问：200 条事件就是 200 个
+    HTTP 往返，在网络文件系统（NAS）上这个开销比几次 listdir 大得多。
+    目录清单有 5 秒缓存，一次请求最多扫几个 (cam, 日期) 组合。
+
+    任何异常都退化成 `shot: None`：事件本身是事实，图只是附属物 ——
+    快照层出问题不该让整张事件列表变成 500。
+    """
+    var = STATE["var_dir"]
+    for e in evs or ():
+        try:
+            e["shot"] = event_shot.shot_of(var, e)
+        except Exception:
+            e["shot"] = None
+    return evs
+
+
 def events_payload(frm="", to="", cam="", cat="", limit=200,
                    min_dur="", motion=""):
     """事件列表：先同步涉及的日子，再查索引。
@@ -1648,7 +1670,7 @@ def events_payload(frm="", to="", cam="", cat="", limit=200,
             # 就是"按哪几条筛的"，不用自己再拼一遍（两处拼，早晚不一致）。
             "filters": {"from": a, "to": b, "cams": cams, "cats": cats,
                         "motion": want_motion, "min_dur": md, "limit": limit},
-            "synced": synced, "index": st, "events": evs}
+            "synced": synced, "index": st, "events": _attach_shots(evs)}
 
 
 def event_payload(eid):
@@ -2663,7 +2685,10 @@ def _make_detect_worker(cfg):
         # 统一取流后 AI 读的是取帧层那一张 jpg（0.9.80），不再自己拉 RTSP。
         # 取帧没起（老流程 / 降级）时返回 None，worker 会退回直连抽帧。
         frame_path_fn=(_frame_path_for_detect
-                       if STATE.get("frames") is not None else None))
+                       if STATE.get("frames") is not None else None),
+        # 事件快照（0.9.129）：确认那一刻的那一帧交给它。None = 不存图，
+        # 检测行为与 0.9.128 逐字一致（测试与降级路径都靠这一条）。
+        shot_store=STATE.get("shots"))
 
 
 def _sync_detect_worker(cfg=None):
@@ -2961,6 +2986,12 @@ def status_payload():
         "ingest": ingest_status(),
         "frames": frames_status(),
         "detect": detect_status(),
+        # 事件快照的写入量（诊断页读它说"存了几张 / 丢了几张 / 占多大"）。
+        # 只读内存计数与 60 秒缓存的占用，不扫盘。
+        "shots": (STATE["shots"].status() if STATE.get("shots")
+                  else {"written": 0, "dropped": 0, "failed": 0, "bytes": 0,
+                        "rate_limited": 0, "capped": 0, "queued": 0,
+                        "running": False, "dir": ""}),
         "notify": (STATE["notifier"].status() if STATE.get("notifier")
                    else {"recent": [], "pending": 0}),
         "scan_label": runtime.SCAN_LABEL.get(cfg.get("scan_mode"), "?"),
@@ -3306,6 +3337,10 @@ class Handler(BaseHTTPRequestHandler):
             eid = unquote(bits[0])
             if len(bits) > 1 and bits[1] == "clip":
                 return self._send(200, event_clip_payload(eid))
+            if len(bits) > 1 and bits[1] == "shot":
+                # 图片走二进制（<img src> 直接用），没有就 404 + JSON 说明。
+                # 绝不退回「当前快照」充数 —— 那是几秒后的画面（见 event_shot）。
+                return self._event_shot(eid)
             return self._send(200, event_payload(eid))
         if path == "/api/archive":
             return self._send(200, archive_payload())
@@ -3536,6 +3571,71 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("ETag", etag)
         self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _event_shot(self, eid):
+        """单张事件快照：200 走二进制 + ETag，没有就 404 + JSON（不是 500）。
+
+        为什么 404 也要带 JSON：前端 `<img>` 只会得到"破图"，用户看不到原因；
+        而这条路径人工 `curl` 时能读到「这条事件没有快照」，排障时少猜一次。
+
+        为什么可以长缓存（max-age=86400）：图是不可变的 —— 文件名精确到毫秒，
+        同一路径不会被重写。ETag 用文件名 + 大小，浏览器再问一次也只是 304。
+
+        鉴权与 `/api/live/snapshot` 同一条：`<img>` 带不了 Authorization 头，
+        只能靠登录签出的 HttpOnly cookie（见 `_authed`）。
+        """
+        got = event.parse_id(eid)
+        if not got:
+            return self._send(404, {"ok": False, "error": "事件 id 无法识别"})
+        a = got["start"]
+        # 索引里查不到这条事件（刚写进台账、索引还没同步）时，用 60 秒兜底窗口：
+        # 快照本来就落在事件开始之后十几秒内，比"直接 404"更接近事实。
+        b = a + 60.0
+        try:
+            conn = _ev_conn()
+            try:
+                ev = event_index.get(conn, eid)
+            finally:
+                conn.close()
+            if ev is not None:
+                b = float(ev.get("end") or b)
+        except Exception:
+            pass                       # 索引不可读就当查不到，走兜底窗口
+        hit = event_shot.find(STATE["var_dir"], got["cam"], got["date"], a, b)
+        if not hit:
+            return self._send(404, {"ok": False, "error": "这条事件没有快照"})
+        full = event_shot.path_of(STATE["var_dir"], hit["cam"], hit["date"],
+                                  hit["name"])
+        try:
+            if not full:
+                raise OSError("bad path")
+            with open(full, "rb") as f:
+                data = f.read()
+        except OSError:
+            # 索引/清单说有、打开却没有（正好被清理删掉）：当作没有，
+            # 不重试、不去找别的图。
+            return self._send(404, {"ok": False, "error": "这条事件没有快照"})
+        etag = '"%s-%d"' % (hit["name"], len(data))
+        if self.headers.get("If-None-Match") == etag:
+            self._responded = True
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self._responded = True
+        self.send_response(200)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -4347,6 +4447,17 @@ def main():
     STATE["snapshots"] = snap
     snap.start()
 
+    # 事件快照（0.9.129）：先起写线程，再起检测 worker（worker 构造时要注入）。
+    # 它不依赖取流与录制，性子也是「写不进去就算了」：这里出任何异常只记一条，
+    # 绝不能让检测或录制跟着起不来。
+    try:
+        _shots = event_shot.ShotStore(a.var, log=_log_line)
+        _shots.start()
+        STATE["shots"] = _shots
+    except Exception as e:
+        STATE["shots"] = None
+        _log_line("事件快照启动失败（不影响检测/录制）：%r" % e)
+
     # AI 检测 worker：总闸开了才起（默认关，opt-in）。
     # 外面裹 try：AI 初始化出任何问题都不能把服务带死——录制/预览/缩时是主业，
     # 检测挂了顶多是诊断页一行状态（detect.py 设计底线第 1 条：
@@ -4402,6 +4513,13 @@ def main():
             pass
         try:
             STATE.get("detect_worker").stop()
+        except Exception:
+            pass
+        # 快照写线程放最后停：检测刚停时队列里可能还有一两张，先让它落完。
+        try:
+            _shots = STATE.get("shots")
+            if _shots is not None:
+                _shots.stop()
         except Exception:
             pass
         # 通知线程重试里有 2s/4s 的 sleep，不显式 set 就只能靠 daemon 硬退；

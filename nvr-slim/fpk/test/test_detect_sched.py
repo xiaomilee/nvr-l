@@ -81,7 +81,7 @@ def make_worker(n=8, workers=4, queue_size=None, interval=5, engine=None,
                          "classes": {"person": True, "two_wheeler": True, "vehicle": True}},
                         cams(n)),
         workers=workers, queue_size=queue_size)
-    w._grab = lambda c, url: (True, ppm2x2(), "")
+    w._grab = lambda c, url: (True, ppm2x2(), "", "")
     return w
 
 

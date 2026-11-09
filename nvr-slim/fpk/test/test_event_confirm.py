@@ -263,7 +263,7 @@ class TestWorkerWiring(unittest.TestCase):
         w = self.detect.DetectWorker(
             engine, "", self.tmp, lambda: self.tmp,
             lambda: ([], []), lambda: ({}, []))
-        w._grab = lambda cam, url: (True, PPM, "")
+        w._grab = lambda cam, url: (True, PPM, "", "")
         w.notifier = lambda name, cat: self.notified.append((name, cat))
         if confirm_cfg is not None:
             w.confirmer.update(confirm_cfg)
@@ -316,7 +316,7 @@ class TestWorkerWiring(unittest.TestCase):
         now = time.time()
         self.w._one(self.cam, "rtsp://x", {}, {"person": True}, now)
         self.w._one(self.cam, "rtsp://x", {}, {"person": True}, now + 5)
-        self.w._grab = lambda cam, url: (False, "", "抽帧超时（10 秒）")
+        self.w._grab = lambda cam, url: (False, "", "抽帧超时（10 秒）", "")
         for k in range(3):
             self.w._one(self.cam, "rtsp://x", {}, {"person": True},
                         now + 10 + k * 5)
