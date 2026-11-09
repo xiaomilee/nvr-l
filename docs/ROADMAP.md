@@ -27,7 +27,7 @@
 | 5 | 0.9.123 | 前端拆分 + 文档重构 + 按钮验收自动化 | **done** | ce81b12 |
 | 6 | 0.9.124 | P2 · Webhook 通知补齐：多模板 / 平台手选 / 文案模板 / 发送历史 | **done** | c170220 |
 | 7 | 0.9.125 | P2 · 推理设备：GPU 自动探测与自动回落 | **done** | 304a7c4 |
-| 8 | 0.9.126 | P2 · 事件检索：高级筛选 + 移动侦测口径 | **doing** | — |
+| 8 | 0.9.126 | P2 · 事件检索：多机位 / 多类别 / 移动侦测 / 时间范围 / 最短时长 | **done** | f36af31 |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
 
@@ -130,6 +130,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 25 | 11-09 07:57 | **批次 6 立项 + 切片一**（按用户「继续、加快进度」取 P2 首项）：`notify_tpl.py` 多模板按 host 适配五平台 + 通用回退、`notify_history.py` jsonl 落盘与过滤查询、`GET /api/notify/history` 只读接口、`status.notify.history` 缓存计数、停机补 `Notifier.stop()`；文档/守卫同步 | 1a6652f | 未出包（清单 5/6 未勾、批次 未收尾，按规则不 bump / 不部署）；闸门 validate 81 项、后端 **1199** 条（1131+68）、58 文件、前端全绿、0 FAIL；四份新单测 68 条含真起本地服务的 HTTP 冒烟 10 项（401 / 落盘读取 / 五种过滤 / 坏参数不 500）；首跑抓到并修掉 「坏 UTF-8 行让整份历史作废」；文档守卫故意改坏两处各命中一条、恢复全绿；152 只读 0.9.123、18085、两路 `hstate=recording`（age 3/0）、无 stalled、`detect.state=ready`，生产机 2.6 未碰；**批次 6 保持 doing** |
 | 26 | 11-09 08:54 | **批次 6 收尾**：设置页平台手选 + 文案模板 + 实际发送方式 + 发送历史查看；`notify.platform` / `notify.template` 两键全链路接通（DEFAULTS / norm_notify / pushCfg / 回读 + `test_notify_ui.py` 16 条守卫）；测试发送带界面值；部署自检加第九项，项数改由代码数出来；五处 bump 0.9.124 并写 changelog | c170220 | **出包** `dist/nvr-0.9.124_x86.fpk` **101180736 字节** md5 `d9191c3aa3bbbc8db8f781820521e42d`；闸门 validate 81 项、后端 **1224** 条（1199+25）、59 文件、前端 514 / 70 / 28 / 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.124.json`），0.9.123→0.9.124 上线 0.1s、端口 18085、通知历史 0 条、凭证 401；真机验收两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`、`notify.render` 有 platforms 与 `history.persisted`、config 回读带新键、程序目录含新代码；缺口为部署停服窗口（覆盖率 0.9926 / 0.9877）；**批次 6 标 done**，生产机 2.6 未碰 |
 | 27 | 11-09 09:35 | **批次 7 立项 + 全量收尾**（按用户「继续」取 P2 清单下一项）：`detect.device` 从「配置里的死键」变成真的接管推理后端——`probe_providers` 只认 onnxruntime 自报的可用后端、`pick_providers` 按 CUDA > TensorRT > ROCm 挑、GPU 建会话失败自动回落 CPU 并记原因；`Engine` 收 `device` 与 `ort_loader` 注入点，暴露 `device_status()`；`status_of` 透出 `device` 块；前端 `detDevOf()` 让标题栏跟实际后端走、诊断卡新增「推理设备」一行；文档 CONFIGURATION §4.1 / TROUBLESHOOTING §5.1 / CHANGELOG 同步 | 304a7c4 | **出包** `dist/nvr-0.9.125_x86.fpk` **101186255 字节** md5 `928ffaf2258323f54a5acabc8b7041dc`；闸门 validate 81 项、后端 **1250** 条（60 文件，新增 `test_detect_device.py` 26 条）、前端 detect 58（+14）/ 设置页 514 / 时间轴 70 / 日志 25+38 / 健康 30 / 凭证 11 / 请求层 31 / 事件 70 / 样式 28 / 脚本 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.125.json`），0.9.124→0.9.125 上线 0.1s、端口 18085、事件索引 190 条 / 2 天、通知历史 0 条、凭证 401；真机把 `detect.device` 改 `gpu` 实测：`requested=gpu / actual=cpu / fallback_reason=「请求 GPU，但 onnxruntime 没有 CUDA / Tensorrt / ROCM 后端（当前可用：AzureExecutionProvider, CPUExecutionProvider）」`、`state` 仍 `ready`、`avg_ms` 43；日志三条实证（「AI 推理设备改为 gpu，重建检测 worker」→ 回落原因 → 「改为 auto」）；两路 `hstate=recording`（age 1/0）、`record.enabled=True`、`confirm` 块未被覆盖；随后还原 `auto` 并复核；程序目录含 `pick_providers` / `engine_device` / `detDevOf` 新代码；**批次 7 标 done**，生产机 2.6 未碰 |
+| 28 | 11-09 10:05 | **批次 8 全量收尾**（按用户「立项」取 P2 下一项）：事件检索高级筛选。`event_index.query()` 增 `cams` IN / `cats` OR / `min_dur` / `motion_only`（单值 `cat`/`cam` 兼容）；`parse_cats()` 逗号多值 + `motion` 单独提取 + 未知词回 bad；`event.kind_of()` 一处判断，`kind` 进事件与索引，`summary_of()` 增 `motion` 计数；`/api/events` 收 `min_dur`/`motion`、参数错明确报错、`filters` 回显服务端实际用上的条件；前端机位/类别改多选 + 「移动侦测」+ 「更多筛选」（HH:MM / 最短时长 / 清空）+ 列表头写条件 | f36af31 | **出包** `dist/nvr-0.9.126_x86.fpk` **101191778 字节** md5 `4c7aa9b998d43381481ea0697709234d`；闸门 validate 81 项、后端 **1279** 条（61 文件，新增 `test_event_filter.py` 21 条 + `test_event_api.py` 8 条）、前端 events **91**（+21）/ detect 58 / 设置页 514 / 时间轴 70 / 样式 28 / 脚本 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.126.json`），0.9.125→0.9.126 上线 0.1s、端口 18085、事件索引 **196 条 / 2 天**、通知历史 0 条、凭证 401；真机 196 条事件验筛选：person 42 / vehicle 22 / 并集 **60**（=42+22−4，逐 id 校验并集恒等式）/ motion 440 且与 AI 零交集 / cam-test01 339、cam-test02 163 / min_dur=60 → 296 / `cat=dog` 与 `min_dur=ten` 均 `ok:false` 带可用值 / `09:00–10:00` 时间窗 12 条且 `filters.from` 回显；两路 `hstate=recording`（age 1/1）、`detect ready`；程序目录含 `kind_of` / `parse_cats` / `motion_only` / `evMoreBox`；**批次 8 标 done**，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -1114,20 +1115,46 @@ md5 `d9191c3aa3bbbc8db8f781820521e42d`**；`deploy_test.py` 部署 152 **九项�
 
 ### 清单
 
-- [ ] `event_index.query()` 支持 `cats` 多类别 OR / `cams` 多机位 IN / `min_dur` 最短时长 /
+- [x] `event_index.query()` 支持 `cats` 多类别 OR / `cams` 多机位 IN / `min_dur` 最短时长 /
       `motion_only` 移动侦测；单值 `cat` / `cam` 保持兼容（老书签不许失效）。
-- [ ] 事件补 `kind`（`ai` / `motion`）字段，`event.summary_of()` 增 `motion` 计数 ——
+- [x] 事件补 `kind`（`ai` / `motion`）字段，`event.summary_of()` 增 `motion` 计数 ——
       前端与筛选共用一处判断，不再各自写 `categories.length === 0`。
-- [ ] `/api/events` 参数解析：`cat` 支持逗号多值（含 `motion`）、`cam` 逗号多值、
+- [x] `/api/events` 参数解析：`cat` 支持逗号多值（含 `motion`）、`cam` 逗号多值、
       `min_dur` 秒；不认识的类别**明确报错**，不静默忽略（静默忽略会让人以为筛过了）。
-- [ ] 前端事件页：类别 / 机位改多选，类别加「移动侦测」，新增「更多筛选」（时间范围
+- [x] 前端事件页：类别 / 机位改多选，类别加「移动侦测」，新增「更多筛选」（时间范围
       HH:MM、最短时长）与「清空」；筛选项全进查询串，列表头写清当前条件。
-- [ ] 测试：新 `test_event_filter.py`（内存 SQLite 验四种口径与组合）、`test_event_api.py`
-      补参数校验；前端 `test/ui/events.test.js` 补多选与移动侦测守卫。
-- [ ] 文档：`ARCHITECTURE.md` 的 `table:api` 参数、`USER_GUIDE.md` 事件页筛选口径、
-      `TROUBLESHOOTING.md`「筛不出东西先看这三处」、`CHANGELOG.md`；把
-      `events.js` 里「服务端没有这个键」的旧注释改掉（它本轮起就是错的）。
-- [ ] 版本 0.9.126：五处 bump、出包、部署 152、真机用 190 条事件验收四种筛选。
+- [x] 测试：新 `test_event_filter.py`（内存 SQLite 验四种口径与组合，21 条）、`test_event_api.py`
+      补参数校验（+8 条）；前端 `test/ui/events.test.js` 补多选与移动侦测守卫（70 → 91）。
+- [x] 文档：`ARCHITECTURE.md` 的 `table:api` 参数（`events_payload()` 出处 `:1526` → `:1549`）、
+      `USER_GUIDE.md` 事件页四段筛选表、`TROUBLESHOOTING.md`「筛不出东西先看这三处」、
+      `CHANGELOG.md` 四条工程判断；`events.js` 里「服务端没有这个键」的旧注释已改掉
+      （它从本轮起就是错的）。
+- [x] 版本 0.9.126：五处 bump、出包、部署 152、真机用 196 条事件验收四种筛选。
+
+**验收（152 真机，196 条事件 / 2 天）**：`GET /api/events?from=2026-11-08&to=2026-11-09`
+
+| 查询 | 结果 | 说明 |
+|---|---|---|
+| 无条件 | 500（limit 封顶） | `summary` = person 42 / two_wheeler 4 / vehicle 22 / motion 439 |
+| `cat=person` | 42 | 与 summary 一致 |
+| `cat=vehicle` | 22 | |
+| `cat=person,vehicle` | **60** | = 42 + 22 − 4；集合并集恒等式逐 id 校验通过 |
+| `cat=motion` | 440 | 与「有 AI 类别」的事件**零交集**（逐 id 校验） |
+| `cat=person,motion` | 482 | 60 + 422，OR 语义 |
+| `cam=cam-test01` / `cam-test02` | 339 / 163 | 两路相加 502 > limit 上限，`cam=两路` 回 500 封顶 |
+| `min_dur=60` / `min_dur=300` | 296 / 84 | 秒 |
+| `cat=motion&min_dur=30` | 289 | 跨维 AND |
+| `cat=dog` | `ok:false` + 列出可用值 | 不静默忽略 |
+| `min_dur=ten` | `ok:false` | 参数错不猜 |
+| `from=2026-11-08 09:00&to=2026-11-08 10:00` | 12 | 钟点时间窗，`filters.from` 回显 `09:00:00` |
+
+两路 `hstate=recording`（age 1/1）、`detect ready`、`device.actual=cpu`；
+程序目录含 `kind_of` / `parse_cats` / `motion_only` / `evMoreBox`。
+
+**一个上层口径的代价（写下来免得当成 bug）**：`limit` 是"最近的 N 条"，
+所以 `cam=两路` 在 502 条时回 500 —— 不是筛选错，是列表本来的上限。
+要精确总数得靠 `summary`（它按本次返回集合统计，同样受 limit 约束）；
+真要看全量就把 `limit` 调大或缩窄时间窗。
 
 ---
 
