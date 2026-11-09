@@ -26,6 +26,7 @@
 | 4 | 0.9.122 | 检测治理：有界并发 + 时间窗确认 + 诊断完整 | done | 55b3773 |
 | 5 | 0.9.123 | 前端拆分 + 文档重构 + 按钮验收自动化 | **done** | ce81b12 |
 | 6 | 0.9.124 | P2 · Webhook 通知补齐：多模板 / 平台手选 / 文案模板 / 发送历史 | **done** | c170220 |
+| 7 | 0.9.125 | P2 · 推理设备：GPU 自动探测与自动回落 | **done** | 304a7c4 |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
 
@@ -127,6 +128,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 24 | 11-09 01:30 | **批次 5 收尾**：清单第 3 项文档重构整项（`README.md` / `docs/USER_GUIDE.md` / `docs/ARCHITECTURE.md` / `docs/TROUBLESHOOTING.md` / `CHANGELOG.md` 五份 + `BUILD.md` 只留构建、历史排障搬进 CHANGELOG）+ `test/test_doc_suite.py` 14 项守卫；清单第 4 项 `nvr_slim.py` 头注释重写；changelog 正式化、**不重复 bump**；出同名正式包并部署 152 跑真机验收 | ce81b12 | **出包** `dist/nvr-0.9.123_x86.fpk` **101169995 字节** md5 `0d3567e1678808a3fbc8c6b31497d6bd`（预览包 101169048 / `e0f7206f51ba5761c9869126eb959e03`，正式包取代预览包）；闸门 validate 81 项、后端 **1131** 条（1117+14）、54 文件、前端全绿、0 FAIL；守卫首跑故意改坏模块名与路由各命中一条断言、恢复后 14 项全绿；`deploy_test.py` 部署 152 八项自检全 OK（`test-reports/deploy-0.9.123.json`），0.9.123→0.9.123 上线 0.1s、端口 18085；按 README §3 真机验收：两路 `hstate=recording`（age 1/0）、`record.enabled=True`、无 stalled、`detect.state=ready`，程序目录含本轮新头注释（正式包实证）；`gaps` 有 1 条 61 秒缺口，原因「录像进程未运行…已恢复」，系部署停服重启所致、非产品问题；**批次 5 标 done**，生产机 2.6 未碰 |
 | 25 | 11-09 07:57 | **批次 6 立项 + 切片一**（按用户「继续、加快进度」取 P2 首项）：`notify_tpl.py` 多模板按 host 适配五平台 + 通用回退、`notify_history.py` jsonl 落盘与过滤查询、`GET /api/notify/history` 只读接口、`status.notify.history` 缓存计数、停机补 `Notifier.stop()`；文档/守卫同步 | 1a6652f | 未出包（清单 5/6 未勾、批次 未收尾，按规则不 bump / 不部署）；闸门 validate 81 项、后端 **1199** 条（1131+68）、58 文件、前端全绿、0 FAIL；四份新单测 68 条含真起本地服务的 HTTP 冒烟 10 项（401 / 落盘读取 / 五种过滤 / 坏参数不 500）；首跑抓到并修掉 「坏 UTF-8 行让整份历史作废」；文档守卫故意改坏两处各命中一条、恢复全绿；152 只读 0.9.123、18085、两路 `hstate=recording`（age 3/0）、无 stalled、`detect.state=ready`，生产机 2.6 未碰；**批次 6 保持 doing** |
 | 26 | 11-09 08:54 | **批次 6 收尾**：设置页平台手选 + 文案模板 + 实际发送方式 + 发送历史查看；`notify.platform` / `notify.template` 两键全链路接通（DEFAULTS / norm_notify / pushCfg / 回读 + `test_notify_ui.py` 16 条守卫）；测试发送带界面值；部署自检加第九项，项数改由代码数出来；五处 bump 0.9.124 并写 changelog | c170220 | **出包** `dist/nvr-0.9.124_x86.fpk` **101180736 字节** md5 `d9191c3aa3bbbc8db8f781820521e42d`；闸门 validate 81 项、后端 **1224** 条（1199+25）、59 文件、前端 514 / 70 / 28 / 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.124.json`），0.9.123→0.9.124 上线 0.1s、端口 18085、通知历史 0 条、凭证 401；真机验收两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`、`notify.render` 有 platforms 与 `history.persisted`、config 回读带新键、程序目录含新代码；缺口为部署停服窗口（覆盖率 0.9926 / 0.9877）；**批次 6 标 done**，生产机 2.6 未碰 |
+| 27 | 11-09 09:35 | **批次 7 立项 + 全量收尾**（按用户「继续」取 P2 清单下一项）：`detect.device` 从「配置里的死键」变成真的接管推理后端——`probe_providers` 只认 onnxruntime 自报的可用后端、`pick_providers` 按 CUDA > TensorRT > ROCm 挑、GPU 建会话失败自动回落 CPU 并记原因；`Engine` 收 `device` 与 `ort_loader` 注入点，暴露 `device_status()`；`status_of` 透出 `device` 块；前端 `detDevOf()` 让标题栏跟实际后端走、诊断卡新增「推理设备」一行；文档 CONFIGURATION §4.1 / TROUBLESHOOTING §5.1 / CHANGELOG 同步 | 304a7c4 | **出包** `dist/nvr-0.9.125_x86.fpk` **101186255 字节** md5 `928ffaf2258323f54a5acabc8b7041dc`；闸门 validate 81 项、后端 **1250** 条（60 文件，新增 `test_detect_device.py` 26 条）、前端 detect 58（+14）/ 设置页 514 / 时间轴 70 / 日志 25+38 / 健康 30 / 凭证 11 / 请求层 31 / 事件 70 / 样式 28 / 脚本 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.125.json`），0.9.124→0.9.125 上线 0.1s、端口 18085、事件索引 190 条 / 2 天、通知历史 0 条、凭证 401；真机把 `detect.device` 改 `gpu` 实测：`requested=gpu / actual=cpu / fallback_reason=「请求 GPU，但 onnxruntime 没有 CUDA / Tensorrt / ROCM 后端（当前可用：AzureExecutionProvider, CPUExecutionProvider）」`、`state` 仍 `ready`、`avg_ms` 43；日志三条实证（「AI 推理设备改为 gpu，重建检测 worker」→ 回落原因 → 「改为 auto」）；两路 `hstate=recording`（age 1/0）、`record.enabled=True`、`confirm` 块未被覆盖；随后还原 `auto` 并复核；程序目录含 `pick_providers` / `engine_device` / `detDevOf` 新代码；**批次 7 标 done**，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -1020,10 +1022,73 @@ md5 `d9191c3aa3bbbc8db8f781820521e42d`**；`deploy_test.py` 部署 152 **九项�
 
 ---
 
+## 批次 7 · 0.9.125 推理设备（第 27 轮立项，同日收尾）
+
+**为什么立这一批**：`REVIEW_BASELINE.md:42` 的 P2 清单里，Webhook 已于批次 6 交付，
+下一项是「GPU 自动探测与自动回退」。而 `detect.device` 这个键从 0.9.x 起就在
+`DETECT_DEFAULTS` / `DETECT_ENUMS` 里、设置页也把它当设置项，`Engine` 却一直无条件
+`providers=["CPUExecutionProvider"]`，诊断卡标题还硬写着「YOLO11n · CPU」——
+**用户改成 gpu 后接口回 ok、配置也落盘，实际仍在 CPU 上跑，界面上没有一个字能看出差别。**
+所以这一批不是"加个开关"，是把一句没验证过的说法变成可查的事实。
+
+**方向三问**：
+1. 落在 **P2 增强（GPU 探测 / 回退）**，同时服务 P0「数字必须有出处」——
+   "到底用没用上显卡"必须有出口，不能靠读代码。
+2. 不会让录像事实链更不可信：只在**模型加载那一刻**选后端，不碰取帧、编码与
+   `recorder.py`；改 device 只重建检测 worker（`DetectorWorker.stop()` 只置事件位，
+   不 join），两路录制全程未断（实测 age 1/0）。
+3. 没有 P3：人脸 / 车牌 / 自训模型 / 多用户权限 / 实时滤镜一件未做。
+
+### 清单
+
+- [x] `detect.py` 新增 `GPU_PROVIDERS` / `probe_providers()` / `pick_providers()`：
+      只认 onnxruntime 自报的可用后端，按 CUDA > TensorRT > ROCm 挑，CPU 永远垫底。
+- [x] `Engine` 接 `device` 与 `ort_loader`（注入点），按 device 建会话；
+      GPU 建会话失败**自动回落 CPU 再建一次**，两次都失败才是 `MODEL_LOAD_FAIL`。
+- [x] 设备事实出口：`Engine.device_status()` → `DetectWorker.status()["device"]` →
+      `status_of()["device"]`；未加载时 `actual` 留空（未知就是未知，不拿配置值冒充）。
+- [x] 前端：`detDevOf()` 让标题栏跟实际后端走、诊断卡新增「推理设备」一行，
+      回落时标黄并写原因；显式选 cpu 不亮黄。
+- [x] 改 `device` 热生效：`_sync_detect_worker` 比对 `STATE["detect_device"]`，
+      变了就重建 worker —— **只换检测线程，不碰取帧与录像**。
+- [x] 文档：`CONFIGURATION.md` §4.1 三档口径 + 「与顶层 `gpu`（ffmpeg 硬解 / 硬编）
+      是两件事」；`TROUBLESHOOTING.md` §5.1「配了 GPU，诊断卡却说 CPU」怎么读；
+      `CHANGELOG.md` 记两个故意取舍。顺手修掉两处已漂移的行号出处
+      （`settings_cards.js` 304/320 → 385/401、`detect.py` 127-136 → 145-154），
+      以及 `nvr_slim.py` 本轮插入导致的 7 处表格行号（→ 3566/3570/3580/3584/3956/3968/3978）。
+- [x] 版本 0.9.125：五处 bump、出包、部署 152、真机验收。
+
+**两个故意的取舍（别在下一个人手里改回去）**：
+- **不含 OpenVINO**：它自己也能跑 CPU，选它等于没法回答"到底用没用上显卡"，
+  而这一层存在的意义就是回答这句话。DirectML 是 Windows 专用，本机是 Linux NAS。
+- **不引入新错误码**：降级不是失败。混进 `error_code` 会让 `state` 变 `unavailable`，
+  把"能用但慢"报成"坏了"，用户会去重启服务。
+
+**验收（152 真机，不是只跑单测）**：把 `detect.device` 由 `auto` 改成 `gpu` 保存 →
+8 秒后 `/api/status` 的 `detect.device` 变成
+`{"requested":"gpu","actual":"cpu","providers":["CPUExecutionProvider"],
+"fallback_reason":"请求 GPU，但 onnxruntime 没有 CUDA / Tensorrt / ROCM 后端
+（当前可用：AzureExecutionProvider, CPUExecutionProvider）"}`，`state` 仍是 `ready`、
+`avg_ms` 43；日志三条实证「AI 推理设备改为 gpu，重建检测 worker」→ 回落原因 →
+「AI 推理设备改为 auto，重建检测 worker」；两路 `hstate=recording`（age 1/0）、
+`record.enabled=True`、`detect.confirm` 块未被覆盖；随后还原 `auto` 并复核
+`fallback_reason` 清空。
+**顺带发现**：这台机器的 onnxruntime 报的可用后端里还有一个 `AzureExecutionProvider`
+—— 所以「挑后端」必须是显式白名单，不能写成"可用的第一个非 CPU 就是 GPU"。
+
+---
+
 ## 不在本轮范围
 
 评审 P3 明确不建议投入：人脸识别、车牌识别、自定义模型训练、复杂多用户权限、实时滤镜。
 理由：模型依赖、硬件兼容、隐私与维护成本远超收益，现阶段先把「事件发生 → 找到录像」做透。
+
+**P2 剩余四项（批次 8 起的候选，按此顺序取，不再重新排序）**：
+`模型版本管理与效果对比`、`多区域配置`、`高级筛选`、`按时间范围批量导出`。
+第 27 轮先取 GPU 探测而不是排在它前面的「模型版本管理」，理由是后者要**多份模型 +
+标注样本**才有"效果对比"的事实依据，现在手上只有一份 `yolo11n.onnx`，
+硬做只能得出"看起来变好了"这种评审最反对的结论；GPU 探测则是当场能用真机验完的。
+「高级筛选」落地时可顺带消化批次 3/4 挂了两轮的 `cat=motion` 服务端等价条件。
 
 批次 2 期间另有三件**故意不做**的：
 - 设置页「轮换凭证」按钮：`POST /api/auth/rotate` 已可用（返回新 token），但页面上按一下就把
