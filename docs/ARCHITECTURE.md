@@ -1,4 +1,4 @@
-# 架构说明（0.9.126）
+# 架构说明（0.9.127）
 
 这份文档回答「代码在哪、数据怎么流、某个数字是谁算出来的」。
 它是给要改代码的人看的：先在这里定位模块，再进源码，别在
@@ -56,6 +56,7 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `event.py` | 统一事件模型：id 只由「哪一路 + 何时开始」推出 | `summary_of` |
 | `event_index.py` | 可从台账整份重建的 SQLite 索引（WAL） | `ensure` `sync_day` `query` `stats` |
 | `condense.py` | 判定（只读包大小曲线，不解码）与导出（流复制切段 + concat） | `analyze` 导出函数 |
+| `export.py` | 按时间范围批量导出：挑分片、算边界多给、写 manifest / README、流式打 zip | `select` `totals` `manifest` `readme` `write_zip` `Chunked` |
 | `link.py` | 衔接调度：两种入队节奏共用同一套消费端 | `Link.status()` `reconfigure()` |
 | `archive.py` | 归档裁剪：按台账活动窗口裁出浓缩片段、夜间连跑到待办清空 | `run_archive` `archive_sweep` |
 | `retention.py` | 每日定点清理：按日期整目录删、归档未完成硬闸门 | `run_cleanup` `parse_hhmm` |
@@ -98,6 +99,8 @@ LAN IP / `.local` / `.lan` / `.fnos.net`）。服务**不处理 CORS 预检**，
 | GET | `/api/ledger` | 活动台账 | `ledger_payload()` |
 | GET | `/api/events` | 事件列表（`from/to/cam/cat/limit/min_dur/motion`；`cam`/`cat` 支持逗号多值，同维 OR、跨维 AND） | `events_payload()` → `event_index` |
 | GET | `/api/events/` | 单条事件 / 事件定位（`<id>` / `<id>/clip`） | `event_payload` / `event_clip_payload` |
+| GET | `/api/export/plan` | 批量导出预演（`cam/from/to`；`detail=1` 带逐片明细），只算不清盘；失败也回 200 + `ok:false`（与 `/api/events` 同口径） | `export_plan_payload()`（1957） |
+| GET | `/api/export` | 按时间范围导出：已封口分片原样打包成 zip（chunked，边界多给的秒数写进包内 manifest） | `_export_download()`（3600） |
 | GET | `/api/archive` | 归档概览 | `archive_payload()` |
 | GET | `/api/archive/progress` | 归档进度（只回内存态，不扫盘） | `archive_progress()` |
 | GET | `/api/storage/usage` | 存储占用（30 分钟缓存） | `storage_usage()` |

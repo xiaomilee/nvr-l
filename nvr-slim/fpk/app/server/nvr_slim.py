@@ -46,7 +46,7 @@ import time
 from collections import deque
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import runtime  # noqa: E402
@@ -70,6 +70,7 @@ import auth  # noqa: E402
 import redact  # noqa: E402
 import event  # noqa: E402
 import event_index  # noqa: E402
+import export  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
 # 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
@@ -1783,6 +1784,203 @@ def parts_payload(cam_filter=""):
             "items": items}
 
 
+# ---------------------------------------------------------------- 批量导出（0.9.127）
+
+def _export_cams(cam_q):
+    """'cam-01,cam-02' → [cam…]；有一个不认识就整单报错。
+
+    不静默跳过：少导一路、界面却说"导出成功"，用户要等解压才发现少了机位，
+    而那时原始的分片可能已经过了保留期 —— 这类"少给"没法事后补。
+    """
+    ids = [x.strip() for x in str(cam_q or "").split(",") if x.strip()]
+    if not ids:
+        return None, "请至少选一路机位（cam=cam-01,cam-02）"
+    pool = cameras()
+    out = []
+    for cid in ids:
+        c = next((x for x in pool if x["id"] == cid), None)
+        if c is None:
+            return None, "不认识这个机位：%s" % cid
+        if c not in out:
+            out.append(c)
+    return out, ""
+
+
+def _export_segments(cams, days):
+    """枚举 [这些机位 × 这些日子] 已封口的分片，换算成绝对时间段。
+
+    复用 `_day_files()`（事件定位也走它）而不是自己 scandir：两处对"什么算一个
+    分片"的口径必须一致，否则事件能点开的那一片在导出里找不到，反过来也一样。
+    """
+    out = []
+    for c in cams:
+        nom = _seg_nominal(c)
+        for day in days:
+            files = _day_files(c, day)
+            for st in sorted(files["sealed"]):
+                name = files["sealed"][st]
+                p = _seg_path(c, day, name)
+                if p is None:
+                    continue
+                try:
+                    size = os.path.getsize(p)
+                except OSError:
+                    continue
+                if size <= 0:
+                    continue
+                end = files["ends"].get(st)
+                if end is None or end <= st:
+                    # 最后一片的 mtime 跨天时 `_day_files` 不采信，按标称长度算。
+                    # 宁可多算几秒把它带进窗口，也不让"最后五分钟"从包里消失。
+                    end = st + nom
+                out.append({"cam": c["id"], "cam_name": c.get("name") or c["id"],
+                            "day": day, "name": name, "path": p,
+                            "start": export.epoch_at(day, st),
+                            "end": export.epoch_at(day, end),
+                            "bytes": size})
+    return out
+
+
+def _archive_days(cam, days):
+    """这些日子里还留着归档片段的天（用于解释"为什么这天导不出来"）。"""
+    hit = []
+    for dn in cam_storage_dirs(cam):
+        base = os.path.join(record_dir(), "_archive", dn)
+        for day in days:
+            if day in hit:
+                continue
+            try:
+                names = os.listdir(os.path.join(base, day))
+            except OSError:
+                continue
+            if any(n.lower().endswith(".mp4") for n in names):
+                hit.append(day)
+    return sorted(hit)
+
+
+def _export_caps():
+    return {"max_bytes": export.MAX_BYTES, "max_files": export.MAX_FILES,
+            "max_span_days": export.MAX_SPAN_DAYS}
+
+
+def _export_build(cam_q, frm, to):
+    """计划与下载共用的一份构建。返回里 `entries` 带磁盘路径，不进 JSON。"""
+    today = time.strftime("%Y-%m-%d")
+    a = _norm_when(frm, today + " 00:00:00")
+    b = _norm_when(to, today + " 23:59:59", end_of_day=True)
+    if a is None or b is None:
+        return {"ok": False,
+                "error": "from/to 无法识别（用 YYYY-MM-DD 或 YYYY-MM-DD HH:MM）"}
+    if a == b:
+        return {"ok": False, "error": "起止时间相同，导出会是一个空包"}
+    if a > b:
+        a, b = b, a
+    span = export.ts(b) - export.ts(a)
+    days = _dates_between(a[:10], b[:10], cap=export.MAX_SPAN_DAYS)
+    if not days:
+        return {"ok": False,
+                "error": "时间范围跨了 %d 天以上，或日期无法识别（先用一周以内）"
+                         % export.MAX_SPAN_DAYS}
+    cams, err = _export_cams(cam_q)
+    if cams is None:
+        return {"ok": False, "error": err}
+
+    entries = export.select(_export_segments(cams, days),
+                            export.ts(a), export.ts(b))
+    total = export.totals(entries)
+    bad = export.cap_problem(total, span)
+    if bad:
+        return {"ok": False, "error": bad, "total": total, "caps": _export_caps()}
+
+    fold = export.folders(cams)
+    for e in entries:
+        e["arc"] = export.arc_name(fold[e["cam"]], e["day"], e["name"])
+
+    per, have = {}, set()
+    for e in entries:
+        per.setdefault(e["cam"], []).append(e)
+        have.add((e["cam"], e["day"]))
+
+    warnings, gaps = [], []
+    for c in cams:
+        label = c.get("name") or c["id"]
+        for day in days:
+            if (c["id"], day) in have:
+                continue
+            # 这一天没有全时分片：是"过保留期只剩归档"还是"根本就没录"，
+            # 对用户是两件事 —— 前者换个入口还能看，后者只能说当时没录。
+            if day in _archive_days(c, [day]):
+                gaps.append({"cam": c["id"], "name": label, "day": day})
+                warnings.append("%s %s 只剩归档片段（全时已过期），本次导出不含归档"
+                                % (label, day))
+            else:
+                warnings.append("%s %s 没有已封口的分片" % (label, day))
+
+    if not entries:
+        # 一片都没有时**也要**把 warnings / archive_only 带回去：只说一句
+        # "没有分片"，用户分不清是选错了时间、还是录像真的过期了。
+        err = "这段时间没有已封口的分片（正在写的那一片要等封口）"
+        if gaps:
+            err = ("这段时间没有全时分片；其中 %d 天只剩归档片段，"
+                   "本次导出不含归档" % len(gaps))
+        return {"ok": False, "error": err, "total": total,
+                "caps": _export_caps(), "warnings": warnings,
+                "archive_only": gaps}
+
+    def _at(e, k):
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e[k]))
+
+    pub = {"ok": True, "from": a, "to": b, "span_sec": int(span), "days": days,
+           "cams": [{"id": c["id"], "name": c.get("name") or c["id"],
+                     "folder": fold[c["id"]],
+                     "count": len(per.get(c["id"]) or ()),
+                     "bytes": sum(int(x["bytes"]) for x in per.get(c["id"]) or ()),
+                     "first_at": (_at(per[c["id"]][0], "start_sec")
+                                  if per.get(c["id"]) else ""),
+                     "last_at": (_at(per[c["id"]][-1], "end_sec")
+                                 if per.get(c["id"]) else "")}
+                    for c in cams],
+           "total": total, "caps": _export_caps(),
+           "warnings": warnings, "archive_only": gaps,
+           # 这里不把问号写进同一个字符串字面量：文档守卫按 /api/ 前缀抓源码里的
+           # 接口路径，带问号的那一串会被当成"文档里没登记的新接口"。
+           "url": "/api/export" + "?" + urlencode(
+               {"cam": ",".join(c["id"] for c in cams), "from": a, "to": b})}
+    return {"ok": True, "plan": pub, "entries": entries}
+
+
+def _export_req(plan):
+    """manifest / README 里那段"这次导出的是什么"。"""
+    return {"from": plan["from"], "to": plan["to"],
+            "cam_ids": [c["id"] for c in plan["cams"]],
+            "cam_names": [c["name"] for c in plan["cams"]]}
+
+
+def export_plan_payload(cam_q="", frm="", to="", detail=False):
+    """GET /api/export/plan → 先看清楚要给你什么，再决定要不要下。
+
+    为什么单独一个接口：几百 MB 的包点下去才发现挑错了机位（或者挑到了三天
+    前已经过期的那天），只能干等。计划里连"边界会多出几秒"都写出来 —— 那是
+    分片原样导出必然的代价，事前说比事后解释便宜。
+    """
+    got = _export_build(cam_q, frm, to)
+    if not got.get("ok"):
+        return got
+    plan, entries = got["plan"], got["entries"]
+    if detail:
+        plan["files"] = [{"cam": e["cam"], "day": e["day"], "name": e["name"],
+                          "path": e["arc"], "start_at": time.strftime(
+                              "%Y-%m-%d %H:%M:%S", time.localtime(e["start_sec"])),
+                          "end_at": time.strftime(
+                              "%Y-%m-%d %H:%M:%S", time.localtime(e["end_sec"])),
+                          "bytes": int(e["bytes"]),
+                          "overlap_sec": e["overlap_sec"],
+                          "head_extra_sec": e["head_extra_sec"],
+                          "tail_extra_sec": e["tail_extra_sec"]}
+                         for e in entries]
+    return plan
+
+
 # 录像清单的短缓存（0.9.114）：文件页每次进入/切机位/切日期都会打这个接口，
 # 而它每次都全量 listdir+stat（真机两万多文件）。3 秒足够吸收连点，又不至于
 # 让刚落盘的分片看不见。
@@ -3083,6 +3281,16 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(urlparse(self.path).query)
             return self._send(200, storage_usage(
                 force=(qs.get("force") or ["0"])[0] in ("1", "true")))
+        if path == "/api/export/plan":
+            # 批量导出第一步：只算不清盘，告诉前端要给你多少个分片、多大、边界多几秒
+            qs = parse_qs(urlparse(self.path).query)
+            return self._send(200, export_plan_payload(
+                (qs.get("cam") or [""])[0], (qs.get("from") or [""])[0],
+                (qs.get("to") or [""])[0],
+                (qs.get("detail") or ["0"])[0] in ("1", "true")))
+        if path == "/api/export":
+            # 批量导出第二步：边读边写 zip（chunked，见 export.Chunked 的说明）
+            return self._export_download(urlparse(self.path).query)
         if path == "/api/record/probe":
             return self._record_probe(urlparse(self.path).query)
         if path == "/api/record/parts":
@@ -3390,6 +3598,69 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, _probe_one(cam, ff, STATE.get("ffprobe_bin")))
         finally:
             _PROBE_LOCK.release()
+
+    def _export_download(self, qs):
+        """把计划里的分片打成一个 zip 流出去。
+
+        先发头、再边读边写：几个 GB 的包在内存里只占一块 256 KB 的缓冲。
+        中途任何异常都**不写收尾块** —— 客户端看到的是"下载失败"，而不是一个
+        长度对得上、解压才报错的半截包。这是分块编码在这一层唯一的意义。
+        """
+        q = parse_qs(qs)
+        got = _export_build((q.get("cam") or [""])[0],
+                            (q.get("from") or [""])[0],
+                            (q.get("to") or [""])[0])
+        if not got.get("ok"):
+            return self._send(400, {"ok": False, "error": got.get("error"),
+                                    "total": got.get("total")})
+        plan, entries = got["plan"], got["entries"]
+        req = _export_req(plan)
+        items = [
+            ("README.txt", export.readme(entries, req,
+                                         runtime.VERSION).encode("utf-8")),
+            ("manifest.json", json.dumps(
+                export.manifest(entries, req, runtime.VERSION),
+                ensure_ascii=False, indent=1).encode("utf-8")),
+        ]
+        items += [(e["arc"], e["path"]) for e in entries]
+
+        # 文件名只用 ASCII：中文机位进 Content-Disposition 要靠 RFC 5987 编码，
+        # 而"同一个包被谁下载"在文件管理器里靠时间就能认出，不必把机位名塞进去。
+        same_day = plan["from"][:10] == plan["to"][:10]
+        if same_day:
+            fname = "nvr_%s_%s-%s.zip" % (
+                plan["from"][:10].replace("-", ""),
+                plan["from"][11:16].replace(":", ""),
+                plan["to"][11:16].replace(":", ""))
+        else:
+            fname = "nvr_%s_%s.zip" % (plan["from"][:10].replace("-", ""),
+                                       plan["to"][:10].replace("-", ""))
+        self._responded = True
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition",
+                         'attachment; filename="%s"' % fname)
+        self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        # 这两个头给界面用：下载开始后前端没法再问"到底多少个"，而计划接口
+        # 可能已经过去几分钟（跨了保留期清理）。以真正发货的这份为准。
+        self.send_header("X-Export-Files", str(len(entries)))
+        self.send_header("X-Export-Bytes", str(plan["total"]["bytes"]))
+        self.end_headers()
+        w = export.Chunked(self.wfile)
+        try:
+            export.write_zip(w, items)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
+            raise
+        except Exception:
+            self.close_connection = True
+            raise
+        w.finish()
+        _record("导出：%s ~ %s，%d 个分片 / %.1f MB"
+                % (plan["from"], plan["to"], len(entries),
+                   plan["total"]["bytes"] / (1024.0 * 1024.0)))
 
     def _record_file(self, qs):
         from urllib.parse import parse_qs

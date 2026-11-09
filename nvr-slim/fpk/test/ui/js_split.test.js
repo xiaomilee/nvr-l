@@ -36,7 +36,8 @@ const JS_DIR = path.join(UI, "js");
    前者是页面「能点」之前最后一道绑定，后者必须先盖住引导层再去拉数据。 */
 const ORDER = ["core/auth.js", "core/state.js", "core/format.js",
                "components/shell.js", "components/fullscreen.js", "components/nav.js",
-               "pages/clips.js", "player/player.js", "pages/live_snap.js",
+               "pages/clips.js", "pages/export.js", "player/player.js",
+               "pages/live_snap.js",
                "core/api.js", "pages/live.js",
                "pages/settings_cards.js", "pages/settings_editor.js",
                "pages/diagnostics.js", "pages/settings_persist.js",

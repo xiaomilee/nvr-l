@@ -84,6 +84,9 @@ if [ -n "$NODE" ]; then
   # 事件页：入点来自服务端定位、播不了要说清原因、±30 秒基准是画面（0.9.121）
   echo "== 事件页 =="
   "$NODE" "$ROOT/test/ui/events.test.js" || exit 1
+  # 批量导出：计划与下载同一套口径、边界多给多少要写出来、导不了就禁用（0.9.127）
+  echo "== 批量导出 =="
+  "$NODE" "$ROOT/test/ui/export.test.js" || exit 1
   # 检测状态与三态：能不能用只由后端 state 判，未知不与命中混算（0.9.122）
   echo "== 检测状态与三态 =="
   "$NODE" "$ROOT/test/ui/detect.test.js" || exit 1
