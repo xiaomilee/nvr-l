@@ -28,6 +28,7 @@
 | 6 | 0.9.124 | P2 · Webhook 通知补齐：多模板 / 平台手选 / 文案模板 / 发送历史 | **done** | c170220 |
 | 7 | 0.9.125 | P2 · 推理设备：GPU 自动探测与自动回落 | **done** | 304a7c4 |
 | 8 | 0.9.126 | P2 · 事件检索：多机位 / 多类别 / 移动侦测 / 时间范围 / 最短时长 | **done** | f36af31 |
+| 9 | 0.9.127 | P2 · 按时间范围批量导出：分片原样打 zip + 包内 manifest / README | **done** | fef737f |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
 
@@ -131,6 +132,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 26 | 11-09 08:54 | **批次 6 收尾**：设置页平台手选 + 文案模板 + 实际发送方式 + 发送历史查看；`notify.platform` / `notify.template` 两键全链路接通（DEFAULTS / norm_notify / pushCfg / 回读 + `test_notify_ui.py` 16 条守卫）；测试发送带界面值；部署自检加第九项，项数改由代码数出来；五处 bump 0.9.124 并写 changelog | c170220 | **出包** `dist/nvr-0.9.124_x86.fpk` **101180736 字节** md5 `d9191c3aa3bbbc8db8f781820521e42d`；闸门 validate 81 项、后端 **1224** 条（1199+25）、59 文件、前端 514 / 70 / 28 / 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.124.json`），0.9.123→0.9.124 上线 0.1s、端口 18085、通知历史 0 条、凭证 401；真机验收两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`、`notify.render` 有 platforms 与 `history.persisted`、config 回读带新键、程序目录含新代码；缺口为部署停服窗口（覆盖率 0.9926 / 0.9877）；**批次 6 标 done**，生产机 2.6 未碰 |
 | 27 | 11-09 09:35 | **批次 7 立项 + 全量收尾**（按用户「继续」取 P2 清单下一项）：`detect.device` 从「配置里的死键」变成真的接管推理后端——`probe_providers` 只认 onnxruntime 自报的可用后端、`pick_providers` 按 CUDA > TensorRT > ROCm 挑、GPU 建会话失败自动回落 CPU 并记原因；`Engine` 收 `device` 与 `ort_loader` 注入点，暴露 `device_status()`；`status_of` 透出 `device` 块；前端 `detDevOf()` 让标题栏跟实际后端走、诊断卡新增「推理设备」一行；文档 CONFIGURATION §4.1 / TROUBLESHOOTING §5.1 / CHANGELOG 同步 | 304a7c4 | **出包** `dist/nvr-0.9.125_x86.fpk` **101186255 字节** md5 `928ffaf2258323f54a5acabc8b7041dc`；闸门 validate 81 项、后端 **1250** 条（60 文件，新增 `test_detect_device.py` 26 条）、前端 detect 58（+14）/ 设置页 514 / 时间轴 70 / 日志 25+38 / 健康 30 / 凭证 11 / 请求层 31 / 事件 70 / 样式 28 / 脚本 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.125.json`），0.9.124→0.9.125 上线 0.1s、端口 18085、事件索引 190 条 / 2 天、通知历史 0 条、凭证 401；真机把 `detect.device` 改 `gpu` 实测：`requested=gpu / actual=cpu / fallback_reason=「请求 GPU，但 onnxruntime 没有 CUDA / Tensorrt / ROCM 后端（当前可用：AzureExecutionProvider, CPUExecutionProvider）」`、`state` 仍 `ready`、`avg_ms` 43；日志三条实证（「AI 推理设备改为 gpu，重建检测 worker」→ 回落原因 → 「改为 auto」）；两路 `hstate=recording`（age 1/0）、`record.enabled=True`、`confirm` 块未被覆盖；随后还原 `auto` 并复核；程序目录含 `pick_providers` / `engine_device` / `detDevOf` 新代码；**批次 7 标 done**，生产机 2.6 未碰 |
 | 28 | 11-09 10:05 | **批次 8 全量收尾**（按用户「立项」取 P2 下一项）：事件检索高级筛选。`event_index.query()` 增 `cams` IN / `cats` OR / `min_dur` / `motion_only`（单值 `cat`/`cam` 兼容）；`parse_cats()` 逗号多值 + `motion` 单独提取 + 未知词回 bad；`event.kind_of()` 一处判断，`kind` 进事件与索引，`summary_of()` 增 `motion` 计数；`/api/events` 收 `min_dur`/`motion`、参数错明确报错、`filters` 回显服务端实际用上的条件；前端机位/类别改多选 + 「移动侦测」+ 「更多筛选」（HH:MM / 最短时长 / 清空）+ 列表头写条件 | f36af31 | **出包** `dist/nvr-0.9.126_x86.fpk` **101191778 字节** md5 `4c7aa9b998d43381481ea0697709234d`；闸门 validate 81 项、后端 **1279** 条（61 文件，新增 `test_event_filter.py` 21 条 + `test_event_api.py` 8 条）、前端 events **91**（+21）/ detect 58 / 设置页 514 / 时间轴 70 / 样式 28 / 脚本 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.126.json`），0.9.125→0.9.126 上线 0.1s、端口 18085、事件索引 **196 条 / 2 天**、通知历史 0 条、凭证 401；真机 196 条事件验筛选：person 42 / vehicle 22 / 并集 **60**（=42+22−4，逐 id 校验并集恒等式）/ motion 440 且与 AI 零交集 / cam-test01 339、cam-test02 163 / min_dur=60 → 296 / `cat=dog` 与 `min_dur=ten` 均 `ok:false` 带可用值 / `09:00–10:00` 时间窗 12 条且 `filters.from` 回显；两路 `hstate=recording`（age 1/1）、`detect ready`；程序目录含 `kind_of` / `parse_cats` / `motion_only` / `evMoreBox`；**批次 8 标 done**，生产机 2.6 未碰 |
+| 29 | 11-09 10:35 | **批次 9 立项 + 全量收尾**（按用户「继续」取 P2 候选池）：按时间范围批量导出。候选池第一项「模型版本管理」仍缺第二份模型与标注样本，跳过；导出不是增强而是「找到 → 确认 → 带走」缺了最后一步——以前只能一片一片点 `dl=1`。新增 `export.py`（`select` 半开区间 / `totals` / `cap_problem` / `slug`+`folders` 同名避撞 / `manifest`+`readme` / `write_zip` / `Chunked`）；`_export_build()` 一处构建，`/api/export/plan`（`detail=1`）与 `/api/export`（chunked，`X-Export-Files`/`X-Export-Bytes`）共用；枚举复用 `_day_files()` 与事件定位同口径；只剩归档的日子回 `archive_only` 明说「不含归档」；前端 `pages/export.js` 文件页右上角「导出」（机位多选 + 时间范围，先计划再下载，日期跟 `state.daySel`，下载地址直接用服务端 `d.url`）| fef737f | **出包** `dist/nvr-0.9.127_x86.fpk` **101203350 字节** md5 `82e354685596b9b17ce016a44e5329b4`；闸门 validate **82** 项、后端 **1297** 条（62 文件，新增 `test_export.py` 18 条）、前端 export **26** / events 91 / detect 58 / 设置页 514 / 时间轴 70 / 日志 25+38 / 健康 30 / 凭证 11 / 请求层 31 / 事件 70 / 样式 28 / 脚本 **173** 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.127.json`），0.9.126→0.9.127 上线 0.1s、端口 18085、事件索引 200 条 / 2 天、通知历史 0 条、凭证 401；真机两路 40 分钟导出：计划 20 片 / **737580686 字节**、`head_extra_sec=180`，下载 HTTP 200 + `X-Export-Files=20`、22 条目、`testzip()` 通过、全 STORED、逐片字节与 manifest 全等、中文目录正常；错误路径（机位写错 / 空时段 / 4 小时两路 3.8 GB 超限）均给出明确原因；导出全程两路 `hstate=recording`（age 0~3）、日志有「导出：… 703.4 MB」；**批次 9 标 done**，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -1158,20 +1160,91 @@ md5 `d9191c3aa3bbbc8db8f781820521e42d`**；`deploy_test.py` 部署 152 **九项�
 
 ---
 
+## 批次 9 · 0.9.127 按时间范围批量导出（第 29 轮立项并当日收尾）
+
+**为什么立这一批**：候选池按序是「模型版本管理 → 按时间范围批量导出 →
+include 区」。第一项仍缺对照物（只有一份 `yolo11n.onnx`，没有第二份模型与
+标注样本），跳过；取第二项。它不是"增强"，是**最基础的搬运用不了**：
+
+- 以前唯一的导出入口是播放器「⋯ → 导出当前文件」，一次一片（`dl=1`）。
+  要交出一小时的录像就是点 12 次、自己记下到哪了。
+- 事件页/回放页都能"找到"录像，却没有任何"拿走"的路径 ——
+  找到与拿走之间的缺口，比再多一个筛选项更值得补。
+
+**方向三问**：
+1. 落在 **P2 增强（按时间范围批量导出）**，服务 P0「存储管理」与 P1「事件中心」
+   的同一条用户旅程：找到 → 确认 → 带走。评审原话要的是"能无人值守地信任它"，
+   交接能力是信任的一部分。
+2. 不会让录像事实链更不可信：**只读**。不碰 `recorder.py`、不改台账、
+   不新增定时任务、不写临时文件（流式打包），导出期间录制照旧。
+3. 没有 P3：没有人脸 / 车牌 / 自训模型 / 多用户权限 / 实时滤镜。
+
+**口径先定死**：
+- **不裁剪**。分片是 `-c copy` 落下来的事实数据；`-c copy` 切点只能落关键帧
+  （仍差一个 GOP），帧级精确要重编码。导整片，多给多少写进 manifest。
+- **半开区间**：`[start, end)` 与窗口 `[a, b)` 相交才算。与事件检索同一套语义，
+  否则同一段录像在事件页和导出里会给出两个答案。
+- **只认已封口分片**：`.mp4.part` 没有 moov 播不了；`.cNN.mp4` 是压缩产物不是证据。
+- **上限**：1.9 GB / 2000 片 / 7 天。流式 zip 不能启用 zip64（无法回头补头），
+  总量必须留在 2 GB 以内；超了在计划阶段说清超多少。
+- **先计划再下载**：`/api/export/plan` 与 `/api/export` 共用 `_export_build()`，
+  不存在两套口径。
+
+### 清单
+
+- [x] 新增 `export.py`：`select()`（半开区间 + 边界多给）、`totals()`、`cap_problem()`、
+      `slug()` / `folders()`（同名机位不叠目录）、`manifest()` / `readme()`、`write_zip()`、
+      `Chunked`（HTTP 分块写入口，故意不提供 `tell`）
+- [x] `nvr_slim.py`：`_export_build()` 一处构建；`/api/export/plan`（`detail=1` 出逐片明细）、
+      `/api/export`（chunked 流式、`X-Export-Files` / `X-Export-Bytes`）；
+      枚举复用 `_day_files()`，与事件定位同一套口径
+- [x] 归档缺口如实提示：所选日期只剩 `_archive` 片段时，计划里回 `archive_only` 并
+      明说「本次导出不含归档」，不假装导出成功
+- [x] 前端 `pages/export.js`：文件页右上角「导出」→ 机位多选 + 时间范围 → 先出计划
+      （分片数 / 大小 / 实际覆盖 / 边界多给）再下载；日期跟 `state.daySel` 走；
+      下载地址直接用服务端给的 `d.url`（前端不拼第二遍）
+- [x] 测试：`test_export.py` 18 条（半开区间、边界秒数、上限、文件名清洗、同名机位、
+      不可 seek 流的 zip 校验、manifest/README、归档提示、下载头与逐片路径）；
+      `test/ui/export.test.js` 26 条；`js_split` ORDER 与 `build.sh` 同步登记
+- [x] 文档：`ARCHITECTURE.md` 模块表 + 接口表、`USER_GUIDE.md` 文件页、
+      `TROUBLESHOOTING.md` §6.1、`CHANGELOG.md` 四条工程判断、`README.md`
+- [x] 版本 0.9.127：五处 bump、出包、部署 152、真机做一次真实下载校验
+
+### 验收（152 真机）
+
+| 项 | 结果 |
+|---|---|
+| 计划（两路 / 40 分钟） | `ok:true`，20 个分片 / 737580686 字节，`head_extra_sec=180`（窗口 09:53，首片 09:50） |
+| 下载 | HTTP 200 `application/zip`，`X-Export-Files=20`，文件名 `nvr_20261109_0953-1033.zip` |
+| 包结构 | 22 条目 = README + manifest + 20 片；`testzip()` 通过；全 `STORED`；中文目录正常 |
+| 口径一致 | 逐片 `file_size` 与 `manifest.files[].bytes` 全等；`manifest.counts` 与计划一致 |
+| 机位写错 | `ok:false`「不认识这个机位：nope」 |
+| 空时段 | `ok:false`「这段时间没有已封口的分片（正在写的那一片要等封口）」+ 具体哪路哪天 |
+| 超上限 | 4 小时两路 = 3.8 GB / 118 片 → `ok:false`「超过单次 1.9 GB 上限；请缩短时间范围或减少机位」 |
+| 录制未受影响 | 导出全程两路 `hstate=recording`（age 0~3），日志有「导出：… 20 个分片 / 703.4 MB」 |
+
+**故意没做的两件（记进候选池，不是漏）**：① 边界精确裁剪 —— 需要临时文件与二倍
+I/O，且切点仍只能落关键帧，收益不抵失真；② 导出归档片段 —— 归档是重编码产物，
+与"原样交接"是两件事，要做先想清楚 manifest 怎么写。
+
+---
+
 ## 不在本轮范围
 
 评审 P3 明确不建议投入：人脸识别、车牌识别、自定义模型训练、复杂多用户权限、实时滤镜。
 理由：模型依赖、硬件兼容、隐私与维护成本远超收益，现阶段先把「事件发生 → 找到录像」做透。
 
-**P2 剩余（批次 9 起的候选，按此顺序取）**：
-`模型版本管理与效果对比`、`按时间范围批量导出`、`检测 include 区（只统计区域内的目标）`。
+**P2 剩余（批次 10 起的候选，按此顺序取）**：
+`模型版本管理与效果对比`、`检测 include 区（只统计区域内的目标）`、`导出的三个延伸`。
 - 「模型版本管理」仍未做：只有一份 `yolo11n.onnx`、没有第二份模型与标注样本，
   「效果对比」没有对照物就只剩观感。要做先解决"第二份模型从哪来"。
-- 「按时间范围批量导出」是最实的一项：`condense` 已有 `-c copy` 切片能力，
-  缺的是"按时间段 + 机位挑分片 → 打包给用户下载"这条入口。
-- 「多区域配置」在批次 8 立项时核过：**忽略区（16×9 格）早已交付**（`cam.masks.ignore`，
-  检测与缩时都吃它，设置页有编辑器）。真缺口是 include 区（只在框内才算数），
-  在本轮刻意没做 —— 它是新语义，不是补漏。
+- 「include 区」是在批次 8 立项时厘清的真缺口：**忽略区（16×9 格）早已交付**
+  （`cam.masks.ignore`，检测与缩时都吃它，设置页有编辑器），而"只统计框内的目标"
+  是新语义，不是补漏。要动它会碰到 `detect` 的判定口径与台账写入，得单独一批。
+- 「按时间范围批量导出」已在批次 9 交付（分片原样打 zip）。三个**故意没做**的延伸
+  记在这里：① 边界精确裁剪（要临时文件 + 二倍 I/O，且切点仍只能落关键帧）；
+  ② 导出归档片段（归档是重编码产物，与"原样交接"是两件事）；
+  ③ 2 GB 以上分卷下载（流式 zip 不能启用 zip64）。
 - 「高级筛选」由批次 8 接手（见上一节），同时还掉批次 3/4 挂了两轮的 `cat=motion` 服务端等价条件。
 
 批次 2 期间另有三件**故意不做**的：
