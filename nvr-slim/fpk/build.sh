@@ -90,6 +90,9 @@ if [ -n "$NODE" ]; then
   # 检测状态与三态：能不能用只由后端 state 判，未知不与命中混算（0.9.122）
   echo "== 检测状态与三态 =="
   "$NODE" "$ROOT/test/ui/detect.test.js" || exit 1
+  # 画面区域：忽略区与只统计区互不覆盖、清洗口径与服务端一致、区外计数上诊断页（0.9.128）
+  echo "== 画面区域 =="
+  "$NODE" "$ROOT/test/ui/masks.test.js" || exit 1
   # 样式源拆分：五个源文件齐全、顺序固定、产物=按序拼接、部署仍是单文件（0.9.123）
   echo "== 样式源拆分 =="
   "$NODE" "$ROOT/test/ui/css_split.test.js" || exit 1

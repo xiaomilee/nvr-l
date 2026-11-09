@@ -501,14 +501,16 @@ def log_export_text():
         "==== 通道 ====",
     ]
     for c in cameras():
-        head.append("- %s [%s] url=%s sub=%s 录制=%s 分片=%s 秒 保留=%s/%s 天 忽略区=%s 格" % (
+        _mk = norm_masks(c.get("masks"))
+        head.append("- %s [%s] url=%s sub=%s 录制=%s 分片=%s 秒 保留=%s/%s 天 "
+                    "忽略区=%s 格 只统计区=%s 格" % (
             c.get("name"), c.get("id"),
             runtime.redact_url(c.get("url")) or "(空)",
             runtime.redact_url(c.get("sub_url")) or "(空)",
             "开" if c.get("enabled", True) else "关",
             c.get("segment_sec") or "默认",
             c.get("full_days"), c.get("clip_days"),
-            len((c.get("masks") or {}).get("ignore") or [])))
+            len(_mk["ignore"]), len(_mk["include"])))
     body = ["==== 日志（最近 %d 条业务日志）====" % len(_LOG)] + list(_LOG)    # HTTP 访问行单独一段（0.9.73 之前它和业务日志抢同一个 800 条缓冲，
     # 一次手机回放就能把「录制 X 中断」挤干净）。这里放最近若干条 + 总请求数，
     # 需要看某次播放到底拉了多少分片时，靠他判断是不是浏览器分段下载。
@@ -671,6 +673,41 @@ def merge_cam_urls(cams, old_cams):
     return cams
 
 
+def norm_masks(m):
+    """`cam.masks` → 干净结构：ignore（忽略区）/ include（只统计区），16×9 格号。
+
+    **写盘与对外回显共用这一个函数**。以前两处各写一份"列表推导 + isdigit"，
+    只要有一处忘了加新键，就会重演「设置页画了、判定不理」那种假设置；
+    两套口径还容易在类型上分叉（一处 int()、一处原样留着字符串）。
+
+    越界格号（<0 或 ≥144）与非数字一律丢掉，去重后升序：格号是集合语义，
+    顺序没有意义，排序只是让配置文件 diff 干净、测试能直接比。
+    """
+    if not isinstance(m, dict):
+        m = {}
+    out = {}
+    for k in ("ignore", "include"):
+        cells = set()
+        for x in (m.get(k) or []):
+            # 只认整数与纯数字字符串。**不能直接 int(x)**：int(1.5) 会静默
+            # 变成 1，int(True) 变成 1，前端那边却是丢掉 —— 同一份配置在页面
+            # 上显示 12 格、服务端只认 11 格，这种漂移根本没法排查。
+            if isinstance(x, bool):
+                continue
+            if isinstance(x, int):
+                v = x
+            elif isinstance(x, float) and x.is_integer():
+                v = int(x)                 # JSON 里的 7.0 当 7 用
+            elif isinstance(x, str) and x.strip().isdigit():
+                v = int(x.strip())
+            else:
+                continue
+            if 0 <= v < detect.GRID_CELLS:
+                cells.add(v)
+        out[k] = sorted(cells)
+    return out
+
+
 def norm_cameras(raw):
     """设置页推送的摄像头列表 → 干净结构。id 只留安全字符，防止穿目录。"""
     out = []
@@ -730,12 +767,12 @@ def norm_cameras(raw):
         # 写进来的必须是夹取过的值，否则前端传个 5 秒会让录制器疯狂切文件。
         if c.get("segment_sec"):
             out[-1]["segment_sec"] = runtime.segment_sec(c.get("segment_sec"))
-        # 画面区域遮罩（16×9 网格：ignore=检测忽略区，区域内变化不算事件）
+        # 画面区域遮罩（16×9 网格）：ignore=忽略区（区域内不算事件），
+        # include=只统计区（区外目标不算，留空=整幅画面）。两块都由
+        # norm_masks 统一强校，越界格号与非数字在这里就被丢掉。
         m = c.get("masks")
         if isinstance(m, dict):
-            out[-1]["masks"] = {
-                "ignore": [int(x) for x in (m.get("ignore") or []) if isinstance(x, int) or str(x).isdigit()],
-            }
+            out[-1]["masks"] = norm_masks(m)
         # 判读条件：只在这里临时挂着，由调用方转成 profiles 后 pop 掉，
         # cameras 本身不存这份数据（一份参数只留一个真相来源）。
         if isinstance(c.get("judge"), dict):
@@ -816,13 +853,12 @@ def cameras():
             "detect": detect.cam_detect_mode(c, det_on),
             "detect_classes": detect.cam_classes(c, det.get("classes")),
         })
-        # 检测忽略区要一路透传到压制判定（condense），否则「设置页画了、判定不理」
+        # 画面区域要一路透传到压制判定（condense）与 AI 检测（detect），
+        # 否则就是「设置页画了、判定不理」。include（只统计区）只影响 AI 检测：
+        # condense 的像素差没有"目标"，无从谈区内区外，这块差异在文档里写清。
         m = c.get("masks")
         if isinstance(m, dict):
-            out[-1]["masks"] = {
-                "ignore": [int(x) for x in (m.get("ignore") or [])
-                           if isinstance(x, int) or str(x).isdigit()],
-            }
+            out[-1]["masks"] = norm_masks(m)
     return out or [dict(c) for c in CAMERA_DEFAULTS]
 
 

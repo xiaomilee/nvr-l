@@ -163,8 +163,9 @@ function renderCamEdit(c, p){
        这些重编码参数对它们都不生效，留着只会让人以为改了有用。 */
     ;
 
-  /* ---- ④ 检测忽略区 ---- */
+  /* ---- ④ 检测忽略区 / 只统计区 ---- */
   const maskCnt = (p.masks && p.masks.ignore) ? p.masks.ignore.length : 0;
+  const incCnt = (p.masks && p.masks.include) ? p.masks.include.length : 0;
   /* ---- ④ 检测（0.9.60）：每路 AI 开关 + 类别，忽略区原样复用 ----
      每路 detect：follow=跟随全局总闸与类别；on/off 显式覆盖。
      detect_classes 三键完整状态，初值拷全局默认，用户改哪个推哪个。 */
@@ -194,6 +195,19 @@ function renderCamEdit(c, p){
       + '<div class="h" style="margin-top:6px">只为需要的内容花算力：院子可配「人员 + 车辆」、客厅只留「人员」。全关等于不检测。</div>'
     + '</div>'
       ) : (camDet === "off" ? '<div class="hint" style="margin:6px 0 10px">本路已<b>强制关闭</b> AI 识别：不抽帧、不推理、不通知，下面的移动侦测（像素差）不受影响。</div>' : ""))
+    /* 只统计区（0.9.128）：只对 AI 识别生效。像素差没有"目标"这个概念，
+       谈不上区内区外，所以这一块不放去「事件侦测」段，免得用户以为它也管像素差 */
+    + (camDetOn ? (
+        '<div class="srow">'
+      + '<div class="top"><span class="n">只统计画面里的一块</span>'
+        + '<span class="v">' + (incCnt ? ("只算 " + incCnt + " 格") : "整幅画面") + '</span></div>'
+      + '<div class="h" style="margin:0 0 8px;line-height:1.55">框中心落进绿框才算目标，区外一律不计 —— '
+        + '治"马路对面的人老被算成我院子里的人"。<b>只影响 AI 识别</b>：移动侦测、录像、快照都不受影响。'
+        + '留空 = 整幅画面都算。与忽略区重叠时<b>按忽略处理</b>。'
+        + '<b>按住拖动多选，点一下已选的格子取消。</b></div>'
+      + '<div class="maskstage"><img class="mimg" id="maskImg-inc" alt=""><canvas id="maskCv-inc"></canvas></div>'
+      + '<div class="mlist" id="ilist"></div>'
+    + '</div>') : "")
     /* 移动侦测（像素差）组：0.9.61 从「事件侦测」段搬来，与 AI 识别并列——
        用户面对的是一个「检测」段，不该猜到帧差参数藏在压缩方案段落里 */
     + '<div class="srow">'
@@ -239,6 +253,7 @@ function renderCamEdit(c, p){
     + (on ? '' : '<div class="hint" style="margin:6px 0 0">本路事件侦测已关闭：以上侦测参数暂不生效，开启后恢复；AI 识别不受影响。</div>')
     + '<div class="mtip" style="margin:10px 0 8px"><b style="color:var(--warn)">检测忽略区</b>：框中心落进忽略格的检出结果'
       + '<b>直接丢弃</b>（后端过滤、不改画面），AI 识别与移动侦测<b>共用</b>这块忽略区。'
+      + '与「只统计区」重叠时<b>按忽略处理</b>。'
       + '<b>按住拖动多选，点一下已选的格子取消。</b></div>'
     + '<div class="maskstage"><img class="mimg" id="maskImg-ig" alt=""><canvas id="maskCv-ig"></canvas></div>'
     + '<div class="mlist" id="mlist"></div>'
@@ -268,7 +283,8 @@ function renderCamEdit(c, p){
             [camCls.person?"人":"", camCls.two_wheeler?"两轮":"", camCls.vehicle?"车":""].filter(Boolean).join("+")
           : "AI 开 · 类别全关")
         + " · 侦测 " + (on ? SENS_NAME[j.sens] : "随事件侦测关闭")
-        + " · 忽略区 " + maskCnt + " 格",
+        + " · 忽略 " + maskCnt + " 格"
+        + (incCnt ? (" · 只统计 " + incCnt + " 格") : ""),
         bodyDetect, openAcc === "mask")
     + '<div class="dz"><button class="delbtn' + (SET.armed === c.id ? " armed" : "") + '" data-delcam="' + c.id + '">'
       + (SET.armed === c.id ? "再点一次确认删除" : "删除这个摄像头") + '</button>'
@@ -373,9 +389,15 @@ function syncOuts(){
 }
 
 /* ---------------- 遮罩画布 ---------------- */
-/* 画面区域：16×9 方块预选。两个画布（忽略/遮蔽）各自独立，
-   只读摘要是第三张（两者叠加展示、不可编辑）。 */
+/* 画面区域：16×9 方块预选。三张画布——忽略区（琥珀）、只统计区（绿）、
+   还有一张只读摘要（两块叠加展示、不可编辑）。两张可编辑画布会把「另一块」
+   淡淡地画出来：用户改一块时能看见另一块在哪，不然调完才想起还有忽略区。 */
 let gdrag = null;
+
+const MASK_COLORS = {
+  ignore:  ["rgba(240,180,40,.42)", "rgba(240,180,40,.9)", "rgba(240,180,40,.16)"],
+  include: ["rgba(62,207,142,.34)", "rgba(62,207,142,.9)", "rgba(62,207,142,.14)"]
+};
 
 function maskArr(kind){
   if(SET.editing && SET.draft){
@@ -391,14 +413,25 @@ function maskCount(m){
 }
 function maskCountLine(m){
   m = normMasks(m);
-  if(!m.ignore.length)
-    return '<span style="font-size:11.5px;color:var(--faint2)">还没有忽略区</span>';
-  return '<div class="mlist"><span class="mitem"><i style="background:#e0a33a"></i>忽略区 '
-    + m.ignore.length + ' 格</span></div>';
+  if(!m.ignore.length && !m.include.length)
+    return '<span style="font-size:11.5px;color:var(--faint2)">还没有划定区域（整幅画面都算）</span>';
+  return '<div class="mlist">'
+    + '<span class="mitem"><i style="background:#e0a33a"></i>忽略区 '
+      + m.ignore.length + ' 格</span>'
+    + '<span class="mitem"><i style="background:#3ecf8e"></i>只统计区 '
+      + m.include.length + ' 格</span>'
+    + '</div>';
 }
 
 function drawMaskScene(){
-  ["maskCv", "maskCv-ig"].forEach(drawGridCv);
+  ["maskCv", "maskCv-ig", "maskCv-inc"].forEach(drawGridCv);
+}
+
+/* 画布 → 它负责编辑哪一块。"both" = 只读摘要，两块都画实色 */
+function maskKindOf(id){
+  if(id === "maskCv-inc") return "include";
+  if(id === "maskCv-ig") return "ignore";
+  return "both";
 }
 
 function drawGridCv(id){
@@ -412,7 +445,7 @@ function drawGridCv(id){
   if(cv.width !== cw || cv.height !== ch){ cv.width = cw; cv.height = ch; }
   const c = cv.getContext("2d");
   c.setTransform(dpr,0,0,dpr,0,0);
-  const kind = id === "maskCv" ? "both" : "ignore";
+  const kind = maskKindOf(id);
 
   /* 底图：有快照就让画布透明叠在上面；没有就画示意场景占位 */
   const img = document.getElementById(id.replace("Cv", "Img"));
@@ -428,7 +461,8 @@ function drawGridCv(id){
     c.fillStyle = "#242930"; c.fillRect(w*0.80,h*0.10,w*0.055,h*0.62);
   }
 
-  /* 选中的格子 */
+  /* 选中的格子：自己那块实色 + 描边，另一块淡fill（看得见但不抢戏）。
+     只读摘要（both）两块都实色，叠在一起正好是判定时真正的样子 */
   const cellW = w/GRID_COLS, cellH = h/GRID_ROWS;
   const fillCells = (kindSel, fill, stroke)=>{
     maskArr(kindSel).forEach(idx=>{
@@ -438,12 +472,16 @@ function drawGridCv(id){
       if(stroke){ c.strokeStyle = stroke; c.lineWidth = 1; c.strokeRect(col*cellW+.5, row*cellH+.5, cellW-1, cellH-1); }
     });
   };
-  fillCells("ignore", "rgba(240,180,40,.42)", "rgba(240,180,40,.9)");
+  ["ignore", "include"].forEach(k=>{
+    const cc = MASK_COLORS[k];
+    if(kind === "both" || kind === k) fillCells(k, cc[0], cc[1]);
+    else fillCells(k, cc[2], null);
+  });
 
   /* 拖动中的预览 */
   if(gdrag && gdrag.kind === kind){
     const cells = rectCells(gdrag.c0, gdrag.r0, gdrag.c1, gdrag.r1);
-    c.fillStyle = "rgba(240,180,40,.34)";
+    c.fillStyle = (MASK_COLORS[kind] || MASK_COLORS.ignore)[0];
     cells.forEach(idx=>{
       const col = idx % GRID_COLS, row = (idx - col) / GRID_COLS;
       c.fillRect(col*cellW, row*cellH, cellW, cellH);
@@ -478,26 +516,37 @@ function cellAt(cv, e){
   return { c: Math.floor(x*GRID_COLS), r: Math.floor(y*GRID_ROWS) };
 }
 
+/* 两块区域的清单：各自独立的"清空"。用同一段逻辑而不是复制一份，
+   否则加了第三块区域时又得记得改第二个地方。 */
+const MASK_LISTS = [
+  ["mlist", "ignore",  "忽略区",    "#e0a33a"],
+  ["ilist", "include", "只统计区",  "#3ecf8e"]
+];
+
 function renderMasks(){
-  const box = document.getElementById("mlist");
-  const ig = maskArr("ignore");
-  if(box){
-    box.innerHTML = ig.length
-      ? '<span class="mitem"><i style="background:#e0a33a"></i>忽略区 ' + ig.length + ' 格'
-        + '<span class="x" data-clrmask="ignore">清空</span></span>'
-      : '<span class="mitem"><i style="background:#e0a33a"></i>忽略区 0 格</span>';
+  MASK_LISTS.forEach(([id, kind, label, color])=>{
+    const box = document.getElementById(id);
+    if(!box) return;
+    const n = maskArr(kind).length;
+    box.innerHTML = n
+      ? '<span class="mitem"><i style="background:' + color + '"></i>' + label + ' ' + n + ' 格'
+        + '<span class="x" data-clrmask="' + kind + '">清空</span></span>'
+      : '<span class="mitem"><i style="background:' + color + '"></i>' + label + ' 0 格</span>';
     box.querySelectorAll("[data-clrmask]").forEach(el=>{
       el.onclick = ()=>{ maskArr(el.dataset.clrmask).length = 0; renderMasks(); drawMaskScene(); };
     });
-  }
+  });
   const igN = document.getElementById("igCnt");
-  if(igN) igN.textContent = "已选 " + ig.length + " 格";
+  if(igN) igN.textContent = "已选 " + maskArr("ignore").length + " 格";
+  const inN = document.getElementById("incCnt");
+  if(inN) inN.textContent = maskArr("include").length
+    ? ("已选 " + maskArr("include").length + " 格") : "整幅画面";
 }
 
 /* 关键：每次重绘设置页都会换掉 canvas 元素，所以绑定必须跟着渲染走，
    不能只在启动时绑一次 —— 这正是之前"画不出任何区域"的原因。 */
 function bindMaskCanvas(){
-  [["maskCv-ig","ignore"]].forEach(([id, kind])=>{
+  [["maskCv-ig","ignore"], ["maskCv-inc","include"]].forEach(([id, kind])=>{
     const cv = document.getElementById(id);
     if(!cv) return;
 
@@ -547,7 +596,8 @@ function finishGridDrag(){
   }else{
     let added = 0;
     rectCells(c0, r0, c1, r1).forEach(i=>{ if(arr.indexOf(i) < 0){ arr.push(i); added++; } });
-    if(added) toast("toast2", "已选 " + arr.length + " 格 · 记得点「保存」");
+    if(added) toast("toast2", (kind === "include" ? "只统计区" : "忽略区")
+      + " 已选 " + arr.length + " 格 · 记得点「保存」");
   }
   renderMasks(); drawMaskScene();
 }

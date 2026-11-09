@@ -114,7 +114,10 @@ function getFullSegs(camId, day){
 /* 每路的完整默认值：新增摄像头与「恢复默认」共用同一份，
    保证"默认"只有一个定义，不会两处漂移。 */
 /* 画面区域：16×9 方块预选（对齐摄像头 App 的隐私遮蔽交互）。
-   masks = { ignore:[格号…] }，格号 = 行*16+列，行在上。
+   masks = { ignore:[格号…], include:[格号…] }，格号 = 行*16+列，行在上。
+   ignore  = 忽略区：框中心落进去就丢（治"这块老误报"）。
+   include = 只统计区：框中心落不进去就丢（治"只关心大门/车道"），留空=整幅画面。
+   两块重合时按忽略处理（服务端 apply_regions 的顺序），界面上的提示也这么写。
    「输出遮蔽区」已移除：录制阶段打黑块必须放弃 -c copy 改重编码，CPU 翻倍，
    而它想解决的问题（这块别算成事件）本来就该由忽略区在判定阶段处理。
    旧配置里的 redact 字段读到后会被静默丢弃，不会报错。 */
@@ -128,14 +131,23 @@ function rectToCells(x, y, w, h){
   return out;
 }
 function normMasks(m){
+  /* 归一化 = 去重 + 丢掉越界/非整数 + 升序。升序不是为了好看：格号是集合，
+     同一块区域用不同顺序画出来必须算「没改动」（dirtyCount 直接比 JSON），
+     否则用户按一下"取消"会看到"已改 1 项"。服务端 norm_masks 同口径。 */
+  const clean = arr => [...new Set((arr || [])
+      /* 只认数字与纯数字字符串。null 会被 Number() 变成 0 —— 少这一层判断，
+         一个空值就会在画面上点亮左上角那一格，用户怎么点都取消不掉。 */
+      .map(x=> typeof x === "number" ? x
+             : (typeof x === "string" && /^[0-9]+$/.test(x.trim()) ? +x : NaN))
+      .filter(x=>Number.isInteger(x) && x >= 0 && x < GRID_COLS*GRID_ROWS))]
+      .sort((a,b)=>a-b);
   if(Array.isArray(m)){   /* 旧自由框格式 → 换算成格号，中心点落在框里即选中 */
     const ig=[];
     m.forEach(r=>{ if(r.type!=="redact") rectToCells(r.x,r.y,r.w,r.h).forEach(i=>ig.push(i)); });
-    return { ignore:[...new Set(ig)] };
+    return { ignore:clean(ig), include:[] };
   }
   const o = m || {};
-  const ig = (o.ignore || []).filter(x=>Number.isInteger(x));
-  return { ignore:[...new Set(ig)] };
+  return { ignore:clean(o.ignore), include:clean(o.include) };
 }
 
 /* 判读条件默认值：与 app/server/params.py 的 ANALYSIS_DEFAULTS / SCENE_PRESETS
@@ -250,14 +262,16 @@ function defaultCamParams(cam, i){
        detectCls 三键完整状态，缺键一律 False（服务端口径一致，不会偷偷补全局） */
     detect: "follow",
     detectCls: { person:true, two_wheeler:true, vehicle:true },
-    masks: { ignore:[] }
+    /* 两块画面区域都默认空：忽略区空=不过滤，只统计区空=整幅画面都算。
+       空 include 是关键兼容点——老配置读进来也是空，判定与 0.9.127 一致 */
+    masks: { ignore:[], include:[] }
   };
 }
 
 CAMERAS.forEach((c,i)=>{
   const d = defaultCamParams(c, i);
   d.enabled = i < 3;
-  d.masks = { ignore: c.id==="cam-01" ? rectToCells(.62,.55,.22,.30) : [] };
+  d.masks = { ignore: c.id==="cam-01" ? rectToCells(.62,.55,.22,.30) : [], include: [] };
   camParams[c.id] = d;
 });
 

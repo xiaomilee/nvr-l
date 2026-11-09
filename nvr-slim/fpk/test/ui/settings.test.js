@@ -205,8 +205,11 @@ ck("网格·可删除", get('maskArr("ignore").length') === ig0);
 /* 输出遮蔽区整块下线：没有它的画布、也没有它的数据通道。
    这里的 DOM 是极简桩，innerHTML 不会真的重建节点，所以用源码断言。 */
 ck("网格·遮蔽区画布已移除", !src.includes("maskCv-rd") && !src.includes("rdCnt"));
-ck("网格·normMasks 只留 ignore",
-   get('JSON.stringify(Object.keys(normMasks({ignore:[1,2],redact:[3,4]})))') === '["ignore"]');
+/* 0.9.128：masks 从一块变两块（ignore 忽略区 + include 只统计区）。
+   redact（输出遮蔽区）仍然要丢掉 —— 它早就下线了，留着会被当成新区域。 */
+ck("网格·normMasks 丢 redact、留 ignore 与 include",
+   get('JSON.stringify(Object.keys(normMasks({ignore:[1,2],redact:[3,4]})))')
+     === '["ignore","include"]');
 run('renderMasks();');
 ck("网格·列表可清空", document.getElementById("mlist").innerHTML.includes("data-clrmask"));
 ck("网格·格号换算成矩形", JSON.stringify(get('rectCells(1,1,2,2)')) === "[17,18,33,34]");

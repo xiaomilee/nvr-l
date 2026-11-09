@@ -1,4 +1,4 @@
-# 架构说明（0.9.127）
+# 架构说明（0.9.128）
 
 这份文档回答「代码在哪、数据怎么流、某个数字是谁算出来的」。
 它是给要改代码的人看的：先在这里定位模块，再进源码，别在
@@ -50,7 +50,7 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `frames.py` | 取帧节拍与快照 tap | `Frames.detail()` |
 | `snapshots.py` | 快照落盘与取图路径 | 快照文件读写 |
 | `pixdiff.py` | 像素差（移动侦测）与自检 | `self_test` |
-| `detect.py` | AI 检测：每路独立节拍 + 有界工作者池、三态 + skip、十个错误码 | `DetectWorker` `status_of` |
+| `detect.py` | AI 检测：每路独立节拍 + 有界工作者池、三态 + skip、十个错误码、画面两块区域（ignore/include） | `DetectWorker` `status_of` `apply_regions` |
 | `confirm.py` | 时间窗确认：N 帧中 M 帧命中、类阈值、最短持续、相邻合并 | `Confirmer`（纯状态机，无 IO） |
 | `ledger.py` | 活动台账：按分片落盘、合并窗口、可重建投影 | `merge` `avail_spans` |
 | `event.py` | 统一事件模型：id 只由「哪一路 + 何时开始」推出 | `summary_of` |
@@ -188,6 +188,14 @@ last_seg / last_age_sec / error / kind / hint`。
 error_code / error_message / last_success_at`）+ 四档 state + 十个错误码，
 前端只翻译不判定——以前「没加载完」和「坏了」都写成「worker 未运行」，
 用户只能猜要不要重启。
+
+**画面区域的过滤只有一处**：`detect.apply_regions()` 依次做「类别 → 忽略区 →
+只统计区」，`_one()` 只调它，没有第二份判定。`cam.masks` 两块都是 16×9 格号
+（`row*16+col`），解码成归一化矩形后与归一化框直接比，不需要画面尺寸。
+
+顺序有意义：**忽略区优先**（重叠按忽略），且只统计区留空时恒真——升级不改
+任何既有判定。被只统计区挡掉的框数进 `per_cam.outside`（按天），诊断页读它
+说「区外忽略 N」；`skip` / `unknown` / `outside` 三档互不混算。
 
 ## 6. 前端与构建
 

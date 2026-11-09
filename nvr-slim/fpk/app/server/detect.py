@@ -421,16 +421,49 @@ def cls_hit_categories(cls_counts):
     return {k for k in CATEGORIES if cls_counts.get(k, 0) > 0}
 
 
-# ---------------------------------------------------------------- 忽略区过滤
+# ---------------------------------------------------------------- 画面区域过滤
+#
+# 两块区域共用一张 16×9 格子（格号 = row*16 + col，行在上），语义却相反：
+#   ignore  忽略区   —— 框中心落**进去**就丢。解决"这块老是误报"。
+#   include 只统计区 —— 框中心落**不进去**就丢。解决"只关心大门/车道"。
+# include 留空 = 不限制，与 0.9.127 的行为逐字相同（升级不改任何既有判定）。
+#
+# 为什么放在**框中心**而不是重叠面积：面积口径下一个人半个身子在区外就会被
+# 判成"区外"，画一条窄带能覆盖走廊的时候会很别扭；中心点口径与忽略区一致，
+# 用户学一次就懂，台账里也不会出现"同一目标有时算有时不算"。
+
+GRID_COLS = 16
+GRID_CELLS = 144          # 16×9
+
+
+def cells_to_rects(cells):
+    """格号列表 → 归一化矩形 [x, y, w, h]（0~1）。越界/非数字格号跳过。"""
+    rects = []
+    for cell in cells or []:
+        try:
+            c = int(cell)
+        except (TypeError, ValueError):
+            continue
+        if c < 0 or c >= GRID_CELLS:
+            continue
+        row, col = divmod(c, GRID_COLS)
+        rects.append([col / float(GRID_COLS), row / 9.0,
+                      1.0 / GRID_COLS, 1.0 / 9.0])
+    return rects
+
 
 def _cx_cy(box):
     x, y, w, h = box
     return x + w / 2.0, y + h / 2.0
 
 
-def in_ignore(box, rects):
-    """框中心落在任一忽略矩形内 → True（后端过滤，不改画面）。"""
-    cx, cy = _cx_cy(box)
+def _center_in(box, rects):
+    try:
+        cx, cy = _cx_cy(box)
+    except (TypeError, ValueError, IndexError):
+        # 形状不对的框（手改配置 / 上游脏数据）：判"不在区内"。
+        # 不抛异常——一路的坏数据不该带崩整轮检测，那会连累其余摄像头。
+        return False
     for r in rects or []:
         try:
             x, y, w, h = (float(r[0]), float(r[1]), float(r[2]), float(r[3]))
@@ -443,8 +476,48 @@ def in_ignore(box, rects):
     return False
 
 
+def in_ignore(box, rects):
+    """框中心落在任一忽略矩形内 → True（后端过滤，不改画面）。"""
+    return _center_in(box, rects)
+
+
+def in_include(box, rects):
+    """只统计区：rects 为空 = 不限制；非空时框中心必须落进至少一格。"""
+    if not rects:
+        return True
+    return _center_in(box, rects)
+
+
 def filter_boxes(boxes, rects):
     return [b for b in (boxes or []) if not in_ignore(b, rects)]
+
+
+def apply_regions(dets, classes, ignore_rects=(), include_rects=()):
+    """类别过滤 → 忽略区 → 只统计区，返回 (留下的框, 被只统计区挡掉的个数)。
+
+    顺序是刻意的：**忽略区优先**。两块重叠时按忽略处理 —— 用户既然画了
+    "这块别管"，就不该因为另一块"只看这块"又把它放回来。否则用户改一次
+    只统计区，就得回头检查忽略区有没有被悄悄推翻。
+
+    返回被挡掉的个数，是为了让"区域画得太窄、什么都进不来"看得见：这个数
+    进诊断页，用户能自己发现是区域画错了，而不是以为 AI 不干活了。这是
+    评审那条"失败不等于没有"的同一个道理——挡掉的目标数也是事实，得记账。
+    """
+    kept, outside = [], 0
+    for d in dets or []:
+        if not isinstance(d, dict):
+            continue
+        c = d.get("c")
+        if not classes.get(c):
+            continue
+        b = d.get("b")
+        if in_ignore(b, ignore_rects):
+            continue
+        if not in_include(b, include_rects):
+            outside += 1
+            continue
+        kept.append(d)
+    return kept, outside
 
 
 # ---------------------------------------------------------------- PPM 解析
@@ -1225,11 +1298,14 @@ class DetectWorker:
         if dets is None:
             self._unknown(cid, E_INFER, self.engine.error or "推理失败")
             return
-        # 类别过滤（算力口径）+ 忽略区过滤（框中心落忽略格即丢）。
-        # 忽略格是 16×9 归一化矩形，与归一化框同一坐标系，直接比。
-        rects = self._ignore_rects(cam)
-        dets = [d for d in dets if classes.get(d["c"])
-                and not in_ignore(d["b"], rects)]
+        # 类别过滤（算力口径）+ 两块区域过滤（框中心口径，见 apply_regions）。
+        # 格号解码成 16×9 归一化矩形，与归一化框同一坐标系，直接比。
+        # 只统计区留空时 in_include 恒真 —— 没配就与旧版本一模一样。
+        dets, outside = apply_regions(dets, classes,
+                                      self._ignore_rects(cam),
+                                      self._include_rects(cam))
+        if outside:
+            self._outside(cid, outside)
         if dets:
             wins = self._confirm(cam, dets, now)
             if wins:
@@ -1387,30 +1463,35 @@ class DetectWorker:
                 out.append([s, e, dict(c)])
         return out
 
-    # ---------------------------------------------------------- 忽略区
+    # ---------------------------------------------------------- 画面区域
     @staticmethod
     def _ignore_rects(cam):
-        """cam.masks.ignore（16×9 格号）→ 像素矩形。格号编码 row*16+col。"""
-        rects = []
+        """cam.masks.ignore（16×9 格号）→ 归一化矩形。格号编码 row*16+col。"""
         m = (cam or {}).get("masks")
         if not isinstance(m, dict):
-            return rects
-        cells = [int(x) for x in (m.get("ignore") or [])
-                 if isinstance(x, int) or str(x).isdigit()]
-        # 没有画面尺寸时用 16:9 相对坐标：rects 以「比例」传入由调用方乘宽高。
-        # 这里直接返回归一化矩形（0~1），调用方按比例缩放。
-        for cell in cells:
-            if cell < 0 or cell >= 144:
-                continue
-            row, col = divmod(cell, 16)
-            rects.append([col / 16.0, row / 9.0, 1.0 / 16.0, 1.0 / 9.0])
-        return rects
+            return []
+        return cells_to_rects(m.get("ignore") or [])
+
+    @staticmethod
+    def _include_rects(cam):
+        """cam.masks.include（只统计区）→ 归一化矩形。空列表 = 不限制。
+
+        与 ignore 分开两个函数而不是合成一个字典返回：调用点各自只关心自己
+        那块，合成结构会让"忘了传第二块"这种 bug 更难看出来。
+        """
+        m = (cam or {}).get("masks")
+        if not isinstance(m, dict):
+            return []
+        return cells_to_rects(m.get("include") or [])
 
     # ---------------------------------------------------------- 三态统计
     @staticmethod
     def _blank():
         return {"total": 0, "today": {}, "cls": {}, "last": None,
-                "unknown": {}, "skip": {}, "codes": {}}
+                "unknown": {}, "skip": {}, "codes": {},
+                # 只统计区挡掉的框数（按天）。它不是三态里的任何一档：
+                # 这一拍照常出了结论（hit 或 miss），只是"区外的目标不算"。
+                "outside": {}}
 
     def _roll_day(self):
         """跨零点自动换天（调用方已持锁）。
@@ -1471,6 +1552,21 @@ class DetectWorker:
             d = self._day
             st["skip"][d] = st["skip"].get(d, 0) + 1
 
+    def _outside(self, cam_id, n):
+        """只统计区挡掉的框数（按天累计）。
+
+        为什么要单独记账：用户把只统计区画小了，界面上一切正常、事件页一片
+        安静 —— 那种"看起来对"的安静最危险。有这个数，诊断页能说"今天挡掉
+        了 N 个框"，用户才知道该去把区域放大，而不是以为院子真没人来。
+        """
+        if n <= 0:
+            return
+        with self._stats_lock:
+            self._roll_day()
+            st = self.stats.setdefault(cam_id, self._blank())
+            d = self._day
+            st["outside"][d] = st["outside"].get(d, 0) + int(n)
+
     # ---------------------------------------------------------- 状态
     def status(self):
         """检测详情：加载态 + 错误码 + 每路三态计数 + 调度实况。
@@ -1489,6 +1585,7 @@ class DetectWorker:
                     "cls": st.get("cls", {}).get(d, {}),
                     "unknown": st.get("unknown", {}).get(d, 0),
                     "skip": st.get("skip", {}).get(d, 0),
+                    "outside": st.get("outside", {}).get(d, 0),
                     "codes": st.get("codes", {}).get(d, {}),
                     "last": st.get("last"),
                     "last_state": st.get("last_state"),

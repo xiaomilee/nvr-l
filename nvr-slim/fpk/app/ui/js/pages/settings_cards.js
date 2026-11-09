@@ -1051,7 +1051,8 @@ function renderCamRead(c, p){
       + roRow("去噪", DN_NAMES[pr.dn])
     + '</div>'
     + '<div class="sub">'
-      + '<h4>画面区域 <em>' + maskCount(p.masks) + ' 格</em></h4>'
+      + '<h4>画面区域 <em>' + maskCount(p.masks) + ' 格忽略 · '
+        + normMasks(p.masks).include.length + ' 格只统计</em></h4>'
       + '<div class="maskstage locked"><img class="mimg" id="maskImg" alt=""><canvas id="maskCv"></canvas></div>'
       + maskCountLine(p.masks)
     + '</div>'

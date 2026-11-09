@@ -561,6 +561,9 @@ function cardDetectDiag(){
         + "抽帧 " + (c.today || 0) + (parts.length ? " · " + parts.join(" · ") : " · 无命中")
         + (unk ? ' · <b style="color:var(--warn)">未知 ' + unk + '</b>' : "")
         + (c.skip ? " · 同帧跳过 " + c.skip : "")
+        /* 只统计区挡掉的框数（0.9.128）：这不是"没人来过"，而是"有人在但不在区里"。
+           不说出来，用户只会看到事件页一片安静，以为 AI 坏了 */
+        + (c.outside ? " · 区外忽略 " + c.outside : "")
         + (c.last && c.last.t ? " · 最近 " + snapTime(c.last.t * 1000) : "")
         + '</span></div>';
       if(c.last_err){
