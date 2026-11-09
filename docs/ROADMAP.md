@@ -30,7 +30,7 @@
 | 8 | 0.9.126 | P2 · 事件检索：多机位 / 多类别 / 移动侦测 / 时间范围 / 最短时长 | **done** | f36af31 |
 | 9 | 0.9.127 | P2 · 按时间范围批量导出：分片原样打 zip + 包内 manifest / README | **done** | fef737f |
 | 10 | 0.9.128 | P2 · 检测只统计区：框中心落在区内才算目标，区外计数上诊断页 | **done** | 149dc1c |
-| 11 | 0.9.129 | P1 · 事件快照：检测确认帧落盘 + 事件卡片缩略图与展开大图 | **doing** | 89531d3 |
+| 11 | 0.9.129 | P1 · 事件快照：检测确认帧落盘 + 事件卡片缩略图与展开大图 | **done** | 6d7470b |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
 
@@ -140,6 +140,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 29 | 11-09 10:35 | **批次 9 立项 + 全量收尾**（按用户「继续」取 P2 候选池）：按时间范围批量导出。候选池第一项「模型版本管理」仍缺第二份模型与标注样本，跳过；导出不是增强而是「找到 → 确认 → 带走」缺了最后一步——以前只能一片一片点 `dl=1`。新增 `export.py`（`select` 半开区间 / `totals` / `cap_problem` / `slug`+`folders` 同名避撞 / `manifest`+`readme` / `write_zip` / `Chunked`）；`_export_build()` 一处构建，`/api/export/plan`（`detail=1`）与 `/api/export`（chunked，`X-Export-Files`/`X-Export-Bytes`）共用；枚举复用 `_day_files()` 与事件定位同口径；只剩归档的日子回 `archive_only` 明说「不含归档」；前端 `pages/export.js` 文件页右上角「导出」（机位多选 + 时间范围，先计划再下载，日期跟 `state.daySel`，下载地址直接用服务端 `d.url`）| fef737f | **出包** `dist/nvr-0.9.127_x86.fpk` **101203350 字节** md5 `82e354685596b9b17ce016a44e5329b4`；闸门 validate **82** 项、后端 **1297** 条（62 文件，新增 `test_export.py` 18 条）、前端 export **26** / events 91 / detect 58 / 设置页 514 / 时间轴 70 / 日志 25+38 / 健康 30 / 凭证 11 / 请求层 31 / 事件 70 / 样式 28 / 脚本 **173** 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.127.json`），0.9.126→0.9.127 上线 0.1s、端口 18085、事件索引 200 条 / 2 天、通知历史 0 条、凭证 401；真机两路 40 分钟导出：计划 20 片 / **737580686 字节**、`head_extra_sec=180`，下载 HTTP 200 + `X-Export-Files=20`、22 条目、`testzip()` 通过、全 STORED、逐片字节与 manifest 全等、中文目录正常；错误路径（机位写错 / 空时段 / 4 小时两路 3.8 GB 超限）均给出明确原因；导出全程两路 `hstate=recording`（age 0~3）、日志有「导出：… 703.4 MB」；**批次 9 标 done**，生产机 2.6 未碰 |
 | 30 | 11-09 11:55 | **批次 10 立项 + 全量收尾**（按用户「继续」取 P2 候选池）：检测只统计区。候选池第一项「模型版本管理」仍缺第二份模型与标注样本，第三轮跳过。`detect.apply_regions()` 一处做「类别 → 忽略区 → 只统计区」，返回被挡掉的框数进 `per_cam.outside`；`nvr_slim.norm_masks()` 写盘与回显共用（只认整数与纯数字字符串）；前端第二张 16×9 画布（绿=只统计 / 琥珀=忽略，互相淡显）+ 两块清单各自清空 + 计数进标题；诊断页每路一行加「区外忽略 N」| 149dc1c | **出包** `dist/nvr-0.9.128_x86.fpk` **101208384 字节** md5 `832d3c9ec8ec1109e30aa51ce0ae4906`；闸门 validate **81** 项、后端 **1324** 条（63 文件，新增 `test_detect_include.py` 27 条）、前端 masks **27** / export 26 / events 91 / detect 58 / 设置页 514 / 时间轴 70 / 样式 28 / 脚本 173 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.128.json`）；真机：`include=[0,1,2]` 往返一致、脏值 `[-1,144,1.5,null,"7"]` 落成 `[7]`、诊断行「只统计区=1 格」、只统计区设 1 格后两轮 `cam-test01 outside=9` 而 `cam-test02 outside=0`、还原后两块皆空；全程两路 `hstate=recording`、`detect.state=ready`；**批次 10 标 done**，生产机 2.6 未碰 |
 | 31 | 11-09 14:05 | **批次 11 立项（只做调研 + 方案，未动代码）**（按用户「继续，导出功能简化，研究事件页快照并写进路线图」）：把「事件快照」立成批次 11。调研核过六条事实：快照只有最新一张且被 `os.replace` 覆盖、事件模型 15 键 / 15 列无任何图字段、事件身份只由 cam + 起点秒决定（图可按时间窗匹配，不必改身份）、检测推理读的就是取帧层那张 720p jpg（不必再起 ffmpeg）、取帧已是 q:v4 45~180KB、移动侦测边界是事后帧差曲线算的（无确认时刻可挂图）。152 只读实测：`var/snapshots` 8 文件 848KB、`/vol1` 可用 11G、事件索引 200 条 / 2 天。方案定三条口径（拍「当时」不拍「现在」/ 只加不改走独立线程与有界队列 / 图是可清理附属物不进索引）、存储 `var/event_shots/<cam>/<日期>/<HHMMSS>_<mmm>.jpg`、接口 `shot:{url,at,offset}` 与 `/api/events/<id>/shot`（404 JSON 不退回当前快照）、前端 76×43 缩略图 + 展开宽图、六类失败降级；导出三个延伸按用户「不用深究」**就此收口**不再排期 | 89531d3 | 未出包、未 bump（清单未动，按规则不打包）；闸门 validate **81** 项、前端 events 91 / export 26 / detect 58 / masks 27 / 样式 28 / 脚本 173 全绿 0 FAIL；152 只读 0.9.128，两路 `hstate=recording`（age 0/1）、`detect.state=ready`；生产机 2.6 未碰 |
+| 32 | 11-09 15:05 | **批次 11 实现并收尾**（按用户「把事件的快照继续落实」）：新增 `event_shot.py`（392 行）—— `ShotStore` 30 秒/路限流 + 每路每天 300 张 + 队列 8 满即丢 + 单写线程 + 7 天 sweep，`find()` 窗口外扩 15 秒取**最早**一张（跨零点也认）；`detect._grab()` 改返回 `(ok,data,err,src)`（src = 这次真正读的那张 jpg，防止"拍现在不拍当时"），`_one()` 在 `_write_ledger()` 之后 `_notify()` 之前调 `_shot()`（时间取源图 mtime，异常全吞）；`nvr_slim._attach_shots()` 给列表补 `shot{url,at,offset}`，路由 `/api/events/<id>/shot` 200 走 `image/jpeg`+ETag+`max-age=86400`、没有则 404 JSON，`/api/status` 暴露 `shots`；前端缩略图 76×43（lazy + onerror 隐藏）+ 展开宽图「快照 HH:MM:SS · 事件开始后 N 秒」，无图时说明「这条没有留快照」| 6d7470b | **出包** `dist/nvr-0.9.129_x86.fpk` **101218696 字节** md5 `046fefe536fb56c4d3b4520923a0de8a`；闸门 validate **81** 项、后端 **1365** 条（64 文件，新增 `test_event_shot.py` 39 条）、前端 events **101** / export 26 / detect 58 / masks 27 / 样式 28 / 脚本 173 全绿 0 FAIL；152 部署**九项全 OK**；真机：14:58:45 AI 事件自动带 `shot{at:14:58:55, offset:9.3}`，GET → **200 image/jpeg 145077 字节 / ffprobe 1280×720 / file 认 JPEG**，ETag 二次请求 **304**，旧事件 → **404 JSON** 且列表 `shot:null`，列表 200 条 145/90/91ms，检测关 43 秒 `written` 不动、重开后 3→5 张，`rate_limited=9`，全程两路 `hstate=recording`，`recorder.py` **git diff 为空**；**批次 11 标 done**，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -1304,7 +1305,7 @@ I/O，且切点仍只能落关键帧，收益不抵失真；② 导出归档片�
 
 ---
 
-## 批次 11 · 0.9.129 事件快照（第 31 轮立项，方案已定，代码未动）
+## 批次 11 · 0.9.129 事件快照（第 31 轮立项，第 32 轮实现并收尾）
 
 **为什么取这一项**：用户 11-09 13:38 明确要求「研究事件页面显示事件的快照，把功能
 实现写进路线图，规划逻辑流程与实现方案」，同时「导出功能简化一些，不用深究」。
@@ -1424,36 +1425,48 @@ var/event_shots/<cam>/<YYYY-MM-DD>/<HHMMSS>_<mmm>.jpg
 | 图被清理但事件还在 | 404 + `shot: null`；**不退回当前快照** |
 | `<img>` 请求 401（没登录 cookie） | 图隐藏，列表照常；不弹错误、不重试 |
 
-### 清单（下一轮实现，本轮一项未动）
+### 清单（第 32 轮全部完成）
 
-- [ ] `app/server/event_shot.py`（新模块，约 180 行）：`parse_name()` / `pick()`
-      （纯函数，窗口内最早一张）/ `ShotStore`（`offer` 限流 + 有界队列 + 单写线程 +
-      `sweep`）/ `list_for(cam,date)` 带 5 秒缓存 / `find()` / `path_of()` 防穿目录
-- [ ] `detect.py`：`_grab()` 多返回一个源路径；`DetectWorker` 收 `shot_store`（None
-      = 不存图，行为与 0.9.128 逐字一致）；`_one()` 在 `_write_ledger()` 之后调
-      `_shot()`（限流 + 读字节 + 入队，异常一律吞掉）
-- [ ] `nvr_slim.py`：`ShotStore` 起停与 `STATE` 注入；`events_payload()` 补 `shot`；
-      路由加 `/api/events/<id>/shot`（`bits[1] == "shot"`），404 走 JSON、200 走
-      二进制 + ETag；诊断页/`/api/status` 暴露 `shots`（写入数 / 丢弃数 / 占用）
-- [ ] 前端：`events.js` 卡片缩略图与展开大图、`pages.css` 两条样式、`index.html`
-      合成产物（源文件 `ui/js/pages/events.js` + `ui/css/pages.css`）
-- [ ] 测试：`test/test_event_shot.py`（≥22 条：命名解析 / 窗口选点 / 限流 /
-      日上限 / sweep / 坏文件 / 防穿目录）、`test_event_api.py` 补 `shot` 字段、
-      `test/ui/events.test.js` 补 8 条（有图 / 无图 / 展开大图 / onerror）
-- [ ] 文档：`USER_GUIDE.md`（事件页那一节加"快照那一眼"）、`ARCHITECTURE.md`
-      （模块表加 `event_shot.py` + 路由表加两条）、`TROUBLESHOOTING.md`
-      （§6.0 加「为什么这条没有快照」）、`CHANGELOG.md`、README
-- [ ] 版本 0.9.129：五处 bump、出包、部署 152、真机验缩略图与 404
+- [x] `app/server/event_shot.py`（新模块 392 行）：`parse_name()` / `name_of()` /
+      `name_at()` / `pick()`（纯函数，窗口内最早一张）/ `ShotStore`（`offer` 限流 +
+      有界队列 + 单写线程 + `sweep` + `status`）/ `list_for(cam,date)` 5 秒缓存 /
+      `find()`（含跨零点）/ `path_of()` 防穿目录 / `shot_of()` 契约
+- [x] `detect.py`：`_grab()` 返回 4 元组（多一个源路径）；`DetectWorker` 收
+      `shot_store`（None = 不存图，行为与 0.9.128 逐字一致）；`_one()` 在
+      `_write_ledger()` 之后、`_notify()` 之前调 `_shot()`（读字节 + 入队，
+      异常一律吞掉）
+- [x] `nvr_slim.py`：`ShotStore` 起停与 `STATE["shots"]` 注入；`_attach_shots()`
+      给列表逐条补 `shot`；路由 `/api/events/<id>/shot`（`bits[1] == "shot"`），
+      404 走 JSON、200 走二进制 + ETag + `max-age=86400`；`/api/status` 暴露
+      `shots`（written / dropped / failed / rate_limited / capped / bytes）
+- [x] 前端：`events.js` 缩略图（lazy + onerror 隐藏）与展开宽图 + 说明、
+      `pages.css` 三条样式（`.evthumb` / `.evshot` / `.evshotcap`）、`index.html`
+      合成产物
+- [x] 测试：`test_event_shot.py` **39 条**（命名解析 / 窗口选点 / 跨零点 / 限流 /
+      日上限 / 队列满 / sweep / 防穿目录 / 契约 / 检测侧挂钩 / `_grab` 四返回值）、
+      `test_event_api.py` **+2**（`shot` 字段与"键始终存在"）、
+      `test/ui/events.test.js` **+10**（有图 / 无图 / 宽图 / 负偏移 / onerror）；
+      三处旧替身随 `_grab` 多返回值更新（`test_ingest` / `test_detect_sched` /
+      `test_event_confirm`）
+- [x] 文档：`USER_GUIDE.md`（事件页加「快照那一眼」三条规矩）、`ARCHITECTURE.md`
+      （模块表 + 路由表 + 快照数据流）、`TROUBLESHOOTING.md` §6.0.1
+      （「事件卡片没有缩略图」四种原因）、`CHANGELOG.md`（五个取舍 + 六条故意不做）、
+      README
+- [x] 版本 0.9.129：五处 bump、出包、部署 152、真机验缩略图 / 404 / 开关联动
 
-### 验收（152 真机，下一轮做）
+### 验收（152 真机，第 32 轮实测）
 
-1. 部署 0.9.129 后打开事件页：最近的 AI 事件卡片出现缩略图，尺寸与时间都合理。
-2. `curl /api/events/<id>/shot` → 200 `image/jpeg`，`file` 认成 JPEG、`ffprobe` 为 1280×720。
-3. 没有图的旧事件 → 404 JSON（不是 500），前端无破图、展开区有原因。
-4. `/api/events` 200 条的响应时间增量 < 100ms（加 listdir 前后各测一次）。
-5. 连续跑 1 小时：`du -sh var/event_shots` 增长 ≈ 事件数 × 110KB，没有异常放大。
-6. 检测关闭 → 目录不增长；重新打开 → 恢复写图。
-7. 全程两路 `hstate=recording`、`detect.state=ready`；`recorder.py` 一行未改（`git diff --stat` 证明）。
+| # | 项 | 结果 |
+|---|---|---|
+| 1 | 部署与自检 | 0.9.128 → 0.9.129，0.1s 上线，九项自检全 OK（端口 18085、事件索引 200 条 / 2 天、凭证 401） |
+| 2 | 真事件自动出图 | 14:58:45 的 `cam-test01` AI 事件自动带 `shot{at:14:58:55, offset:9.3}`；GET `/api/events/<id>/shot` → **200 `image/jpeg` 145077 字节**，`ffprobe` **1280×720**，`file` 认成 JPEG |
+| 3 | 缓存 | `ETag: "145855_324.jpg-145077"`，带 `If-None-Match` 二次请求 → **304** |
+| 4 | 没有图 | 旧事件 → **404 JSON** `{"ok":false,"error":"这条事件没有快照"}`，列表 `shot: null`；删掉图之后立刻回到 404（不退回当前快照） |
+| 5 | 列表耗时 | `limit=200` 三次：145 / 90 / 91 ms（200 条跨 4 天 2 路，只 listdir 两个目录） |
+| 6 | 检测开关联动 | 关掉检测 43 秒：`written` 3 → 3、目录不增长、`state=disabled`；重开后 3 → **5** 张，`state=ready` |
+| 7 | 限流与占用 | `rate_limited=9`（一条长事件在 30 秒限流下只收几张，不是每拍一张）；`bytes` ≈ 1MB / 5 张（约 140KB 一张） |
+| 8 | 录像未受影响 | 全程两路 `hstate=recording`（age 0~2）；`git diff --stat -- recorder.py` **为空**（一行未改） |
+| 9 | 部署产物核对 | 线上 `ui/index.html` 有 `evthumb` ×2 与 `evShotHtml`，`server/nvr_slim.py` 有 8 处 `event_shot`，`runtime.py` 为 0.9.129 |
 
 ### 故意不做（记在这里，不许悄悄合入）
 
@@ -1479,8 +1492,10 @@ var/event_shots/<cam>/<YYYY-MM-DD>/<HHMMSS>_<mmm>.jpg
 评审 P3 明确不建议投入：人脸识别、车牌识别、自定义模型训练、复杂多用户权限、实时滤镜。
 理由：模型依赖、硬件兼容、隐私与维护成本远超收益，现阶段先把「事件发生 → 找到录像」做透。
 
-**剩余候选（批次 11 起，按此顺序取）**：
-`事件快照`（已立项批次 11）、`模型版本管理与效果对比`（缺对照物，挂着）。
+**剩余候选（批次 12 起）**：
+`模型版本管理与效果对比`（仍缺第二份模型与标注样本，挂了四轮）、
+`快照的四个延伸`（移动侦测快照 / 点图放大 / 图上画框 / 服务端小图 —— 都写在
+批次 11「故意不做」里，按需再取）。
 - 「模型版本管理」仍未做：只有一份 `yolo11n.onnx`、没有第二份模型与标注样本，
   「效果对比」没有对照物就只剩观感。要做先解决"第二份模型从哪来"。
 - ~~「include 区」~~ → **批次 10 已交付**（0.9.128）。它确实是新语义而不是补漏：
