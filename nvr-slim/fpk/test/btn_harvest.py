@@ -170,6 +170,9 @@ PICKERS = {
     "snapshot_interval": lambda cur, _c, _x: _pair(
         _alt_num(cur, (5, 6, 7), 1, 10)),      # 服务端夹取 1~10
     "cleanup_at": _pick_cleanup_at,
+    # 空间预警阈值：只在合理范围里换，避开 0（0 是"关闭预警"，不是"换个值"）
+    "space_warn_gb": lambda cur, _c, _x: _pair(
+        _alt_num(cur, (35, 8, 45), 1, 2000)),
     "record_frag": _flip_bool,
     "link_mode": _enum_alt(("live", "scheduled")),
     "clip_style": _enum_alt(("join", "split")),

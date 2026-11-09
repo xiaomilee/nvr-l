@@ -36,6 +36,7 @@ import mimetypes
 import os
 import re
 import select
+import shutil
 import signal
 import stat
 import subprocess
@@ -72,6 +73,7 @@ import redact  # noqa: E402
 import event  # noqa: E402
 import event_index  # noqa: E402
 import export  # noqa: E402
+import space  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
 # 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
@@ -95,6 +97,9 @@ STATE = {
     "detect_device": None,
     # 事件快照（0.9.129）：ShotStore 或 None。None = 不存图（与 0.9.128 同行为）
     "shots": None,
+    # 空间预警结论（0.9.131）：监控线程每 10 分钟更新一次，/api/status 只读它。
+    # 空 dict = 还没算过（启动后 20 秒内），前端按"未知"处理，不显示红条。
+    "space": {},
     "shutdown": False,
 }
 
@@ -2190,6 +2195,10 @@ def recordings_payload(force=False):
 # 结果带时间戳缓存，30 分钟内最多重算一次；只有打开诊断页且缓存过期才扫盘 ——
 # 直播、回放、其它设置页都不会触发。手动「立即重算」走 force。
 STORAGE_TTL = 1800.0
+# 存储统计缓存格式版本。0.9.131 起缓存里多了「每天写了多少」（`_kind`）；
+# 旧缓存没有这一层，拿它算预警会得出 rate=0 → "空间状态未知"，而且要等
+# 半小时 TTL 才自愈。所以认版本号：不匹配就重扫一次，一次就够。
+STORAGE_CACHE_V = 2
 
 
 def storage_cache_path():
@@ -2208,19 +2217,52 @@ def _dir_bytes(path):
     return total
 
 
-def _sum_cam_bytes(root, names, sub=""):
-    """按「日期/文件名」去重后求和 —— 旧 id 目录与新名称目录可能同时存在。"""
+def _sum_cam_days(root, names, sub=""):
+    """按「日期/文件名」去重后**按天**求和 —— 旧 id 目录与新名称目录可能同时存在。
+
+    0.9.131 起这是唯一口径：存储卡上的总量与预警用的"每天写了多少"来自
+    同一次扫描。以前总量走一个函数、速率另扫一遍，升级后新旧目录并存时
+    两边的去重规则一旦不一致，就会出现"占用 35 GB、每天写 60 GB"这种
+    自己都解释不了的数。
+    """
     seen = {}
     for dn in names:
         base = os.path.join(root, sub, dn) if sub else os.path.join(root, dn)
         for day, files in _scan_day_dirs(base).items():
             for x in files:
                 seen[(day, x["n"])] = x["b"]
-    return sum(seen.values())
+    out = {}
+    for (day, _n), b in seen.items():
+        out[day] = out.get(day, 0) + b
+    return out
+
+
+def _sum_cam_bytes(root, names, sub=""):
+    return sum(_sum_cam_days(root, names, sub).values())
+
+
+def _disk_bytes(path):
+    """录像目录所在分区的 (剩余, 总容量)，单位字节。读不到回 (0, 0)。
+
+    为什么不复用 sysinfo.disk：它按 GB 取一位小数返回，预警要拿它反算
+    `free / rate` 会把 0.05 GB 的误差放大成"少半天"。这里一次 statvfs 就够，
+    而且和页面显示的 GB 数出自同一处，不会出现"卡片说剩 7.6、预警说剩 7.1"。
+    """
+    try:
+        u = shutil.disk_usage(path)
+        return int(u.free), int(u.total)
+    except OSError:
+        return 0, 0
 
 
 def storage_usage(force=False):
-    """每路摄像头的全时 / 缩时占用 + 磁盘总量。带缓存，force=True 强制重算。"""
+    """每路摄像头的全时 / 归档 / 缩时占用 + 每日字节 + 磁盘总量。
+
+    缓存 30 分钟（`force=True` 强制重算）：扫的是目录元数据，几万次 stat
+    对 NAS 不算便宜，而占用曲线半小时变不了多少。0.9.131 起空间预警复用
+    这份缓存 —— 预警线程 10 分钟问一次，真正扫盘的节奏仍由 TTL 决定，
+    不会因为"多了个预警"把盘扫热。
+    """
     now = time.time()
     cache = None
     try:
@@ -2229,6 +2271,7 @@ def storage_usage(force=False):
     except (OSError, ValueError):
         cache = None
     fresh = (isinstance(cache, dict)
+             and cache.get("v") == STORAGE_CACHE_V
              and now - float(cache.get("at") or 0) < STORAGE_TTL)
     if cache and fresh and not force:
         return _storage_payload(cache, cached=True)
@@ -2236,13 +2279,16 @@ def storage_usage(force=False):
     per = {}
     for c in cameras():
         names = cam_storage_dirs(c)
-        per[c["id"]] = {
-            "name": c["name"],
-            "full": _sum_cam_bytes(root, names),
-            "archive": _sum_cam_bytes(root, names, "_archive"),
-            "clip": _sum_cam_bytes(root, names, "_clip"),
-        }
-    data = {"at": now, "root": root, "cams": per}
+        entry = {"name": c["name"], "full": 0, "archive": 0, "clip": 0,
+                 "days": {}}
+        for kind, sub in (("full", ""), ("archive", "_archive"), ("clip", "_clip")):
+            d = _sum_cam_days(root, names, sub)
+            entry[kind] = sum(d.values())
+            entry.setdefault("_kind", {})[kind] = d
+            for day, b in d.items():
+                entry["days"][day] = entry["days"].get(day, 0) + b
+        per[c["id"]] = entry
+    data = {"v": STORAGE_CACHE_V, "at": now, "root": root, "cams": per}
     try:
         tmp = storage_cache_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -2253,6 +2299,42 @@ def storage_usage(force=False):
     return _storage_payload(data, cached=False)
 
 
+def _merge_days(per, key):
+    """多路按天合并：{日期: 字节}。用于「整块盘每天写多少」。"""
+    out = {}
+    for v in (per or {}).values():
+        for day, b in ((v or {}).get(key) or {}).items():
+            try:
+                out[day] = out.get(day, 0) + int(b or 0)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _merge_kind_days(per, kind):
+    """多路某一层（全时/归档/缩时）按天合并 —— 预警要的是分层的速率。"""
+    out = {}
+    for v in (per or {}).values():
+        for day, b in (((v or {}).get("_kind") or {}).get(kind) or {}).items():
+            try:
+                out[day] = out.get(day, 0) + int(b or 0)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _recent_days(days, keep=30):
+    """只留最近 30 天（按日期字符串排序即可，格式固定 YYYY-MM-DD）。
+
+    30 天足够画趋势与算中位数；设备跑了两年时把全部日期塞进 JSON 会让
+    这个接口的响应从几 KB 涨到几百 KB，而其中 99% 没人看。
+    """
+    if not isinstance(days, dict):
+        return {}
+    ks = sorted(k for k in days if isinstance(k, str) and len(k) == 10)[-keep:]
+    return dict((k, days[k]) for k in ks)
+
+
 def _storage_payload(data, cached):
     cams = data.get("cams") or {}
     full = sum(int(v.get("full") or 0) for v in cams.values())
@@ -2260,13 +2342,20 @@ def _storage_payload(data, cached):
     clip = sum(int(v.get("clip") or 0) for v in cams.values())
     # 台账单列：体积是 KB 级，但用户关心它到底占没占地方（答：几乎不占）
     ledger = _dir_bytes(os.path.join(data.get("root") or record_dir(), "_ledger"))
-    free, total = sysinfo.disk(data.get("root") or record_dir())
-    return {
+    root = data.get("root") or record_dir()
+    free_b, total_b = _disk_bytes(root)
+    free = round(free_b / 1073741824.0, 1) if total_b > 0 else None
+    total = round(total_b / 1073741824.0, 1) if total_b > 0 else None
+    days = _merge_days(cams, "days")
+    # 分层的每日字节：预警必须分层的速率（归档只装活动片段，体积远小于全时）
+    kind_days = dict((kind, _merge_kind_days(cams, kind))
+                     for kind in ("full", "archive", "clip"))
+    body = {
         "ok": True,
         "cached": bool(cached),
         "at": int(data.get("at") or 0),
         "ttl": int(STORAGE_TTL),
-        "root": data.get("root") or record_dir(),
+        "root": root,
         "used": full + arch + clip,
         "full": full,
         "archive": arch,
@@ -2274,6 +2363,7 @@ def _storage_payload(data, cached):
         "ledger": ledger,
         "disk_free_gb": free,
         "disk_total_gb": total,
+        "days": _recent_days(days),
         "cameras": [dict(id=cid, name=v.get("name") or cid,
                          full=int(v.get("full") or 0),
                          archive=int(v.get("archive") or 0),
@@ -2282,12 +2372,128 @@ def _storage_payload(data, cached):
                                + int(v.get("clip") or 0))
                     for cid, v in cams.items()],
     }
+    # 预警是这份统计的"结论"：数据已经在这儿了，再扫一遍盘没有意义。
+    # 算不出来也不许把整个存储接口拖垮 —— 统计数字是对的，预警是附属结论。
+    try:
+        body["space"] = space_eval(free_b, total_b, full + arch + clip, kind_days)
+    except Exception as e:
+        _record("空间预警计算失败（存储统计不受影响）：%r" % e)
+        body["space"] = {"level": "unknown", "reasons": [], "advice": "",
+                         "error": "预警计算失败"}
+    return body
+
+
+# ---------------------------------------------------------------- 空间预警（0.9.131）
+#
+# 结论由 `space.evaluate()` 算（纯函数，单测喂假数据），这里只负责三件事：
+# 把配置与清理状态补齐、把结果放进 STATE 给 /api/status 读、等级变化时记一条日志。
+# 线程每 10 分钟跑一次，但它拿的数据最多 30 分钟旧（存储统计的 TTL）——
+# 占用曲线不会十分钟变一个样，而"每 10 分钟全盘扫一遍"会把 NAS 的盘扫热。
+
+SPACE_INTERVAL = 600.0        # 监控线程多久算一次（秒）
+SPACE_FIRST_WAIT = 20.0       # 启动后先等取流/录制起来，别抢启动 IO
+
+
+def space_keep(cfg=None, cams=None):
+    """每层的保留天数（取所有摄像头里最大的那一份）。
+
+    取最大而不是取平均：只要有一路配了归档 30 天，整块盘就得按 30 天算 ——
+    预警回答的是"这块盘装不装得下现在的配置"，不是"其中一路装不装得下"。
+    归档只在真的会裁的时候计入（总闸关掉、或这路方案是 off 都不产归档），
+    否则拿 archive_days 当需求会算出一份根本不存在的占用。
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    cams = cams if cams is not None else cameras()
+    arch_on = bool(cfg.get("archive_enable", True))
+    try:
+        modes = archive_modes(cams, cfg)
+    except Exception:
+        modes = {}
+    keep = {"full": 1, "archive": 0, "clip": 0}
+    for c in cams:
+        cid = c.get("id") or c.get("name")
+        try:
+            ret = retention.camera_retention(c, c)
+        except Exception:
+            continue                        # 单路参数坏掉不拖垮整体判断
+        keep["full"] = max(keep["full"], int(ret["full_days"]))
+        keep["clip"] = max(keep["clip"], int(ret["clip_days"]))
+        if arch_on and str(modes.get(cid) or "virtual") != "off":
+            keep["archive"] = max(keep["archive"], int(ret["archive_days"]))
+    return keep
+
+
+def _cleanup_overdue_h(cfg):
+    """今天的清理该跑而没跑时，晚了多少小时；没到点 / 已经跑过 → None。
+
+    服务刚起来的前 15 分钟一律回 None：`cleanup_loop` 每 30 秒问一次"到点了吗"，
+    开机（尤其午后开机）时它还没来得及跑，这时候报"清理晚了 14 小时"是纯噪声，
+    而且会被写进日志、发到页面上，用户第一次打开就看见一条假告警。
+    """
+    if time.time() - float(STATE.get("started_at") or 0) < 900:
+        return None
+    at = (cfg or {}).get("cleanup_at") or "03:00"
+    try:
+        last = load_cleanup_state().get("date")
+    except Exception:
+        return None
+    try:
+        if not retention.due(last, at):
+            return None
+        now = datetime.now()
+        hh, mm = [int(x) for x in retention.parse_hhmm(at).split(":")]
+        at_dt = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        return max(0.0, (now - at_dt).total_seconds() / 3600.0)
+    except Exception:
+        return None
+
+
+def space_eval(free_b, total_b, used_b, kind_days):
+    """把"容量 + 分层每日字节"交给 space.evaluate，配置与清理状态在这里补齐。"""
+    cfg = runtime.load_config(STATE["var_dir"]) or {}
+    return space.evaluate(
+        free_b, total_b, used_b, kind_days, space_keep(cfg),
+        warn_gb=space.clamp_warn_gb(cfg.get("space_warn_gb")),
+        cleanup_overdue_h=_cleanup_overdue_h(cfg),
+        cleanup_at=cfg.get("cleanup_at") or "03:00")
+
+
+def space_tick(force=False):
+    """算一次并更新 STATE。返回结论；算不出来时保留上一次的，不写空。"""
+    p = (storage_usage(force=force) or {}).get("space") or {}
+    if not p:
+        return STATE.get("space") or {}
+    prev = (STATE.get("space") or {}).get("level")
+    cur = p.get("level")
+    p = dict(p)
+    p["checked_at"] = int(time.time())
+    STATE["space"] = p
+    if cur != prev:
+        if cur in ("warn", "critical"):
+            log_line(space.text_of(p))
+        elif cur == "ok" and prev in ("warn", "critical"):
+            # 恢复也要记一条：否则日志里只有"告急"，看不出到底什么时候好的
+            log_line("空间预警解除：剩余 %s GB / %s GB"
+                     % (p.get("free_gb"), p.get("total_gb")))
+    return p
+
+
+def space_loop(stop_event):
+    """空间预警线程。为什么不在请求里算：/api/status 几秒被轮询一次
+    （fnOS 桌面壳也在问），在那上面扫盘等于把只读状态接口变成 IO 等待。"""
+    if stop_event.wait(SPACE_FIRST_WAIT):
+        return
+    while not stop_event.is_set():
+        try:
+            space_tick()
+        except Exception as e:        # 预警挂了不影响录制，也不该把线程打死
+            log_line("space warn error: %s" % e)
+        if stop_event.wait(SPACE_INTERVAL):
+            return
 
 
 def cleanup_state_path():
     return os.path.join(STATE["var_dir"], "cleanup-state.json")
-
-
 def archive_state_path():
     return os.path.join(STATE["var_dir"], "archive-state.json")
 
@@ -3049,6 +3255,10 @@ def status_payload():
                   else {"written": 0, "dropped": 0, "failed": 0, "bytes": 0,
                         "rate_limited": 0, "capped": 0, "queued": 0,
                         "running": False, "dir": ""}),
+        # 空间预警结论（0.9.131）：只读内存，监控线程 10 分钟更新一次。
+        # 这个接口几秒被轮询一次（fnOS 桌面壳也在问），绝不能在这里扫盘。
+        # 空 dict = 还没算过，前端按"未知"处理、不显示红条。
+        "space": STATE.get("space") or {},
         "notify": (STATE["notifier"].status() if STATE.get("notifier")
                    else {"recent": [], "pending": 0}),
         "scan_label": runtime.SCAN_LABEL.get(cfg.get("scan_mode"), "?"),
@@ -3309,9 +3519,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/health":
             # cams 一起给：设置页顶部的版本徽标已经在这里取数，
             # 首页想看「几路真在录」就不必再打一次 /api/status（那份重得多）。
+            # space 只给结论（等级 + 剩余），明细在 /api/storage/usage：
+            # 健康接口会被桌面壳高频轮询，不能塞大对象。
+            sp = STATE.get("space") or {}
             return self._send(200, {"ok": True, "version": runtime.VERSION,
                                     "uptime": int(time.time() - STATE["started_at"]),
                                     "cams": cams_counts(),
+                                    "space": {"level": sp.get("level") or "unknown",
+                                              "free_gb": sp.get("free_gb"),
+                                              "at": sp.get("checked_at")},
                                     "ffmpeg": runtime.find_ffmpeg(STATE["app_dir"]),
                                     "ffprobe": runtime.find_ffprobe(STATE["app_dir"])})
         if path == "/api/health/gaps":
@@ -4432,6 +4648,11 @@ def main():
     STATE["stop_event"] = stop_event
     threading.Thread(target=cleanup_loop, args=(stop_event,), daemon=True,
                      name="cleanup").start()
+    # 空间预警（0.9.131）：先等 20 秒再算第一次 —— 启动瞬间取流、录制、
+    # 检测都在抢 IO，这里再去扫一遍目录只会让首页更晚出画面。它只读元数据，
+    # 也不参与任何写入，挂了最多是诊断页少一行结论（space_loop 内部吞异常）。
+    threading.Thread(target=space_loop, args=(stop_event,), daemon=True,
+                     name="space").start()
 
     # ---------------------------------------------------------- 录制 + 衔接调度
     # _log_line 是模块级别名（定义处见上），这里不再建局部闭包——

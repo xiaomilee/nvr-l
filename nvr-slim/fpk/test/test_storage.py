@@ -158,6 +158,23 @@ class TestS3Cache(StorageCase):
         self.assertFalse(d["cached"])
         self.assertEqual(d["used"], 600)
 
+    def test_旧格式缓存要重算(self):
+        """0.9.130 的缓存里没有每日字节：拿它算预警会一直"未知"到 TTL 过期。
+
+        升级后第一次请求必须重扫（缓存格式版本不匹配），不能靠等半小时自愈。
+        """
+        self.full("车库入口", "2026-10-21", "a.mp4", 100)
+        nvr_slim.storage_usage(force=True)
+        p = nvr_slim.storage_cache_path()
+        with open(p, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        cache.pop("v", None)                 # 假装这是 0.9.130 写的
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+        d = nvr_slim.storage_usage()
+        self.assertFalse(d["cached"])
+        self.assertEqual(d["days"], {"2026-10-21": 100})
+
     def test_缓存文件写坏不影响统计(self):
         self.full("车库入口", "2026-10-21", "a.mp4", 100)
         with open(nvr_slim.storage_cache_path(), "w", encoding="utf-8") as f:
@@ -196,6 +213,65 @@ class TestS4Payload(StorageCase):
         self.assertEqual(d["used"], 0)
         self.assertEqual(len(d["cameras"]), 2)
         self.assertTrue(all(c["total"] == 0 for c in d["cameras"]))
+
+    def test_每日字节按天给出(self):
+        """`days` 是预警的输入：总量与速率必须来自同一次扫描（0.9.131）。"""
+        import time
+        d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+        d2 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 2 * 86400))
+        self.full("车库入口", d1, "a.mp4", 100)
+        self.full("车库入口", d2, "b.mp4", 60)
+        self.clip("车库入口", d1, "c.mp4", 40)
+        d = nvr_slim.storage_usage(force=True)
+        # 同一天的全时 + 缩时合到一起（预警关心的是"这天写了多少"）
+        self.assertEqual(d["days"][d1], 140)
+        self.assertEqual(d["days"][d2], 60)
+
+    def test_每日字节也去重旧目录(self):
+        import time
+        d1 = time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))
+        self.full("车库入口", d1, "a.mp4", 100)
+        self.full("cam-01", d1, "a.mp4", 100)      # 同一批文件出现在旧 id 目录
+        d = nvr_slim.storage_usage(force=True)
+        self.assertEqual(d["days"][d1], 100)
+
+    def test_只回最近三十天(self):
+        """设备跑久了不该把这个接口撑成几百 KB。"""
+        for i in range(1, 41):
+            day = "2026-%02d-%02d" % (1 + (i - 1) // 28, 1 + (i - 1) % 28)
+            self.full("车库入口", day, "a.mp4", 1)
+        d = nvr_slim.storage_usage(force=True)
+        self.assertEqual(len(d["days"]), 30)
+
+    def test_预警块随统计一起回来(self):
+        """预警复用这份统计，不另扫一次盘；字段名是接口契约。"""
+        d = nvr_slim.storage_usage(force=True)
+        sp = d["space"]
+        for k in ("level", "free_gb", "total_gb", "rate_gb", "need_gb",
+                  "headroom_gb", "warn_gb", "reasons", "advice"):
+            self.assertIn(k, sp)
+        self.assertIn(sp["level"], ("ok", "warn", "critical", "unknown", "off"))
+        # 一条录像都没有 → 没有速率 → 只能说"未知"，不许编一个"还能录 N 天"
+        self.assertEqual(sp["level"], "unknown")
+        self.assertEqual([r["code"] for r in sp["reasons"]], ["no_rate"])
+        self.assertIsNone(sp["suggest_days"])
+
+    def test_有数据之后才给结论(self):
+        """有速率就照实算（哪怕很小）：不能永远停在"未知"。"""
+        self.full("车库入口", "2026-10-21", "a.mp4", 100)
+        sp = nvr_slim.storage_usage(force=True)["space"]
+        self.assertIn(sp["level"], ("ok", "warn", "critical"))
+        self.assertIsNotNone(sp["rate_gb"])
+        self.assertIsNotNone(sp["suggest_days"])
+
+    def test_阈值改成零就关闭(self):
+        """配置键 space_warn_gb 真的被读到：0 = off，不是被 `or 20` 顶掉。"""
+        import json as _json
+        with open(os.path.join(self.var, "config.json"), "w", encoding="utf-8") as f:
+            _json.dump({"space_warn_gb": 0}, f)
+        d = nvr_slim.storage_usage(force=True)
+        self.assertEqual(d["space"]["level"], "off")
+        self.assertEqual(d["space"]["warn_gb"], 0)
 
     def test_磁盘容量透传(self):
         d = nvr_slim.storage_usage(force=True)

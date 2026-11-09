@@ -93,6 +93,9 @@ if [ -n "$NODE" ]; then
   # 画面区域：忽略区与只统计区互不覆盖、清洗口径与服务端一致、区外计数上诊断页（0.9.128）
   echo "== 画面区域 =="
   "$NODE" "$ROOT/test/ui/masks.test.js" || exit 1
+  # 空间预警：等级只由服务端定、该出现的位置都出现、ok/off 时一句都不许多说（0.9.131）
+  echo "== 空间预警 =="
+  "$NODE" "$ROOT/test/ui/space.test.js" || exit 1
   # 样式源拆分：五个源文件齐全、顺序固定、产物=按序拼接、部署仍是单文件（0.9.123）
   echo "== 样式源拆分 =="
   "$NODE" "$ROOT/test/ui/css_split.test.js" || exit 1

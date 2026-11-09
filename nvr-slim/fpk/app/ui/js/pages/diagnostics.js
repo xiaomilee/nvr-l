@@ -63,9 +63,16 @@ function diagSummary(){
         + (unk ? " · <span style='color:var(--warn)'>未知 " + unk + "</span>" : "");
     }
   }
+  /* 空间预警（0.9.131）：折叠态也要能看见 —— 用户平时不展开诊断区，
+     等展开才看见红条等于白做。这里只报等级，理由在展开后的存储卡里。 */
+  const sp = REC.space || {};
+  const spFlag = (sp.level === "critical" || sp.level === "warn")
+    ? " · <span style='color:" + (sp.level === "critical" ? "var(--danger)" : "var(--warn)")
+      + "'>" + (sp.level === "critical" ? "空间告急" : "空间偏低") + "</span>"
+    : "";
   return (ch.length ? (on + "/" + ch.length + " 路在录") : "录制状态未上报")
     + " · 剩余 " + (free == null ? "—" : fmtBytes(free * 1073741824))
-    + (bad ? " · " + bad + " 路异常" : " · 无异常") + det;
+    + (bad ? " · " + bad + " 路异常" : " · 无异常") + det + spFlag;
 }
 
 function renderDiagZone(){
@@ -84,6 +91,33 @@ function renderDiagZone(){
       + '<button class="minibtn" data-diagtoggle="1">查看</button></div>';
   }
   return h + '</div>';
+}
+
+/* 空间预警条（0.9.131）。前端**不重算等级**：阈值、大盘比例兜底、
+   "写入速率 × 保留天数"那一套规则只该有服务端一份实现，两处算早晚会打架
+   （0.9.128 的 norm_masks 分叉就是这么来的）。这里只负责把结论摆清楚。 */
+function spaceStrip(sp){
+  if(!sp || !sp.level || sp.level === "ok" || sp.level === "off") return "";
+  const lvl = sp.level;
+  const cls = lvl === "critical" ? "crit" : (lvl === "warn" ? "warn" : "unk");
+  const head = lvl === "critical" ? "空间告急"
+    : lvl === "warn" ? "空间偏低" : "空间状态未知";
+  const facts = [];
+  if(sp.free_gb != null)
+    facts.push("剩余 " + sp.free_gb + (sp.total_gb != null ? " / " + sp.total_gb : "") + " GB");
+  if(sp.rate_gb)
+    facts.push("每天约 " + sp.rate_gb + " GB（" + (sp.rate_label || "实测") + "）");
+  if(sp.need_gb != null && sp.keep_text)
+    facts.push("保留 " + sp.keep_text + " 约需 " + sp.need_gb + " GB");
+  if(sp.headroom_gb != null) facts.push("稳态余量 " + sp.headroom_gb + " GB");
+  const why = (sp.reasons || []).map(r=>r && r.text).filter(Boolean);
+  return '<div class="spw ' + cls + '">'
+    + '<div class="spwh"><b>' + esc(head) + '</b>'
+      + (facts.length ? '<span>' + esc(facts.join(" · ")) + '</span>' : "")
+    + '</div>'
+    + why.map(x=>'<div class="spwr">' + esc(x) + '</div>').join("")
+    + (sp.advice ? '<div class="spwa">建议：' + esc(sp.advice) + '</div>' : "")
+    + '</div>';
 }
 
 function cardStorage(){
@@ -146,6 +180,7 @@ function cardStorage(){
         + (at ? ('统计于 ' + pad(at.getHours()) + ":" + pad(at.getMinutes()) + ' · 非实时') : '')
         + '</span><button class="btnmini" id="btnStRefresh">立即重算</button></div>';
   }
+  body = spaceStrip(d && d.space) + body;
   return '<div class="dcard"><div class="dh">存储与占用'
     + '<span class="tg">非实时 · 按需统计</span>'
     + '<span class="rt">' + (STORAGE.loading ? "统计中…" : "全时 + 归档") + '</span></div>'
@@ -706,6 +741,23 @@ function bindSettings(body){
   body.querySelectorAll("[data-cleanat]").forEach(el=>{
     el.onclick = ()=>{ REC.cleanupAt = el.dataset.cleanat; renderCamTabs(); };
   });
+  /* 空间预警阈值（0.9.131）：改完立刻保存并重算一次，让用户当刻就能看到
+     红条变黄条（或消失）。不重算的话要等监控线程下一轮，最多 10 分钟，
+     用户会以为"改了没生效"。 */
+  const sw = body.querySelector("#spaceWarnGB");
+  if(sw){
+    sw.onchange = ()=>{
+      let v = Math.round(Number(sw.value));
+      if(!isFinite(v)) v = REC.spaceWarnGB == null ? 20 : REC.spaceWarnGB;
+      v = Math.max(0, Math.min(2000, v));
+      sw.value = v;
+      if(v === REC.spaceWarnGB) return;
+      REC.spaceWarnGB = v;
+      saveCfgSoon();
+      toast("toast2", v ? ("空间预警阈值已设为 " + v + " GB") : "空间预警已关闭");
+      setTimeout(()=>{ loadStorageUsage(true); }, 1500);
+    };
+  }
   /* 保存目录：默认锁定，点「修改」展开编辑框。
      「检测并保存」先让后端真实探测（存在性 + 写权限），通过才落配置 ——
      以前直接改文本框就把值推上去了，目录写不进要等录像失败才发现。 */

@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.130"
+VERSION = "0.9.131"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -30,6 +30,10 @@ DEFAULTS = {
     # 保存时由 /api/dir/check 真实探测存在性与写权限。
     "record_dir": "/vol1/@appshare/nvr-output",  # 录像与缩时片段根目录：fnOS 自动建目录+授权的共享目录
     "cleanup_at": "03:00",            # 每天清理过期录像的时刻（也是归档裁剪时刻）
+    # 空间预警阈值（0.9.131）：剩余空间低于这个值（GB）就预警，0 = 关闭。
+    # 大盘另有兜底：剩余不足总量 10% 也会提醒（见 space.LOW_RATIO）——
+    # 500 GB 的盘剩 18 GB 时只报"低于 20 GB"没有意义，比例才说明问题。
+    "space_warn_gb": 20,
     # ---- 归档裁剪（Aqara 式三层存储：全时短留 > 归档长留 > 台账永久） ----
     # 夜间任务固定顺序：先归档（临期全时里的活动窗口裁进 _archive），后清理
     # （顺序反了明天过期的日期就来不及归档，会被当普通过期目录删掉）。

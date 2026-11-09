@@ -42,6 +42,11 @@ const REC = {
      没拿到就显示 "—"（以前这里写死 473.9 / 336.0，换台机器照样报旧数字） */
   diskTotalGB:null,
   diskFreeGB:null,
+  /* 空间预警（0.9.131）：阈值进配置（space_warn_gb），结论由服务端算。
+     这里只存阈值与最近一次结论；页面不自己算等级 —— 阈值、比例兜底、
+     保留天数那一套规则只该有一份。 */
+  spaceWarnGB:20,
+  space:{},               // {level,free_gb,rate_gb,need_gb,headroom_gb,reasons,advice,…}
 };
 const REASONS = ["人形移动","车辆进出","画面变化","光照突变","物体遗留"];
 const DAYS = ["2026-10-14","2026-10-15","2026-10-16","2026-10-17","2026-10-18","2026-10-19","2026-10-20"];
@@ -333,6 +338,9 @@ function refreshRes(){
       RES.err = "";
       if(r.disk_free_gb != null) REC.diskFreeGB = +r.disk_free_gb;
       if(r.disk_total_gb != null) REC.diskTotalGB = +r.disk_total_gb;
+      /* 空间预警结论（0.9.131）：服务端监控线程算好的，这里只收下。
+         没算过时是空对象 —— 保持空，别拿默认值编一个"正常"或"告急"。 */
+      if(d.space) REC.space = d.space;
       syncDiagSum();
       updateLiveHeader();
       return RES;

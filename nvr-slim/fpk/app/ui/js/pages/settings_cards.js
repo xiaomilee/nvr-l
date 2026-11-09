@@ -161,6 +161,18 @@ function cardRec(){
       + '</div>'
     + '</div>'
     + '<div class="hint" style="margin-top:8px">按<b>日期整目录删</b>，不在录像时倒数计时。含 <code style="font-size:10.5px">.part</code> 或待压缩文件的目录会跳过并告警。</div>'
+    + '<div class="fld2" style="margin-top:12px">'
+      + '<label>空间预警阈值（剩余低于它就在诊断页提醒 · 0 = 关闭）</label>'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-top:2px">'
+        + '<input id="spaceWarnGB" type="number" inputmode="numeric" min="0" max="2000" step="1"'
+          + ' value="' + (REC.spaceWarnGB == null ? 20 : REC.spaceWarnGB) + '"'
+          + ' style="width:96px;height:34px;text-align:center;border:1px solid var(--line);'
+          + 'border-radius:8px;background:transparent;color:inherit;font-size:13.5px;padding:0 6px">'
+        + '<span style="color:var(--muted);font-size:12px">GB · 可填 0–2000</span>'
+      + '</div>'
+      + '<div class="hint" style="margin-top:6px">预警不只看剩余：还会拿<b>最近 7 个完整日实测的写入速度 × 保留天数</b>'
+        + '算出「这块盘稳态装不装得下」，装不下时说清最多能留几天。大盘另有兜底：剩余不足总量 10% 也会提醒。</div>'
+    + '</div>'
     + '<div class="cleanline" style="margin-top:9px"><i class="dot"></i><span>'
       + (REC.lastClean.at
           ? ('上次 ' + REC.lastClean.at.slice(5)

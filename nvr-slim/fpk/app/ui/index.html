@@ -918,6 +918,27 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .evnote .code{margin-left:5px;font-size:10px;color:var(--faint)}
 .eveof{padding:14px 0 4px;text-align:center;font-size:11.5px;color:var(--faint);line-height:1.6}
 
+/* 空间预警（0.9.131）：诊断存储卡顶部一条，直播页头部一个角标。
+   配色复用状态色（告急 danger / 偏低 warn / 未知 faint），不另造一套 ——
+   同一种"要注意"在页面上应该长成同一个颜色。 */
+.spw{margin:0 0 11px;padding:9px 11px;border-radius:11px;
+  border:1px solid var(--line);background:var(--fill);
+  font-size:11.5px;line-height:1.55;color:var(--text2)}
+.spw.crit{background:rgba(212,59,59,.08);border-color:rgba(212,59,59,.35)}
+.spw.warn{background:var(--warn-soft);border-color:rgba(196,124,0,.32)}
+.spw .spwh{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px}
+.spw .spwh b{font-size:12px;color:var(--text)}
+.spw.crit .spwh b{color:var(--danger)}
+.spw.warn .spwh b{color:var(--warn-fg)}
+.spw .spwh span{font-size:10.5px;color:var(--muted)}
+.spw .spwr{margin-top:5px;color:var(--text2)}
+.spw.crit .spwr{color:var(--danger)}
+.spw .spwa{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line);
+  font-size:11px;color:var(--muted)}
+.spchip{font-size:10.5px;font-weight:600}
+.spchip.critical{color:var(--danger)}
+.spchip.warn{color:var(--warn)}
+
 /* ============ player.css · 画面与时间 ============
    概览与全天时间轴、播放器、全屏、单路全屏、回放页垂直时间轴、全屏黑边轨。
    为什么把这些放一起：它们共享同一套"画面 + 时间"的坐标与手感（进度条命中区、
@@ -2018,6 +2039,11 @@ const REC = {
      没拿到就显示 "—"（以前这里写死 473.9 / 336.0，换台机器照样报旧数字） */
   diskTotalGB:null,
   diskFreeGB:null,
+  /* 空间预警（0.9.131）：阈值进配置（space_warn_gb），结论由服务端算。
+     这里只存阈值与最近一次结论；页面不自己算等级 —— 阈值、比例兜底、
+     保留天数那一套规则只该有一份。 */
+  spaceWarnGB:20,
+  space:{},               // {level,free_gb,rate_gb,need_gb,headroom_gb,reasons,advice,…}
 };
 const REASONS = ["人形移动","车辆进出","画面变化","光照突变","物体遗留"];
 const DAYS = ["2026-10-14","2026-10-15","2026-10-16","2026-10-17","2026-10-18","2026-10-19","2026-10-20"];
@@ -2309,6 +2335,9 @@ function refreshRes(){
       RES.err = "";
       if(r.disk_free_gb != null) REC.diskFreeGB = +r.disk_free_gb;
       if(r.disk_total_gb != null) REC.diskTotalGB = +r.disk_total_gb;
+      /* 空间预警结论（0.9.131）：服务端监控线程算好的，这里只收下。
+         没算过时是空对象 —— 保持空，别拿默认值编一个"正常"或"告急"。 */
+      if(d.space) REC.space = d.space;
       syncDiagSum();
       updateLiveHeader();
       return RES;
@@ -4745,6 +4774,10 @@ function pushCfg(){
   const body = { cameras: cams,
                  record_enable: !!REC.enabled, record_dir: REC.dir,
                  cleanup_at: REC.cleanupAt, snapshot_interval: SNAP.interval || 10,
+                 /* 空间预警阈值（0.9.131）：预警线程每 10 分钟现读一次配置，
+                    所以改完不用重启；0 = 关闭。不推上去的话界面上的输入框
+                    只是一个永远不生效的摆设 —— 与旧版「假设置」同一个坑。 */
+                 space_warn_gb: (REC.spaceWarnGB == null ? 20 : REC.spaceWarnGB),
                  /* 这三个以前只存在 localStorage 里，服务端根本没收到过 ——
                     recorder 的分片长度、link 的节奏都是读服务端配置的，
                     所以「改分片长度没反应」其实是推都没推。 */
@@ -4854,6 +4887,8 @@ function applyServerCfg(c){
      缺键时保持默认开 —— 不能因为读不到就当作用户关掉了。 */
   LK.frag = true;   /* 同上：封装固定分片 MP4，不采纳旧值 */
   if(c.cleanup_at) REC.cleanupAt = c.cleanup_at;
+  /* 阈值以服务端为准；0 是合法值（关闭预警），不能被 `|| 20` 顶掉 */
+  if(c.space_warn_gb != null) REC.spaceWarnGB = +c.space_warn_gb || 0;
   /* 判读条件回读：服务端 profiles 才是判定真正用的那份参数。
      正在编辑这一路时跳过，否则会把用户的草稿来源改掉。 */
   if(c.profiles && typeof c.profiles === "object"){
@@ -5531,11 +5566,21 @@ function syncLiveSub(){
       + (state.lrFs ? "" : '<span class="sep">|</span><span class="mono">'
          + (grid ? ("全部 " + total + " 路") : (esc(c.name) + " · " + esc(c.ch))) + '</span>')
       + '<span class="sep">|</span><span class="mono">' + (grid ? "子码流" : "子码流实时") + '</span>'
-      + rec;
+      + rec + spaceChip();
   }else{
     st.innerHTML = '<i style="background:#8b93a1"></i><b>已暂停</b>'
-      + '<span class="sep">|</span><span class="mono">画面冻结在最后一帧</span>';
+      + '<span class="sep">|</span><span class="mono">画面冻结在最后一帧</span>' + spaceChip();
   }
+}
+
+/* 空间预警角标（0.9.131）：直播页是打开最多的一页，盘快满了要在这里就看见，
+   不能等用户自己翻到设置 → 诊断。结论来自 /api/status 的 space（内存值），
+   等级由服务端定，这里只决定"要不要显示"。 */
+function spaceChip(){
+  const sp = REC.space || {};
+  if(sp.level !== "critical" && sp.level !== "warn") return "";
+  return '<span class="sep">|</span><span class="spchip ' + sp.level + '">'
+    + (sp.level === "critical" ? "空间告急" : "空间偏低") + '</span>';
 }
 
 /* 底部控制条上的播放/暂停按钮：与画面分离，不遮挡任何内容 */
@@ -5786,6 +5831,18 @@ function cardRec(){
       + '</div>'
     + '</div>'
     + '<div class="hint" style="margin-top:8px">按<b>日期整目录删</b>，不在录像时倒数计时。含 <code style="font-size:10.5px">.part</code> 或待压缩文件的目录会跳过并告警。</div>'
+    + '<div class="fld2" style="margin-top:12px">'
+      + '<label>空间预警阈值（剩余低于它就在诊断页提醒 · 0 = 关闭）</label>'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-top:2px">'
+        + '<input id="spaceWarnGB" type="number" inputmode="numeric" min="0" max="2000" step="1"'
+          + ' value="' + (REC.spaceWarnGB == null ? 20 : REC.spaceWarnGB) + '"'
+          + ' style="width:96px;height:34px;text-align:center;border:1px solid var(--line);'
+          + 'border-radius:8px;background:transparent;color:inherit;font-size:13.5px;padding:0 6px">'
+        + '<span style="color:var(--muted);font-size:12px">GB · 可填 0–2000</span>'
+      + '</div>'
+      + '<div class="hint" style="margin-top:6px">预警不只看剩余：还会拿<b>最近 7 个完整日实测的写入速度 × 保留天数</b>'
+        + '算出「这块盘稳态装不装得下」，装不下时说清最多能留几天。大盘另有兜底：剩余不足总量 10% 也会提醒。</div>'
+    + '</div>'
     + '<div class="cleanline" style="margin-top:9px"><i class="dot"></i><span>'
       + (REC.lastClean.at
           ? ('上次 ' + REC.lastClean.at.slice(5)
@@ -7475,9 +7532,16 @@ function diagSummary(){
         + (unk ? " · <span style='color:var(--warn)'>未知 " + unk + "</span>" : "");
     }
   }
+  /* 空间预警（0.9.131）：折叠态也要能看见 —— 用户平时不展开诊断区，
+     等展开才看见红条等于白做。这里只报等级，理由在展开后的存储卡里。 */
+  const sp = REC.space || {};
+  const spFlag = (sp.level === "critical" || sp.level === "warn")
+    ? " · <span style='color:" + (sp.level === "critical" ? "var(--danger)" : "var(--warn)")
+      + "'>" + (sp.level === "critical" ? "空间告急" : "空间偏低") + "</span>"
+    : "";
   return (ch.length ? (on + "/" + ch.length + " 路在录") : "录制状态未上报")
     + " · 剩余 " + (free == null ? "—" : fmtBytes(free * 1073741824))
-    + (bad ? " · " + bad + " 路异常" : " · 无异常") + det;
+    + (bad ? " · " + bad + " 路异常" : " · 无异常") + det + spFlag;
 }
 
 function renderDiagZone(){
@@ -7496,6 +7560,33 @@ function renderDiagZone(){
       + '<button class="minibtn" data-diagtoggle="1">查看</button></div>';
   }
   return h + '</div>';
+}
+
+/* 空间预警条（0.9.131）。前端**不重算等级**：阈值、大盘比例兜底、
+   "写入速率 × 保留天数"那一套规则只该有服务端一份实现，两处算早晚会打架
+   （0.9.128 的 norm_masks 分叉就是这么来的）。这里只负责把结论摆清楚。 */
+function spaceStrip(sp){
+  if(!sp || !sp.level || sp.level === "ok" || sp.level === "off") return "";
+  const lvl = sp.level;
+  const cls = lvl === "critical" ? "crit" : (lvl === "warn" ? "warn" : "unk");
+  const head = lvl === "critical" ? "空间告急"
+    : lvl === "warn" ? "空间偏低" : "空间状态未知";
+  const facts = [];
+  if(sp.free_gb != null)
+    facts.push("剩余 " + sp.free_gb + (sp.total_gb != null ? " / " + sp.total_gb : "") + " GB");
+  if(sp.rate_gb)
+    facts.push("每天约 " + sp.rate_gb + " GB（" + (sp.rate_label || "实测") + "）");
+  if(sp.need_gb != null && sp.keep_text)
+    facts.push("保留 " + sp.keep_text + " 约需 " + sp.need_gb + " GB");
+  if(sp.headroom_gb != null) facts.push("稳态余量 " + sp.headroom_gb + " GB");
+  const why = (sp.reasons || []).map(r=>r && r.text).filter(Boolean);
+  return '<div class="spw ' + cls + '">'
+    + '<div class="spwh"><b>' + esc(head) + '</b>'
+      + (facts.length ? '<span>' + esc(facts.join(" · ")) + '</span>' : "")
+    + '</div>'
+    + why.map(x=>'<div class="spwr">' + esc(x) + '</div>').join("")
+    + (sp.advice ? '<div class="spwa">建议：' + esc(sp.advice) + '</div>' : "")
+    + '</div>';
 }
 
 function cardStorage(){
@@ -7558,6 +7649,7 @@ function cardStorage(){
         + (at ? ('统计于 ' + pad(at.getHours()) + ":" + pad(at.getMinutes()) + ' · 非实时') : '')
         + '</span><button class="btnmini" id="btnStRefresh">立即重算</button></div>';
   }
+  body = spaceStrip(d && d.space) + body;
   return '<div class="dcard"><div class="dh">存储与占用'
     + '<span class="tg">非实时 · 按需统计</span>'
     + '<span class="rt">' + (STORAGE.loading ? "统计中…" : "全时 + 归档") + '</span></div>'
@@ -8118,6 +8210,23 @@ function bindSettings(body){
   body.querySelectorAll("[data-cleanat]").forEach(el=>{
     el.onclick = ()=>{ REC.cleanupAt = el.dataset.cleanat; renderCamTabs(); };
   });
+  /* 空间预警阈值（0.9.131）：改完立刻保存并重算一次，让用户当刻就能看到
+     红条变黄条（或消失）。不重算的话要等监控线程下一轮，最多 10 分钟，
+     用户会以为"改了没生效"。 */
+  const sw = body.querySelector("#spaceWarnGB");
+  if(sw){
+    sw.onchange = ()=>{
+      let v = Math.round(Number(sw.value));
+      if(!isFinite(v)) v = REC.spaceWarnGB == null ? 20 : REC.spaceWarnGB;
+      v = Math.max(0, Math.min(2000, v));
+      sw.value = v;
+      if(v === REC.spaceWarnGB) return;
+      REC.spaceWarnGB = v;
+      saveCfgSoon();
+      toast("toast2", v ? ("空间预警阈值已设为 " + v + " GB") : "空间预警已关闭");
+      setTimeout(()=>{ loadStorageUsage(true); }, 1500);
+    };
+  }
   /* 保存目录：默认锁定，点「修改」展开编辑框。
      「检测并保存」先让后端真实探测（存在性 + 写权限），通过才落配置 ——
      以前直接改文本框就把值推上去了，目录写不进要等录像失败才发现。 */

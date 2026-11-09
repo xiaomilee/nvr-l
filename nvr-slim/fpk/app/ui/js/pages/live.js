@@ -54,6 +54,10 @@ function pushCfg(){
   const body = { cameras: cams,
                  record_enable: !!REC.enabled, record_dir: REC.dir,
                  cleanup_at: REC.cleanupAt, snapshot_interval: SNAP.interval || 10,
+                 /* 空间预警阈值（0.9.131）：预警线程每 10 分钟现读一次配置，
+                    所以改完不用重启；0 = 关闭。不推上去的话界面上的输入框
+                    只是一个永远不生效的摆设 —— 与旧版「假设置」同一个坑。 */
+                 space_warn_gb: (REC.spaceWarnGB == null ? 20 : REC.spaceWarnGB),
                  /* 这三个以前只存在 localStorage 里，服务端根本没收到过 ——
                     recorder 的分片长度、link 的节奏都是读服务端配置的，
                     所以「改分片长度没反应」其实是推都没推。 */
@@ -163,6 +167,8 @@ function applyServerCfg(c){
      缺键时保持默认开 —— 不能因为读不到就当作用户关掉了。 */
   LK.frag = true;   /* 同上：封装固定分片 MP4，不采纳旧值 */
   if(c.cleanup_at) REC.cleanupAt = c.cleanup_at;
+  /* 阈值以服务端为准；0 是合法值（关闭预警），不能被 `|| 20` 顶掉 */
+  if(c.space_warn_gb != null) REC.spaceWarnGB = +c.space_warn_gb || 0;
   /* 判读条件回读：服务端 profiles 才是判定真正用的那份参数。
      正在编辑这一路时跳过，否则会把用户的草稿来源改掉。 */
   if(c.profiles && typeof c.profiles === "object"){
@@ -840,11 +846,21 @@ function syncLiveSub(){
       + (state.lrFs ? "" : '<span class="sep">|</span><span class="mono">'
          + (grid ? ("全部 " + total + " 路") : (esc(c.name) + " · " + esc(c.ch))) + '</span>')
       + '<span class="sep">|</span><span class="mono">' + (grid ? "子码流" : "子码流实时") + '</span>'
-      + rec;
+      + rec + spaceChip();
   }else{
     st.innerHTML = '<i style="background:#8b93a1"></i><b>已暂停</b>'
-      + '<span class="sep">|</span><span class="mono">画面冻结在最后一帧</span>';
+      + '<span class="sep">|</span><span class="mono">画面冻结在最后一帧</span>' + spaceChip();
   }
+}
+
+/* 空间预警角标（0.9.131）：直播页是打开最多的一页，盘快满了要在这里就看见，
+   不能等用户自己翻到设置 → 诊断。结论来自 /api/status 的 space（内存值），
+   等级由服务端定，这里只决定"要不要显示"。 */
+function spaceChip(){
+  const sp = REC.space || {};
+  if(sp.level !== "critical" && sp.level !== "warn") return "";
+  return '<span class="sep">|</span><span class="spchip ' + sp.level + '">'
+    + (sp.level === "critical" ? "空间告急" : "空间偏低") + '</span>';
 }
 
 /* 底部控制条上的播放/暂停按钮：与画面分离，不遮挡任何内容 */

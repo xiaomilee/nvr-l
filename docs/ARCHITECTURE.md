@@ -61,6 +61,7 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `link.py` | 衔接调度：两种入队节奏共用同一套消费端 | `Link.status()` `reconfigure()` |
 | `archive.py` | 归档裁剪：按台账活动窗口裁出浓缩片段、夜间连跑到待办清空 | `run_archive` `archive_sweep` |
 | `retention.py` | 每日定点清理：按日期整目录删、归档未完成硬闸门 | `run_cleanup` `parse_hhmm` |
+| `space.py` | 存储空间预警（纯函数）：按分层日速率与保留天数算稳态需求、定等级、给一条可执行建议 | `daily_rate` `rates_of` `evaluate` `text_of` |
 | `health.py` | 录像可信度：七态状态机、缺口四种洞位置 / 五条原因文案、覆盖率 | `state_of` `gaps_of` `gap_reason` `summarize` |
 | `notify.py` | Webhook 通知分发：入队 / cooldown / 三次指数退避 / 内存 recent | `Notifier.status()` `offer()` |
 | `notify_tpl.py` | 通知模板：按 webhook host 出各平台最小 body、变量插值、坏模板回退 | `render()` `platform_of()` |
@@ -104,7 +105,7 @@ LAN IP / `.local` / `.lan` / `.fnos.net`）。服务**不处理 CORS 预检**，
 | GET | `/api/export` | 按时间范围导出：已封口分片原样打包成 zip（chunked，边界多给的秒数写进包内 manifest） | `_export_download()`（3600） |
 | GET | `/api/archive` | 归档概览 | `archive_payload()` |
 | GET | `/api/archive/progress` | 归档进度（只回内存态，不扫盘） | `archive_progress()` |
-| GET | `/api/storage/usage` | 存储占用（30 分钟缓存） | `storage_usage()` |
+| GET | `/api/storage/usage` | 存储占用与空间预警（30 分钟缓存；`days` 近 30 天每日字节，`space` 预警块）；`?force=1` 强制重算 | `storage_usage()` `space_eval()` |
 | GET | `/api/record/probe` | 单路真实试录诊断（约 8 秒） | `_probe_one()` |
 | GET | `/api/record/parts` | 录像残片 | `parts_payload()` |
 | GET | `/api/record/file` | 分片视频，支持 `Range` 206 / `dl=1` / `remux=1` | `_record_file()`（3297） |
@@ -172,6 +173,28 @@ var/event_shots/<cam>/<日期>/<HHMMSS>_<mmm>.jpg   （独立单线程写，7 �
    ├──→ /api/events 每条补 shot{url,at,offset} → /api/events/<id>/shot（JPEG）
    └──→ 放大时一次 /api/events/<id>/shot?meta=1（框清单，几百字节）
 ```
+
+**空间预警（0.9.131）复用存储统计，不另扫一遍盘**：
+
+```
+storage_usage()   扫 <cam>/<日期>/ 目录元数据（30 分钟缓存）
+   │  per-cam {full, archive, clip, days{}} + 分层每日字节 _kind{}
+   ▼
+space_eval(free_b, total_b, used_b, kind_days)
+   │  space.daily_rate()  最近 7 个完整日的中位数（丢掉 0 字节的日子）
+   │  need   = Σ rate[kind] × 保留天数[kind]
+   │  other  = 总容量 − 剩余 − 录像实测占用
+   │  headroom = 总容量 − other − need
+   ▼
+level ∈ {ok, warn, critical, unknown, off} + reasons[] + advice（服务端出中文）
+   ├──→ /api/storage/usage.space   诊断页存储卡顶部那条
+   ├──→ /api/status.space          监控线程 10 分钟写一次，**只读内存**
+   └──→ /api/health.space{level,free_gb}   桌面壳高频轮询，只给结论
+```
+
+三条口径：**只读元数据**（不解码、不往录像目录写）、**算事实**
+（没有完整日就回 `unknown`，不编天数）、**只报告不处置**（自动删录像会
+让"空间紧张"改写事实数据，红线）。
 
 三条不能松的口径：**拍「当时」**（用源图 mtime，绝不拿当前快照充数）、
 **只加不改**（台账之后、独立线程、队列满就丢，`recorder.py` 一行不碰）、

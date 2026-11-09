@@ -127,6 +127,11 @@ ROWS = [
     _row("cleanup_at", "夜间任务时刻", "[data-cleanat]",
          "config.cleanup_at", (),
          note="只影响夜间定时任务，服务端没有「下次几点跑」的接口，只能验落盘"),
+    _row("space_warn_gb", "空间预警阈值", "#spaceWarnGB",
+         "config.space_warn_gb", ("status.space.warn_gb",),
+         note="status.space 是预警线程写进内存的结论（10 分钟一轮），改完立刻读会"
+              "还是上一轮的值；要当场验证看 /api/storage/usage 的 space.warn_gb，"
+              "它每次都按最新配置重算。0 = 关闭，coerce 的 int 分支不会把它顶成默认值"),
     _row("record_frag", "分片 MP4", "（UI 无入口，前端恒推 true）",
          "config.record_frag", (),
          note="/api/link 的 record 没有 frag 字段，reconfigure 只以重启进程间接体现；"
