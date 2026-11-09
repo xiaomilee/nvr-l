@@ -29,6 +29,7 @@
 | 7 | 0.9.125 | P2 · 推理设备：GPU 自动探测与自动回落 | **done** | 304a7c4 |
 | 8 | 0.9.126 | P2 · 事件检索：多机位 / 多类别 / 移动侦测 / 时间范围 / 最短时长 | **done** | f36af31 |
 | 9 | 0.9.127 | P2 · 按时间范围批量导出：分片原样打 zip + 包内 manifest / README | **done** | fef737f |
+| 10 | 0.9.128 | P2 · 检测只统计区：框中心落在区内才算目标，区外计数上诊断页 | **done** | 149dc1c |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
 
@@ -133,6 +134,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 27 | 11-09 09:35 | **批次 7 立项 + 全量收尾**（按用户「继续」取 P2 清单下一项）：`detect.device` 从「配置里的死键」变成真的接管推理后端——`probe_providers` 只认 onnxruntime 自报的可用后端、`pick_providers` 按 CUDA > TensorRT > ROCm 挑、GPU 建会话失败自动回落 CPU 并记原因；`Engine` 收 `device` 与 `ort_loader` 注入点，暴露 `device_status()`；`status_of` 透出 `device` 块；前端 `detDevOf()` 让标题栏跟实际后端走、诊断卡新增「推理设备」一行；文档 CONFIGURATION §4.1 / TROUBLESHOOTING §5.1 / CHANGELOG 同步 | 304a7c4 | **出包** `dist/nvr-0.9.125_x86.fpk` **101186255 字节** md5 `928ffaf2258323f54a5acabc8b7041dc`；闸门 validate 81 项、后端 **1250** 条（60 文件，新增 `test_detect_device.py` 26 条）、前端 detect 58（+14）/ 设置页 514 / 时间轴 70 / 日志 25+38 / 健康 30 / 凭证 11 / 请求层 31 / 事件 70 / 样式 28 / 脚本 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.125.json`），0.9.124→0.9.125 上线 0.1s、端口 18085、事件索引 190 条 / 2 天、通知历史 0 条、凭证 401；真机把 `detect.device` 改 `gpu` 实测：`requested=gpu / actual=cpu / fallback_reason=「请求 GPU，但 onnxruntime 没有 CUDA / Tensorrt / ROCM 后端（当前可用：AzureExecutionProvider, CPUExecutionProvider）」`、`state` 仍 `ready`、`avg_ms` 43；日志三条实证（「AI 推理设备改为 gpu，重建检测 worker」→ 回落原因 → 「改为 auto」）；两路 `hstate=recording`（age 1/0）、`record.enabled=True`、`confirm` 块未被覆盖；随后还原 `auto` 并复核；程序目录含 `pick_providers` / `engine_device` / `detDevOf` 新代码；**批次 7 标 done**，生产机 2.6 未碰 |
 | 28 | 11-09 10:05 | **批次 8 全量收尾**（按用户「立项」取 P2 下一项）：事件检索高级筛选。`event_index.query()` 增 `cams` IN / `cats` OR / `min_dur` / `motion_only`（单值 `cat`/`cam` 兼容）；`parse_cats()` 逗号多值 + `motion` 单独提取 + 未知词回 bad；`event.kind_of()` 一处判断，`kind` 进事件与索引，`summary_of()` 增 `motion` 计数；`/api/events` 收 `min_dur`/`motion`、参数错明确报错、`filters` 回显服务端实际用上的条件；前端机位/类别改多选 + 「移动侦测」+ 「更多筛选」（HH:MM / 最短时长 / 清空）+ 列表头写条件 | f36af31 | **出包** `dist/nvr-0.9.126_x86.fpk` **101191778 字节** md5 `4c7aa9b998d43381481ea0697709234d`；闸门 validate 81 项、后端 **1279** 条（61 文件，新增 `test_event_filter.py` 21 条 + `test_event_api.py` 8 条）、前端 events **91**（+21）/ detect 58 / 设置页 514 / 时间轴 70 / 样式 28 / 脚本 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.126.json`），0.9.125→0.9.126 上线 0.1s、端口 18085、事件索引 **196 条 / 2 天**、通知历史 0 条、凭证 401；真机 196 条事件验筛选：person 42 / vehicle 22 / 并集 **60**（=42+22−4，逐 id 校验并集恒等式）/ motion 440 且与 AI 零交集 / cam-test01 339、cam-test02 163 / min_dur=60 → 296 / `cat=dog` 与 `min_dur=ten` 均 `ok:false` 带可用值 / `09:00–10:00` 时间窗 12 条且 `filters.from` 回显；两路 `hstate=recording`（age 1/1）、`detect ready`；程序目录含 `kind_of` / `parse_cats` / `motion_only` / `evMoreBox`；**批次 8 标 done**，生产机 2.6 未碰 |
 | 29 | 11-09 10:35 | **批次 9 立项 + 全量收尾**（按用户「继续」取 P2 候选池）：按时间范围批量导出。候选池第一项「模型版本管理」仍缺第二份模型与标注样本，跳过；导出不是增强而是「找到 → 确认 → 带走」缺了最后一步——以前只能一片一片点 `dl=1`。新增 `export.py`（`select` 半开区间 / `totals` / `cap_problem` / `slug`+`folders` 同名避撞 / `manifest`+`readme` / `write_zip` / `Chunked`）；`_export_build()` 一处构建，`/api/export/plan`（`detail=1`）与 `/api/export`（chunked，`X-Export-Files`/`X-Export-Bytes`）共用；枚举复用 `_day_files()` 与事件定位同口径；只剩归档的日子回 `archive_only` 明说「不含归档」；前端 `pages/export.js` 文件页右上角「导出」（机位多选 + 时间范围，先计划再下载，日期跟 `state.daySel`，下载地址直接用服务端 `d.url`）| fef737f | **出包** `dist/nvr-0.9.127_x86.fpk` **101203350 字节** md5 `82e354685596b9b17ce016a44e5329b4`；闸门 validate **82** 项、后端 **1297** 条（62 文件，新增 `test_export.py` 18 条）、前端 export **26** / events 91 / detect 58 / 设置页 514 / 时间轴 70 / 日志 25+38 / 健康 30 / 凭证 11 / 请求层 31 / 事件 70 / 样式 28 / 脚本 **173** 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.127.json`），0.9.126→0.9.127 上线 0.1s、端口 18085、事件索引 200 条 / 2 天、通知历史 0 条、凭证 401；真机两路 40 分钟导出：计划 20 片 / **737580686 字节**、`head_extra_sec=180`，下载 HTTP 200 + `X-Export-Files=20`、22 条目、`testzip()` 通过、全 STORED、逐片字节与 manifest 全等、中文目录正常；错误路径（机位写错 / 空时段 / 4 小时两路 3.8 GB 超限）均给出明确原因；导出全程两路 `hstate=recording`（age 0~3）、日志有「导出：… 703.4 MB」；**批次 9 标 done**，生产机 2.6 未碰 |
+| 30 | 11-09 11:55 | **批次 10 立项 + 全量收尾**（按用户「继续」取 P2 候选池）：检测只统计区。候选池第一项「模型版本管理」仍缺第二份模型与标注样本，第三轮跳过。`detect.apply_regions()` 一处做「类别 → 忽略区 → 只统计区」，返回被挡掉的框数进 `per_cam.outside`；`nvr_slim.norm_masks()` 写盘与回显共用（只认整数与纯数字字符串）；前端第二张 16×9 画布（绿=只统计 / 琥珀=忽略，互相淡显）+ 两块清单各自清空 + 计数进标题；诊断页每路一行加「区外忽略 N」| 149dc1c | **出包** `dist/nvr-0.9.128_x86.fpk` **101208384 字节** md5 `832d3c9ec8ec1109e30aa51ce0ae4906`；闸门 validate **81** 项、后端 **1324** 条（63 文件，新增 `test_detect_include.py` 27 条）、前端 masks **27** / export 26 / events 91 / detect 58 / 设置页 514 / 时间轴 70 / 样式 28 / 脚本 173 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.128.json`）；真机：`include=[0,1,2]` 往返一致、脏值 `[-1,144,1.5,null,"7"]` 落成 `[7]`、诊断行「只统计区=1 格」、只统计区设 1 格后两轮 `cam-test01 outside=9` 而 `cam-test02 outside=0`、还原后两块皆空；全程两路 `hstate=recording`、`detect.state=ready`；**批次 10 标 done**，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -1229,6 +1231,74 @@ I/O，且切点仍只能落关键帧，收益不抵失真；② 导出归档片�
 
 ---
 
+## 批次 10 · 0.9.128 检测只统计区（第 30 轮立项并当日收尾）
+
+**为什么取这一项**：P2 候选池第一项是「模型版本管理与效果对比」，但仓库里仍只有
+一份 `yolo11n.onnx`、没有第二份模型与标注样本 —— 「效果对比」没有对照物就只剩观感，
+属于没有验收口径的功能，继续跳过（第三轮）。第二项「检测 include 区」才是真缺口：
+**忽略区只能解决「这块别算」，反过来的「只关心这块」一直没有入口**。用户在真机上
+的诉求很具体：院子摄像头画面里有半条马路和邻居走廊，只想数车道上的人车。
+
+**它不是「多区域配置」的补漏**：16×9 忽略区（`cam.masks.ignore`）从 0.9.x 起就
+在，检测与缩时都吃它、设置页也有编辑器。这次新增的是**新语义**（框中心必须落在
+区内），会碰判定口径与统计，所以要单独一批。
+
+**口径先定死**：
+- **空 include = 不限制**。默认必须与 0.9.127 逐字相同；老配置只有 `ignore`，
+  读上来 `include` 补成空数组，不是 `undefined`。
+- **框中心口径**，与忽略区同一套归一化坐标。重叠面积口径会出现「半个身子在区外
+  就不算」，画窄带覆盖走廊时很别扭；台账里还会出现「同一目标有时算有时不算」。
+- **忽略区优先**。两块重叠按忽略处理 —— 用户画了「别管这块」，不该因为另一块
+  「只看这块」被放回来。
+- **挡掉的框要记账**。区域画窄了，事件页会一片安静；那种「看起来对」的安静最危险。
+  `per_cam.outside` 按天累计，诊断页说「区外忽略 N」，用户才知道该放大区域。
+- **只影响 AI 识别**。移动侦测是像素差，没有「目标」这个概念，谈不上区内区外；
+  录像、快照、缩时完全不受影响（写进文档与代码注释，不悄悄扩大语义）。
+
+### 清单
+
+- [x] `detect.py`：`cells_to_rects()` 统一格号解码（`_ignore_rects` / `_include_rects`
+      共用）、`in_include()`（空=不限制）、`apply_regions()` 一处做「类别 → 忽略区 →
+      只统计区」并返回被挡掉的个数；坏框判「不在区内」而不抛异常（一路脏数据不许
+      带崩整轮）；`_blank()` 增 `outside`，新增 `_outside()` 按天累计，
+      `status()` 的 `per_cam` 透出 `outside`
+- [x] `nvr_slim.py`：新增 `norm_masks()`，**写盘与回显共用**（以前两处各写一份列表
+      推导，加新键必漏一处）；只认整数与纯数字字符串 —— `int(1.5)` 会静默变成 1、
+      `int(True)` 变成 1，前后端就会一个显示 12 格、一个只认 11 格；诊断导出每路
+      一行加「只统计区=N 格」
+- [x] 前端：`state.js` 的 `normMasks()` 收两块（去重 / 丢越界 / 升序，升序是为了
+      「换个顺序画同一块」不算改动）；`settings_editor.js` 在「检测」段加第二张
+      16×9 画布（绿=只统计，琥珀=忽略，两张画布互相淡显对方那块）、两块清单各自
+      能清空、计数进手风琴标题；只读摘要与 `settings_cards.js` 同时说两块
+- [x] 诊断页每路一行加「区外忽略 N」（读的是服务端 `per_cam.outside`，不是本地估）
+- [x] 测试：`test_detect_include.py` 27 条（格号解码 / 中心口径 / 空=不限制 /
+      忽略优先 / 类别优先不进区外计数 / 坏框不炸 / outside 记账 / 服务端强校）；
+      `test/ui/masks.test.js` 27 条（两块互不覆盖 / 清洗口径 / 清单与清空 /
+      诊断行 / `pushCfg` 真的带 masks），并接入 `build.sh`
+- [x] 文档：`ARCHITECTURE.md`（apply_regions 一处判定 + outside 口径）、
+      `USER_GUIDE.md`（画面区域两块的判定表与三条口径）、
+      `TROUBLESHOOTING.md` §6.0（「AI 不报事件」先分没看见 / 被挡 / 真没人）、
+      `CHANGELOG.md`（四个取舍 + 故意没做）、`README.md`
+- [x] 版本 0.9.128：五处 bump、出包、部署 152、真机验配置往返与脏值强校
+
+### 验收（152 真机）
+
+| 项 | 结果 |
+|---|---|
+| 部署 | 0.9.127 → 0.9.128，0.1s 上线，九项自检全 OK（端口 18085，事件索引 200 条 / 2 天，通知历史 0 条，凭证 401） |
+| 配置往返 | `include=[0,1,2]` 写入后回读逐字相同，`ignore` 未被吞 |
+| 脏值强校 | 提交 `[-1,144,1.5,null,"7"]` → 落盘 `include=[7]`，与前端清洗同结果 |
+| 诊断可读 | `/api/log/export` 每路一行出现「只统计区=1 格」，与配置一致 |
+| **真的在挡** | 只统计区设成 1 格后两轮检测：`cam-test01` `outside=9`、`cam-test02`（未设）`outside=0` —— 挡掉的是真实检出框，不是空转 |
+| 还原 | 两块都清空后配置回到 `{ignore:[],include:[]}` |
+| 录制未受影响 | 全程两路 `hstate=recording`（age 0~1），`detect.state=ready` |
+
+**故意没做的（记进候选池，不是漏）**：只统计区不管移动侦测 —— 像素差没有「目标」，
+要管就得改成区域裁剪式差分（多一份画面拷贝与阈值口径）或重写 pixel 判定，
+没人提过这个需求。
+
+---
+
 ## 不在本轮范围
 
 评审 P3 明确不建议投入：人脸识别、车牌识别、自定义模型训练、复杂多用户权限、实时滤镜。
@@ -1238,9 +1308,9 @@ I/O，且切点仍只能落关键帧，收益不抵失真；② 导出归档片�
 `模型版本管理与效果对比`、`检测 include 区（只统计区域内的目标）`、`导出的三个延伸`。
 - 「模型版本管理」仍未做：只有一份 `yolo11n.onnx`、没有第二份模型与标注样本，
   「效果对比」没有对照物就只剩观感。要做先解决"第二份模型从哪来"。
-- 「include 区」是在批次 8 立项时厘清的真缺口：**忽略区（16×9 格）早已交付**
-  （`cam.masks.ignore`，检测与缩时都吃它，设置页有编辑器），而"只统计框内的目标"
-  是新语义，不是补漏。要动它会碰到 `detect` 的判定口径与台账写入，得单独一批。
+- ~~「include 区」~~ → **批次 10 已交付**（0.9.128）。它确实是新语义而不是补漏：
+  忽略区（`cam.masks.ignore`）管「这块别算」，include 区（`cam.masks.include`）管
+  「只算这块」，两块重叠时忽略优先。只影响 AI 识别，移动侦测仍是整幅画面的像素差。
 - 「按时间范围批量导出」已在批次 9 交付（分片原样打 zip）。三个**故意没做**的延伸
   记在这里：① 边界精确裁剪（要临时文件 + 二倍 I/O，且切点仍只能落关键帧）；
   ② 导出归档片段（归档是重编码产物，与"原样交接"是两件事）；
