@@ -1,4 +1,4 @@
-# 排障手册（0.9.124）
+# 排障手册（0.9.125）
 
 这份文档只写**能查到出处的**。每条命令、每个接口、每个状态值都指向真实代码位置，
 不写「大概试试重启」这类没有判据的动作。
@@ -154,9 +154,9 @@ curl -s -H "$H" "http://127.0.0.1:$PORT/api/config"           # 看 detect 块
 
 `/api/status` 的 `detect` 块由 `detect.status_of()` 一处判定，四档 state：
 `disabled / starting / unavailable / ready`；前端 `detStateZh()`
-（`settings_cards.js:304`）翻译成中文，`detHintOf()`（`:320`）按错误码给下一步。
+（`settings_cards.js:385`）翻译成中文，`detHintOf()`（`:401`）按错误码给下一步。
 
-十个错误码（`app/server/detect.py:127-136`）：
+十个错误码（`app/server/detect.py:145-154`）：
 
 | 码 | 含义 |
 |---|---|
@@ -176,6 +176,37 @@ curl -s -H "$H" "http://127.0.0.1:$PORT/api/config"           # 看 detect 块
 > `unknown` 不等于漏报，也不等于「没人来过」。`skip` 是取帧层
 > 「本轮没有新画面」的正常节拍错位，混进 `unknown` 会每两拍刷一次红。
 > 检测是二等公民：有界并发、队列满就丢这一拍，**绝不阻塞取帧与录像**。
+
+### 5.1 配了 GPU，诊断卡却说 CPU
+
+先看 `detect.device` 这个块（`/api/status` 里，0.9.125 起）：
+
+```bash
+curl -s -H "$H" "http://127.0.0.1:$PORT/api/status" \
+  | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["detect"]["device"], ensure_ascii=False, indent=1))'
+```
+
+| 字段 | 读法 |
+|---|---|
+| `requested` | 配置里要的是什么（`auto` / `cpu` / `gpu`） |
+| `actual` | 这次会话**真的**建在哪个后端：`cuda` / `tensorrt` / `rocm` / `cpu`；空串 = 还没加载模型 |
+| `providers` | 实际传给 onnxruntime 的列表，CPU 永远垫底（单算子不支持时落 CPU 算，不整帧失败） |
+| `available` | onnxruntime 自己报的可用后端，`fallback_reason` 的出处 |
+| `fallback_reason` | 非空就是**降级**：要么 `gpu` 挑不到后端，要么 GPU 建会话失败后用 CPU 重试成功 |
+
+三条判断：
+
+1. `requested=gpu` 且 `fallback_reason` 里写「没有 … 后端」——这台的
+   onnxruntime 是 CPU 版（随包就是 CPU wheel）。要 GPU 得换带 CUDA 的
+   onnxruntime，且驱动 / CUDA 版本要对得上；**不是配置写错了**。
+2. `fallback_reason` 里写「建会话失败：…」——后端在、但起不来，最常见是
+   `libcudnn.so` 缺失或版本不匹配。这时检测仍在跑（CPU），不会因为选 GPU 就停。
+3. `actual` 空、`state=ready` 以外的值——模型还没加载完，别急着判断设备。
+
+> 不用 GPU 也能跑：`auto` 在只有 CPU 后端的机器上就是 CPU，且**不算回落**，
+> 不会亮黄。显式选 `cpu` 同理 —— 那是你要的结果。
+> 改 `device` 后保存设置即可生效：服务端会重建检测 worker（只换检测线程，
+> 不碰取帧与录像）。
 
 ## 6. 回放黑屏 / 拖动卡顿
 

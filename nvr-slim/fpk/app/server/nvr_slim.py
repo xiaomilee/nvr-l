@@ -88,6 +88,9 @@ STATE = {
     "gpu_cache": None,
     "ffmpeg_bin": None,
     "ffprobe_bin": None,
+    # 当前检测 worker 用的推理设备（0.9.125）：配置一变就重建 worker，
+    # 这个值只用于判断"要不要重建"，不是给人看的。
+    "detect_device": None,
     "shutdown": False,
 }
 
@@ -2381,7 +2384,11 @@ def _make_detect_worker(cfg):
     ff = STATE.get("ffmpeg_bin")
     if not ff:
         return None                # 没 ffmpeg 检测不了：状态行如实说明
-    engine = detect.Engine(STATE["app_dir"], STATE["var_dir"], log=_log_line)
+    det = cfg.get("detect") if isinstance(cfg.get("detect"), dict) else {}
+    # 推理设备（0.9.125）：Engine 只在开会话时读一次，所以放在构造参数里。
+    # 取的是 norm_detect 强校后的值（写错已按 auto 处理）。
+    engine = detect.Engine(STATE["app_dir"], STATE["var_dir"], log=_log_line,
+                           device=det.get("device") or "auto")
     nt = STATE.get("notifier")
     return detect.DetectWorker(
         engine, ff, STATE["var_dir"], record_dir, cameras,
@@ -2402,7 +2409,16 @@ def _sync_detect_worker(cfg=None):
     cfg = cfg or runtime.load_config(STATE["var_dir"])
     det = cfg.get("detect") if isinstance(cfg.get("detect"), dict) else {}
     on = detect._as_bool(det.get("enable"), False)
+    dev = str(det.get("device") or "auto").strip().lower()
     w = STATE.get("detect_worker")
+    # 推理设备换了就重建 worker（0.9.125）：Engine 的会话只在 ensure() 时建一次，
+    # 光改配置它不会重开。重建只停检测线程，不碰取帧与录像 —— 评审红线是
+    # 「检测不许影响全时录像」，所以这里宁可少做，也不去动 recorder。
+    if on and w is not None and w.alive() and dev != STATE.get("detect_device"):
+        w.stop()
+        STATE["detect_worker"] = None
+        w = None
+        _log_line("AI 推理设备改为 %s，重建检测 worker" % dev)
     if on and (w is None or not w.alive()):
         if w is not None:
             w.stop()
@@ -2410,6 +2426,7 @@ def _sync_detect_worker(cfg=None):
         if w is None:
             return
         STATE["detect_worker"] = w
+        STATE["detect_device"] = dev
         w.start()
         _log_line("AI 检测已开启（快照模式，每 5 秒/路，并发 %s）"
                   % (getattr(w, "workers", None) or "自动"))

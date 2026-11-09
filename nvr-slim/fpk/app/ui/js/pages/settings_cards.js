@@ -417,6 +417,41 @@ function detUnknownOf(st){
   return n;
 }
 
+/* 推理设备（0.9.125）：device 这个键以前只躺在配置里，引擎恒用 CPU，诊断卡
+   标题还硬写着「YOLO11n · CPU」。现在把**实际建在哪个后端**摆出来，与配置里
+   写的是什么分开说 —— 配置是意图，引擎才是事实。
+   warn 只在"点名要 GPU 却回落 CPU"时亮：用户自己选 cpu 不是降级，不该亮黄。 */
+const DET_DEV_ZH = {cuda:"CUDA", tensorrt:"TensorRT", rocm:"ROCm",
+                    openvino:"OpenVINO", dml:"DirectML", cpu:"CPU"};
+const DET_PROV_KIND = {
+  CUDAExecutionProvider:"cuda", TensorrtExecutionProvider:"tensorrt",
+  ROCMExecutionProvider:"rocm", OpenVINOExecutionProvider:"openvino",
+  DmlExecutionProvider:"dml", CPUExecutionProvider:"cpu"
+};
+function detDevName(k){
+  const s = String(k || "");
+  return DET_DEV_ZH[s] || (s ? s.toUpperCase() : "");
+}
+function detDevProv(p){
+  const s = String(p || "");
+  return DET_DEV_ZH[DET_PROV_KIND[s]] || s.replace(/ExecutionProvider$/, "");
+}
+function detDevOf(st){
+  const d = (st && st.device) || {};
+  const req = String(d.requested || "auto");
+  const act = String(d.actual || "");
+  const why = String(d.fallback_reason || "");
+  if(!act) return {tag:"", text:(st && st.loaded)
+    ? "服务端未上报（旧版本，无法确认实际后端）"
+    : "尚未加载（第一帧推理完才知道实际后端）", warn:false};
+  const want = {auto:"自动", cpu:"CPU", gpu:"GPU"}[req] || detDevName(req);
+  let text = "实际 " + detDevName(act) + " · 请求 " + want;
+  const ps = (d.providers || []).map(detDevProv).filter(s=>!!s);
+  if(ps.length) text += " · " + ps.join(" → ");
+  if(why) text += " · " + why;
+  return {tag:detDevName(act) + (why ? "（已回落）" : ""), text:text, warn:!!why};
+}
+
 function detStatusLine(){
   const st = DET.st;
   if(!LK.detEnable) return '<span class="v">已关闭</span>';

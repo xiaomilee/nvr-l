@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI 检测引擎：人员 / 两轮车 / 车辆（YOLO11n ONNX + onnxruntime CPU）。
+"""AI 检测引擎：人员 / 两轮车 / 车辆（YOLO11n ONNX + onnxruntime；推理后端见「推理设备」一节）。
 
 在整套系统里的位置（见《人员车辆检测-功能选项设计.md》§3）：
   快照节奏的抽帧 → 本模块推理 → 类别+框 → 忽略区过滤 → 台账窗口带 cls 计数
@@ -161,6 +161,96 @@ def frame_error_code(err):
     if "ffmpeg 未找到" in s or "ffmpeg 无法启动" in s:
         return E_FFMPEG
     return E_FRAME
+
+
+# ---------------------------------------------------------------- 推理设备（0.9.125）
+# device 这个键从很早就躺在 DETECT_DEFAULTS / DETECT_ENUMS 里，但 Engine 一直
+# 无条件 providers=["CPUExecutionProvider"]，诊断卡标题还硬写着「YOLO11n · CPU」。
+# 用户把它改成 gpu —— 接口回 ok、配置也落盘，实际仍在 CPU 上跑，界面上更没有
+# 一个字能看出差别。这不是"少做一个功能"，是界面在说一件没验证过的事。
+#
+# 这一层的三条口径：
+# 1. **先问后选**：只认 onnxruntime 自己报的可用后端，不按机器名猜、不看
+#    nvidia-smi。猜错的代价是"配了 GPU 却一直静默回落"，比明说 CPU 更糟。
+# 2. **回落不算故障**：GPU 建会话失败（驱动 / CUDA 版本 / 显存）时立刻用 CPU
+#    再建一次。检测能跑比跑得快重要，所以不把 state 打成 unavailable；但原因
+#    必须写进状态接口，界面要能说出"你要 GPU，实际在 CPU，因为……"。
+# 3. **显式选 cpu 不亮黄**：那是用户要的结果，不是降级。
+# 只认这几个**明确是 GPU/NPU 算力**的后端。故意不含 OpenVINO：它自己也能跑在
+# CPU 上，选它等于没法回答"到底用没用上显卡"，而这一层存在的意义就是回答这句话。
+# DirectML 是 Windows 专用，本机是 Linux NAS，留着只会让"支持的设备"看着更宽。
+GPU_PROVIDERS = ("CUDAExecutionProvider", "TensorrtExecutionProvider",
+                 "ROCMExecutionProvider")
+DEVICE_KINDS = {
+    "CUDAExecutionProvider": "cuda",
+    "TensorrtExecutionProvider": "tensorrt",
+    "ROCMExecutionProvider": "rocm",
+    "CPUExecutionProvider": "cpu",
+}
+
+
+def device_blank():
+    """设备块的空壳（没 worker / 还没加载模型时）。actual 留空 = 未知。"""
+    return {"requested": "", "actual": "", "providers": [],
+            "available": [], "fallback_reason": ""}
+
+
+def engine_device(eng):
+    """从引擎取设备块。取不到就回空壳，绝不因为"读不到设备"让 /api/status 500。
+
+    引擎可能是只实现 loaded/infer 的替身（单测里的 FakeEngine），也可能是
+    升级过程中的旧对象——与 `getattr(eng, "error_code", "")` 同一个理由：
+    状态汇总这条路上，少一个字段好过整块报错。
+    """
+    fn = getattr(eng, "device_status", None)
+    if not callable(fn):
+        return device_blank()
+    try:
+        got = fn()
+    except Exception:
+        return device_blank()
+    return got if isinstance(got, dict) else device_blank()
+
+
+def probe_providers(ort):
+    """(可用后端列表, 说明)。读不出来就只认 CPU —— 不猜、不假装。"""
+    try:
+        got = [str(p) for p in (getattr(ort, "get_available_providers")() or [])]
+    except Exception as e:                 # 旧版 ort / 假模块 / 属性被裁掉
+        return (["CPUExecutionProvider"],
+                "读取 onnxruntime 可用后端失败：%s" % str(e)[:80])
+    if "CPUExecutionProvider" not in got:
+        got.append("CPUExecutionProvider")  # CPU 后端永远在，缺了也补上
+    return got, ""
+
+
+def pick_providers(device, available):
+    """按用户意图挑后端。返回 (providers, actual, fallback_reason)。
+
+    providers 里 CPU 永远排在最后：同一会话内某个算子 GPU 不支持时，ORT 会
+    自己落到 CPU 上算，而不是整帧失败。
+    """
+    dev = str(device or "auto").strip().lower()
+    if dev not in ("auto", "cpu", "gpu"):
+        dev = "auto"                       # 与 norm_detect 同口径：写错按自动走
+    avail = [p for p in (available or []) if p]
+    if "CPUExecutionProvider" not in avail:
+        avail.append("CPUExecutionProvider")
+    if dev == "cpu":
+        return ["CPUExecutionProvider"], "cpu", ""
+    gpu = [p for p in GPU_PROVIDERS if p in avail]
+    if gpu:
+        return gpu + ["CPUExecutionProvider"], DEVICE_KINDS.get(gpu[0], "gpu"), ""
+    if dev == "gpu":
+        # 用户点名要 GPU 却挑不出来：这是**能看见的降级**，不是错误。
+        # 文案同时说清"缺什么"和"现在有什么"——只说后者，用户还得自己去查
+        # CUDA 该装哪个包。
+        return (["CPUExecutionProvider"], "cpu",
+                "请求 GPU，但 onnxruntime 没有 %s 后端（当前可用：%s）"
+                % (" / ".join(p.replace("ExecutionProvider", "")
+                              for p in GPU_PROVIDERS),
+                   ", ".join(sorted(avail))))
+    return ["CPUExecutionProvider"], "cpu", ""
 
 
 # ---------------------------------------------------------------- 配置强校
@@ -613,9 +703,13 @@ def ensure_runtime(app_dir, var_dir, log=None):
 
 
 class Engine:
-    """单例推理引擎。懒加载：第一次 ensure() 才解 wheel、load 模型。"""
+    """单例推理引擎。懒加载：第一次 ensure() 才解 wheel、load 模型。
 
-    def __init__(self, app_dir, var_dir, log=None):
+    device（0.9.125）在开会话时读一次，之后不再变：改配置由 nvr_slim 重建
+    worker 生效（重建只换检测这一条线程，不碰取帧与录像）。
+    """
+
+    def __init__(self, app_dir, var_dir, log=None, device="auto", ort_loader=None):
         self.app_dir = app_dir
         self.var_dir = var_dir
         self.log = log or (lambda m: None)
@@ -630,10 +724,70 @@ class Engine:
         self.error_code = ""
         self.avg_ms = 0.0
         self._infer_n = 0
+        # 推理设备（0.9.125）。四个字段都是"事实"，不是配置的复印：
+        # requested 是要什么，actual 是这次会话真的建在什么后端上。
+        self.device_requested = str(device or "auto").strip().lower()
+        self.device_actual = ""
+        self.providers = []
+        self.available = []
+        self.device_fallback = ""
+        # 单测用的注入点：没装 wheel 的机器上也要能验「GPU 建不起来会回落」。
+        self._ort_loader = ort_loader
 
     @property
     def loaded(self):
         return self._sess is not None
+
+    def device_status(self):
+        """给状态接口的设备块。还没加载时 actual/providers 留空 —— 未知就是未知，
+        不拿配置值冒充实际后端。"""
+        return {
+            "requested": self.device_requested or "auto",
+            "actual": self.device_actual,
+            "providers": list(self.providers),
+            "available": list(self.available),
+            "fallback_reason": self.device_fallback,
+        }
+
+    def _ort(self):
+        if self._ort_loader is not None:
+            return self._ort_loader()
+        import onnxruntime as ort
+        return ort
+
+    def _session(self, ort, mp, providers):
+        opt = ort.SessionOptions()
+        opt.intra_op_num_threads = 2
+        opt.log_severity_level = 3
+        return ort.InferenceSession(mp, opt, providers=list(providers))
+
+    def _open(self, mp):
+        """建会话：先按 device 挑后端，GPU 建不起来就用 CPU 再建一次。"""
+        ort = self._ort()
+        avail, why = probe_providers(ort)
+        self.available = list(avail)
+        providers, actual, reason = pick_providers(self.device_requested, avail)
+        self.device_fallback = reason or why
+        wanted = providers[0]
+        try:
+            sess = self._session(ort, mp, providers)
+        except Exception as e:
+            if actual == "cpu":
+                raise                       # 本来就是 CPU，没有可回落的东西
+            first = str(e)[:120]
+            # 驱动缺失、CUDA 版本与 wheel 不匹配、显存不足都会走到这里。
+            # 回落一次 CPU，成功就带着原因继续跑 —— 检测有结果比跑得快重要。
+            self.log("推理后端 %s 建会话失败，回落 CPU：%s" % (wanted, first))
+            sess = self._session(ort, mp, ["CPUExecutionProvider"])
+            providers = ["CPUExecutionProvider"]
+            actual = "cpu"
+            self.device_fallback = "%s 建会话失败：%s" % (wanted, first)
+        self.providers = list(providers)
+        self.device_actual = actual
+        if self.device_fallback:
+            self.log("推理设备：请求 %s，实际 %s（%s）"
+                     % (self.device_requested, actual, self.device_fallback))
+        return sess
 
     def ensure(self):
         """(ok, reason)。重复调用安全。"""
@@ -653,12 +807,7 @@ class Engine:
                 self.error_code = E_RUNTIME
                 return False, why
             try:
-                import onnxruntime as ort
-                opt = ort.SessionOptions()
-                opt.intra_op_num_threads = 2
-                opt.log_severity_level = 3
-                so = ort.InferenceSession(mp, opt,
-                                          providers=["CPUExecutionProvider"])
+                so = self._open(mp)
                 self._sess = so
                 self._in_name = so.get_inputs()[0].name
                 self._out_name = so.get_outputs()[0].name
@@ -1367,6 +1516,9 @@ class DetectWorker:
             "avg_ms": (eng.avg_ms if eng is not None else 0),
             "alive": self.alive(),
             "last_success_at": self.last_ok_at,
+            # 推理设备（0.9.125）：请求什么 / 实际建在什么后端 / 为什么回落。
+            # 从引擎身上取，不从配置抄 —— 配置是意图，引擎才是事实。
+            "device": engine_device(eng),
             "per_cam": per_cam,
             "sched": sched,
             # 时间窗确认实况：确认过几条、单帧误报挡掉几手。这两个数就是
@@ -1450,7 +1602,8 @@ def status_of(worker=None, det_cfg=None, ffmpeg="", runtime=None):
         "error_message": msg,
         "last_success_at": detail.get("last_success_at"),
     }
-    for k in ("loaded", "error", "avg_ms", "per_cam", "sched", "alive", "confirm"):
+    for k in ("loaded", "error", "avg_ms", "per_cam", "sched", "alive",
+              "confirm", "device"):
         if k in detail:
             out[k] = detail[k]
     out.setdefault("loaded", False)
@@ -1459,6 +1612,11 @@ def status_of(worker=None, det_cfg=None, ffmpeg="", runtime=None):
     out.setdefault("per_cam", {})
     out.setdefault("sched", sched_blank())
     out.setdefault("confirm", confirm_blank())
+    # 没 worker 时设备块不能空着：requested 至少要说清"配置里要的是什么"，
+    # 否则前端只能写"未知"，用户看不出自己那台到底配没配 GPU。
+    out.setdefault("device", device_blank())
+    if not out["device"].get("requested"):
+        out["device"]["requested"] = str((det_cfg or {}).get("device") or "auto")
     if runtime is not None:
         out["runtime"] = runtime
     return out

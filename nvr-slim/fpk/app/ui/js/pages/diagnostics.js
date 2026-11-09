@@ -481,8 +481,13 @@ function cardDetectDiag(){
   const line = (k, v, warn) =>
     '<div class="dline kv"><span class="k">' + k + '</span><span class="v"'
     + (warn ? ' style="color:var(--warn)"' : '') + '>' + v + '</span></div>';
+  /* 标题栏不再硬写「· CPU」（0.9.125）：实际建在哪个后端由引擎报回来，
+     还没加载就先不写 —— 写死一个没验证过的值，正是这一版要治的病。 */
+  const dv = detDevOf(st);
+  const devLine = line("推理设备", esc(dv.text), dv.warn);
   let head = '<div class="dcard">'
-    + '<div class="dh">AI 检测<span class="tg">YOLO11n · CPU</span></div>';
+    + '<div class="dh">AI 检测<span class="tg">YOLO11n'
+    + (dv.tag ? ' · ' + esc(dv.tag) : '') + '</span></div>';
   if(!LK.detEnable){
     return head + '<div class="dline" style="font-size:10.5px;color:var(--faint)">'
       + '未开启。开启路径：通用设置 · AI 检测。开启后这里会显示推理耗时、每路命中与通知记录。</div>'
@@ -497,6 +502,7 @@ function cardDetectDiag(){
     return head
       + '<div class="dline" style="color:var(--warn)">' + esc(z.t) + '</div>'
       + ((st && st.error_code) ? line("失败码", esc(String(st.error_code)), true) : "")
+      + (dv.text ? devLine : "")
       + (rw0.python ? line("Python / wheel", "Python " + esc(rw0.python) + " · "
                            + esc(rw0.ort || "") + (rw0.numpy ? " · " + esc(rw0.numpy) : "")) : "")
       + '<div class="dline" style="font-size:10px;color:var(--faint)">'
@@ -584,7 +590,7 @@ function cardDetectDiag(){
       });
     }
   }
-  return head + rt + rtLine + perf + schLine + rows + ntBlock
+  return head + rt + devLine + rtLine + perf + schLine + rows + ntBlock
     + '<div class="dline" style="margin-top:8px;font-size:10px;color:var(--faint)">'
     + '取帧失败只记「未知」，不会写成"无活动"；命中类别同时写进活动台账，'
     + '回放页与活动触发都从台账读，与这里的计数同源。</div>'

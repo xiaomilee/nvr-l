@@ -1,4 +1,4 @@
-# 配置项参考（0.9.124）
+# 配置项参考（0.9.125）
 
 这份文档回答一个设置项被改完之后**到底谁会重新读它**。它属于批次 5 的文档重构，
 方向上是 P0「可信、能无人值守」：前几轮在按钮验收表上连续抓到三个「接口回 ok、
@@ -72,10 +72,10 @@
 | `scan_mode` | str | `h1` | `now, m15, h1, d1` | `遗留字段` | `runtime.py:111` | 枚举仍有效但无消费方；`SCAN_LABEL` 只是文案表 |
 | `process_mode` | str | `fast` | `fast, fine` | `遗留字段` | `runtime.py:112` | 同上 |
 | `gpu` | str | `auto` | `auto, qsv, off` | `每轮读盘` | `runtime.py:722` | `gpu_report()` 与状态里的降级判断每次请求现算；界面无独立入口，前端按 `GS.gpu` 推 `auto`/`off` |
-| `concurrency` | int | `2` | `1~3` | `部分热生效` | `nvr_slim.py:3502` | `/api/status` 的 `limits` 会跟着变，但 `STATE["pool"]` 是 `main()` 里建的、不跟着重建；要真正改槽位池须重启 |
+| `concurrency` | int | `2` | `1~3` | `部分热生效` | `nvr_slim.py:3566` | `/api/status` 的 `limits` 会跟着变，但 `STATE["pool"]` 是 `main()` 里建的、不跟着重建；要真正改槽位池须重启 |
 | `night_only` | bool | `false` | — | `前端常量` | `button_matrix.py:198` | 控件被 `LK.clipOut` 包住且默认不渲染，`pushCfg` 也不带这个键，值只进 localStorage |
 | `low_priority` | bool | `true` | — | `前端常量` | `runtime.py:564` | 同上只进 localStorage；`limits.prefix` 只是按配置拼出的字符串，ffmpeg 的 `Popen` 没加这个前缀 |
-| `snapshot_interval` | int | `10` | `1~10` | `每轮读盘` | `nvr_slim.py:3506` | 取帧 worker 每轮用 `interval_fn` 现读配置；没有「运行中对象」字段可看，验收表按 `partial` |
+| `snapshot_interval` | int | `10` | `1~10` | `每轮读盘` | `nvr_slim.py:3570` | 取帧 worker 每轮用 `interval_fn` 现读配置；没有「运行中对象」字段可看，验收表按 `partial` |
 | `record_dir` | str | `/vol1/@appshare/nvr-output` | 绝对路径，非系统目录 | `需重启` | `runtime.py:233` | `valid_record_dir()` 挡相对路径与系统目录；保存会触发录像重启，且 `restart_hint` 明确提示需重启才全量生效 |
 | `cleanup_at` | str | `03:00` | `HH:MM` | `夜间任务` | `nvr_slim.py:2336` | 归档与清理的固定顺序是先归档后清理；`parse_hhmm()` 解析，服务端没有「下次几点跑」的接口 |
 | `archive_enable` | bool | `true` | — | `夜间任务` | `nvr_slim.py:2000` | 夜间任务才读；关掉后只录全时、不做归档裁剪 |
@@ -84,8 +84,8 @@
 | `archive_prefetch` | bool | `false` | — | `夜间任务` | `runtime.py:43` | 提前一天归档换一整天补救缓冲，代价是原画与归档同日共存 |
 | `record_enable` | bool | `true` | — | `热生效` | `nvr_slim.py:2741` | 录制总闸；`/api/config` 与 `/api/link/policy` 两条入口都要通知 `Recorder`，少一条就会出现「关不掉」 |
 | `record_segment_sec` | int | `300` | `60~900` | `热生效` | `runtime.py:105` | ffmpeg 命令行参数，改了要优雅收尾再拉起；`Link` 与 `Recorder` 必须是同一个秒数，否则回放按秒定位跳错片段 |
-| `record_reconnect_sec` | int | `5` | — | `需重启` | `nvr_slim.py:3889` | `Recorder` 构造期参数，`reconfigure()` 不覆盖它；界面无入口 |
-| `ingest_enable` | bool | `true` | — | `需重启` | `nvr_slim.py:3908` | 统一取流的现场回退开关，`IngestManager` 启动期读一次且没有 `reconfigure`；改它要动录制链路，明确不做热生效 |
+| `record_reconnect_sec` | int | `5` | — | `需重启` | `nvr_slim.py:3956` | `Recorder` 构造期参数，`reconfigure()` 不覆盖它；界面无入口 |
+| `ingest_enable` | bool | `true` | — | `需重启` | `nvr_slim.py:3978` | 统一取流的现场回退开关，`IngestManager` 启动期读一次且没有 `reconfigure`；改它要动录制链路，明确不做热生效 |
 | `record_frag` | bool | `true` | — | `前端常量` | `recorder.py:1048` | 0.9.111 起设置页无开关，`applyServerCfg()` 写死 `LK.frag=true` 并纠正服务端；`Recorder.reconfigure` 虽读它，但界面推不进别的值 |
 | `link_mode` | str | `live` | `live, scheduled` | `热生效` | `link.py:686` | `live` 录完即压 / `scheduled` 定时批量；`_ENUM_KEYS` 第 17 轮补进白名单，非法值不再落盘回读污染界面 |
 | `link_interval_h` | int | `6` | `1~24` | `热生效` | `runtime.py:107` | 定时模式间隔，`Link.reconfigure()` 会重设 |
@@ -93,9 +93,9 @@
 | `clip_style` | str | `join` | `join, split` | `热生效` | `link.py:695` | `join` 整段拼接（流复制）/ `split` 活动切片（重编码）；界面已下线，仍可由接口改 |
 | `condense_mode` | str | `virtual` | `virtual, materialize, off` | `热生效` | `link.py:172` | `Link.reconfigure` 换掉 `self.cfg`，`condense_mode_of()` 每次现读；但无独立运行态接口，验收表判 `partial` |
 | `service_port` | int | `18080` | `1024~65000` | `需重启` | `runtime.py:330` | 由 `cmd/main` 解析（配置 > `TRIM_SERVICE_PORT` > 18081），占用时往上顺延；真实端口只认 `port.txt` |
-| `detect` | dict | 见 §4.1 | — | `热生效` | `nvr_slim.py:3520` | 总闸由 `_sync_detect_worker` 起停 worker；整块保存时过 `detect.norm_detect()` |
-| `notify` | dict | 见 §4.2 | — | `每轮读盘` | `nvr_slim.py:3899` | `Notifier` 的 `cfg_fn` 是 `lambda: load_config(a.var)`，每轮现读；`cooldown` 改动不会立刻反映在 `status.notify` |
-| `updated_at` | null | `null` | — | `遗留字段` | `nvr_slim.py:3516` | 服务端保存配置时自动写的时间戳，不是设置项，前端推它无效 |
+| `detect` | dict | 见 §4.1 | — | `热生效` | `nvr_slim.py:3584` | 总闸由 `_sync_detect_worker` 起停 worker；整块保存时过 `detect.norm_detect()` |
+| `notify` | dict | 见 §4.2 | — | `每轮读盘` | `nvr_slim.py:3968` | `Notifier` 的 `cfg_fn` 是 `lambda: load_config(a.var)`，每轮现读；`cooldown` 改动不会立刻反映在 `status.notify` |
+| `updated_at` | null | `null` | — | `遗留字段` | `nvr_slim.py:3580` | 服务端保存配置时自动写的时间戳，不是设置项，前端推它无效 |
 <!-- /table:config -->
 
 **表外的两个键**：`cameras` 与 `profiles` 不在 `DEFAULTS` 里，但由设置页
@@ -118,7 +118,24 @@
 这里另外由 `DETECT_ENUMS` 管：
 
 - `enable=false` 总闸，默认关（opt-in）；`mode=snap | live`、
-  `device=auto | cpu | gpu`、`night=full | throttle | off`。
+  `night=full | throttle | off`。
+- `device=auto | cpu | gpu`：**0.9.125 起才真的接管推理后端**，此前这个键只
+  存在配置里（引擎恒用 `CPUExecutionProvider`，界面还硬写「YOLO11n · CPU」）。
+  三档口径：
+  - `auto`：有 GPU 后端就用（CUDA > TensorRT > ROCm），没有就 CPU；
+    **这不算降级**，不亮黄，`fallback_reason` 为空。
+  - `gpu`：点名要 GPU。缺后端、或建会话失败（驱动 / CUDA 版本 / 显存）时
+    立刻用 CPU 再建一次；检测照跑、`state` 仍是 `ready`，原因写进
+    `fallback_reason`（形如「… 建会话失败：libcudnn.so.9 not found」）。
+  - `cpu`：一律 CPU，机器上有 GPU 也不挑，且不报回落（那是用户要的结果）。
+
+  实际后端与原因在 `/api/status` 的 `detect.device`：`requested / actual /
+  providers / available / fallback_reason`（`actual` 为空 = 模型还没加载完，
+  不拿配置值冒充）。诊断卡标题与「推理设备」那一行都读它。
+  **和顶层 `gpu`（`auto|qsv|off`）是两件事**：那个管 ffmpeg 硬解 / 硬编
+  （`runtime.gpu_report()`），这个管 onnxruntime 推理，互不影响。
+  生效方式：保存设置后服务端重建检测 worker（`_sync_detect_worker` 比对
+  `STATE["detect_device"]`），只换检测线程，不碰取帧与录像。
 - `classes` / `trigger` 各是三键 dict；`trigger` **至少留一项**，全假会被
   `norm_trigger()` 恢复默认并写一条「配置强校」日志。
 - `conf` 是分品类阈值字典，默认 `CONF_PRESETS["std"]`；`live_fps` 夹在 `1~10`。

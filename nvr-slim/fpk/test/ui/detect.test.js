@@ -137,6 +137,54 @@ ck("最近错误带失败码",
 ck("底部说明改口径为「未知」",
    run('cardDetectDiag()').indexOf("不会写成") > 0);
 
+/* ---- 推理设备（0.9.125）：实际后端必须来自引擎，不能硬写 ----
+   以前标题栏写死「YOLO11n · CPU」，用户把 device 改成 gpu 后界面照旧说 CPU。
+   这一组守四件事：实际与请求分开写、回落要亮黄并给原因、显式选 cpu 不亮黄、
+   没加载时不编后端。 */
+const DEV_CUDA = {requested:"auto", actual:"cuda",
+  providers:["CUDAExecutionProvider","CPUExecutionProvider"],
+  available:["CUDAExecutionProvider","CPUExecutionProvider"],
+  fallback_reason:""};
+ck("设备：自动挑到 CUDA 时不告警",
+   run('(()=>{const d=detDevOf({device:' + J(DEV_CUDA) + '});return !d.warn&&d.tag==="CUDA"})()'));
+ck("设备：实际后端与请求值分开写",
+   run('detDevOf({device:' + J(DEV_CUDA) + '}).text').indexOf("实际 CUDA · 请求 自动") >= 0);
+ck("设备：后端列表按顺序给短名",
+   run('detDevOf({device:' + J(DEV_CUDA) + '}).text').indexOf("CUDA → CPU") >= 0);
+const DEV_FB = {requested:"gpu", actual:"cpu", providers:["CPUExecutionProvider"],
+  available:["CPUExecutionProvider"],
+  fallback_reason:"CUDAExecutionProvider 建会话失败：libcudnn.so.9 not found"};
+ck("设备：回落要亮黄",
+   run('detDevOf({device:' + J(DEV_FB) + '}).warn') === true);
+ck("设备：回落的原因要能看见",
+   run('detDevOf({device:' + J(DEV_FB) + '}).text').indexOf("libcudnn") > 0);
+ck("设备：回落在标题上标出来",
+   run('detDevOf({device:' + J(DEV_FB) + '}).tag').indexOf("已回落") > 0);
+const DEV_CPU = {requested:"cpu", actual:"cpu", providers:["CPUExecutionProvider"],
+  available:["CUDAExecutionProvider","CPUExecutionProvider"], fallback_reason:""};
+ck("设备：用户显式选 cpu 不算降级（不亮黄）",
+   run('detDevOf({device:' + J(DEV_CPU) + '}).warn') === false);
+ck("设备：没加载时不编实际后端",
+   run('(()=>{const d=detDevOf({device:{requested:"gpu"}});'
+     + 'return d.tag===""&&d.text.indexOf("尚未加载")>=0})()'));
+ck("设备：旧服务端明确说未上报（不冒充「加载中」）",
+   run('detDevOf({loaded:true}).text').indexOf("未上报") > 0);
+ck("诊断卡：标题跟实际后端走",
+   run('DET.st={state:"ready",loaded:true,device:' + J(DEV_CUDA) + '}; cardDetectDiag()')
+     .indexOf("YOLO11n · CUDA") > 0);
+ck("诊断卡：不再硬写 CPU",
+   run('DET.st={state:"ready",loaded:true,device:' + J(DEV_CUDA) + '}; cardDetectDiag()')
+     .indexOf("YOLO11n · CPU") < 0);
+ck("诊断卡：有「推理设备」一行",
+   run('DET.st={state:"ready",loaded:true,device:' + J(DEV_CUDA) + '}; cardDetectDiag()')
+     .indexOf("推理设备") > 0);
+ck("诊断卡：回落时写明已回落",
+   run('DET.st={state:"ready",loaded:true,device:' + J(DEV_FB) + '}; cardDetectDiag()')
+     .indexOf("已回落") > 0);
+ck("诊断卡：不可用时也说清请求了什么设备",
+   run('DET.st={state:"unavailable",error_code:"MODEL_LOAD_FAIL",error_message:"x",'
+     + 'device:' + J(DEV_FB) + '}; cardDetectDiag()').indexOf("libcudnn") > 0);
+
 /* 老服务端（无 state / sched / unknown）不能白屏 */
 const OLD = {running:true, loaded:true, avg_ms:60,
              per_cam:{a:{today:5, cls:{person:1}, last:{t:1700000000, cats:["person"]}}}};
