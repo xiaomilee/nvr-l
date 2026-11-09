@@ -32,7 +32,7 @@
 | 10 | 0.9.128 | P2 · 检测只统计区：框中心落在区内才算目标，区外计数上诊断页 | **done** | 149dc1c |
 | 11 | 0.9.129 | P1 · 事件快照：检测确认帧落盘 + 事件卡片缩略图与展开大图 | **done** | 6d7470b |
 | 12 | 0.9.130 | P1 · 快照放大：点缩略图看大图（不跳页）+ 检测框按当时那一拍叠回去 | **done** | 7f5c030 |
-| 13 | 0.9.131 | P0 · 存储空间预警：稳态容量（写入速率 × 保留天数）与等级 / 建议 | **doing** | 见台账 |
+| 13 | 0.9.131 | P0 · 存储空间预警：稳态容量（写入速率 × 保留天数）与等级 / 建议 | **done** | 6242a83 |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
 
@@ -145,6 +145,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 32 | 11-09 15:05 | **批次 11 实现并收尾**（按用户「把事件的快照继续落实」）：新增 `event_shot.py`（392 行）—— `ShotStore` 30 秒/路限流 + 每路每天 300 张 + 队列 8 满即丢 + 单写线程 + 7 天 sweep，`find()` 窗口外扩 15 秒取**最早**一张（跨零点也认）；`detect._grab()` 改返回 `(ok,data,err,src)`（src = 这次真正读的那张 jpg，防止"拍现在不拍当时"），`_one()` 在 `_write_ledger()` 之后 `_notify()` 之前调 `_shot()`（时间取源图 mtime，异常全吞）；`nvr_slim._attach_shots()` 给列表补 `shot{url,at,offset}`，路由 `/api/events/<id>/shot` 200 走 `image/jpeg`+ETag+`max-age=86400`、没有则 404 JSON，`/api/status` 暴露 `shots`；前端缩略图 76×43（lazy + onerror 隐藏）+ 展开宽图「快照 HH:MM:SS · 事件开始后 N 秒」，无图时说明「这条没有留快照」| 6d7470b | **出包** `dist/nvr-0.9.129_x86.fpk` **101218696 字节** md5 `046fefe536fb56c4d3b4520923a0de8a`；闸门 validate **81** 项、后端 **1365** 条（64 文件，新增 `test_event_shot.py` 39 条）、前端 events **101** / export 26 / detect 58 / masks 27 / 样式 28 / 脚本 173 全绿 0 FAIL；152 部署**九项全 OK**；真机：14:58:45 AI 事件自动带 `shot{at:14:58:55, offset:9.3}`，GET → **200 image/jpeg 145077 字节 / ffprobe 1280×720 / file 认 JPEG**，ETag 二次请求 **304**，旧事件 → **404 JSON** 且列表 `shot:null`，列表 200 条 145/90/91ms，检测关 43 秒 `written` 不动、重开后 3→5 张，`rate_limited=9`，全程两路 `hstate=recording`，`recorder.py` **git diff 为空**；**批次 11 标 done**，生产机 2.6 未碰 |
 
 | 33 | 11-09 16:25 | **批次 12 全量收尾**（按用户「继续」取批次 11 挂账的快照延伸）：缩略图从 76×43 变成可点开的大图浮层（**不跳页**，浮层里才有「打开回放」出口，Esc / 点背景关闭）；检测框随图旁挂同名 `.json`，坐标来自**那一拍推理**过完区域过滤的 `dets`，由浏览器按百分比叠层绘制（服务端不解码、不重编码）；`?meta=1` 与图片共用一处定位 `shot_lookup()`（避免「有图没框」），图不在就 404 不给空框清单、坏 json 当作没框不修不重建；写线程框失败只动 `meta_failed`，`recorder.py` 一行未改 | 7f5c030 | **出包** `dist/nvr-0.9.130_x86.fpk` **101226985 字节** md5 `f43f553041cf61c2a8cdda4be82d071b`；闸门 validate **81** 项、后端 **1382** 条 / 64 文件，前端 events **113**（+12）/ export 26 / detect 58 / masks 27 / 设置页 514 / 时间轴 70 / 样式 28 / 脚本 173，0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.130.json`），0.9.129→0.9.130 上线 **0.1s**、端口 18085；真机：31 秒人员事件 `cam-test01_20261109_161839` → `?meta=1` 回 **2 个框**（`person 0.656` + `vehicle 0.404`，offset 29.7）、图 138193 字节；`cam-test02_...161713` 图 **182007 字节 / 1280×720 / JPEG**、ETag 二次 **304**；升级前老图 → `boxes: []` + note「0.9.130 之前存下的图」；无快照事件 → **404 JSON**；`shots`: `written=5` / `meta=5` / `meta_failed=0` / `rate_limited=14` / `bytes≈22.9MB`，磁盘上 json 与 jpg 同名成对；全程两路 `hstate=recording`（age 0/3），`recorder.py` **git diff 为空**；**批次 12 标 done**，生产机 2.6 未碰 |
+| 34 | 11-09 17:16 | **批次 13 立项 + 全量收尾**（按用户「继续」取 P0「存储管理」三格里唯一没做过的一格）：新增 `space.py` 纯函数模块，按**稳态容量**判空间够不够 —— `rate` = 最近 7 个完整日中位数（丢 0 字节日）、`need` = rate × 保留天数（归档按归档速率）、`other` = 总量 − 剩余 − 录像实测、`headroom` = 总量 − other − need；分 `off / unknown / critical / warn / ok` 五档，建议按原因给（装不下 / 稳态余量太小 / 现在剩余就低，多因全保留、取最重定级）；`storage_usage` 顺手按 (日期, 文件名) 去重出 `days` 与 `space`（不额外扫盘，缓存加格式版本号 `STORAGE_CACHE_V=2` 让旧缓存升级后重扫而不是"未知"半小时）；监控线程 10 分钟一算、只读内存喂 `/api/status.space` 与 `/api/health.space`，等级变化才记日志（升级一条、恢复一条，不刷屏）；配置键 `space_warn_gb`（0 = 关闭，大盘 10% 兜底）；诊断页存储卡顶部预警条 + 直播页头部提示 + 设置页阈值输入；**预警只报告不处置** —— 自动删录像等于让"空间紧张"改写事实数据，删录像仍走「保留策略」预览加二次确认；`recorder.py` 一行未改 | 6242a83 | **出包** `dist/nvr-0.9.131_x86.fpk` **101238964 字节** md5 `26c6c9bbed84315c85e291733c1c9b04`；闸门 validate **81** 项、后端 **1425** 条 / **65** 文件，前端 space **30**（新增）/ 设置页 514 / 时间轴 70 / events 113 / export 26 / detect 58 / masks 27 / 样式 28 / 脚本 173，0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.131.json`），0.9.130→0.9.131 上线 **0.1s**、端口 18085；真机 `/api/storage/usage.space` 判 `critical`：`rate=19.3 GB/天`（最近 1 个完整日）、`need=57.9 GB`、`free/total=7.0/55.0`、`headroom=-17.3 GB`、`suggest_days=2`、`keep_text=全时 3 天`；`space_warn_gb` 往返：`0 → off`（`reasons=[]`、无 advice）、`3 → reasons 由 [capacity, free_critical] 收成 [capacity]`（阈值生效，但盘本身装不下所以仍 `critical` —— **计划里"改 3 应降为 warn"那条写错了，已在批次小节记明**）、还原 `20` 复核落盘；清理过期未误报（`cleanup_stale` 不出现）；`/api/status.space` 部署后首轮（等 20 秒）即写回、`/api/health.space={level:critical, free_gb:7.1}`；全程两路 `hstate=recording`、`recorder.py` **git diff 为空**；**批次 13 标 done**，P0 六项全部有落地，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 | 项 | 值 |
@@ -1593,7 +1594,7 @@ GET /api/events/<id>/shot?meta=1
 
 ---
 
-## 批次 13 · 0.9.131 存储空间预警（第 34 轮立项）
+## 批次 13 · 0.9.131 存储空间预警（第 34 轮立项并收尾）
 
 **为什么取这一项**：评审基线 P0「存储管理」列了三格 —— 保留策略、清理预览、
 空间预警。前两格在批次 5 就已交付（`retention.py` 按天整目录删 + `/api/retention`
@@ -1672,14 +1673,29 @@ headroom= 总容量 − other − need               （稳态余量）
 7. 文档：CONFIGURATION / USER_GUIDE / ARCHITECTURE / TROUBLESHOOTING /
    CHANGELOG / README
 
-### 验收（152 真机）
+### 验收（152 真机，第 34 轮实测）
 
-- 这台盘现状（86% / 剩 7.6 GB / 每天约 12 GB / 保留 3 天）必须判 `critical`，
-  建议里要出现"最多留 N 天"
-- 阈值改 3 GB → 应降为 `warn`；改 0 → 应回 `off` 且页面不显示红条
-- 清理跑过之后（`cleanup-state.date` 是今天）不再报"清理过期"
-- 重启服务后 `/api/status.space` 十分钟内出现，`age_sec` 在涨
-- `recorder.py` `git diff` 为空；两路 `hstate=recording`
+| # | 项 | 结果 |
+|---|---|---|
+| 1 | 这台盘现状要判 `critical`，建议里要出现"最多留 N 天" | **通过**：`level=critical`、`rate=19.3 GB/天`（最近 1 个完整日）、`need=57.9 GB`、`free/total=7.0/55.0`、`suggest_days=2`、`keep_text=全时 3 天`；建议"把保留天数从 3 天降到 2 天以内，或先删掉一部分旧录像" |
+| 2 | 阈值改 0 → `off` 且页面不显示红条 | **通过**：`space_warn_gb=0` 后 `level=off`、`reasons=[]`、`advice` 为空（前端按 `off` 不出条） |
+| 3 | 阈值改 3 → 应降为 `warn` | **未按计划走，见下**：`reasons` 从 `[capacity, free_critical]` 收成 `[capacity]`（阈值确实生效），但 `level` 仍是 `critical` |
+| 4 | 清理跑过之后不再报"清理过期" | **通过**：`reasons` 里始终没有 `cleanup_stale`（`cleanup-state.date` 是今天，且启动 15 分钟内一律不判） |
+| 5 | 重启后 `/api/status.space` 十分钟内出现 | **通过**：部署后首轮（等 20 秒）就写回，`checked_at` 有值，`/api/health.space={level:critical, free_gb:7.1}` |
+| 6 | `recorder.py` `git diff` 为空；两路 `hstate=recording` | **通过**：`recorder.py` 0 行改动；`cam-test01` / `cam-test02` 均 `hstate=recording` |
+
+第 3 项为什么"没按计划走"——是**验收条款写错了**，不是实现不对：
+
+写这条时脑子里只想着"剩余低于阈值"这一个原因，忘了这台盘同时命中 `capacity`
+（`headroom = -17.3 GB`：按实测每天 19.3 GB、保留 3 天要 57.9 GB，加上非录像
+占用 14.4 GB，55 GB 的盘无论如何装不下）。等级取最重原因，`capacity` 是
+`critical`，所以阈值从 20 调到 3 只会让"剩余偏低"这条理由消失，整体仍是
+`critical`。这才是对的结论：盘**真的**装不下，不该被一个阈值调小掩盖掉。
+
+真正验证"阈值生效"的证据是 `reasons` 少了一条：`22 → 3` 时 `free_critical`
+消失、`capacity` 保留。阈值本身的 `warn` / `ok` 分支由
+`test_space.py::TestEvaluate` 里 15 条用例覆盖（含大冰箱盘不拿绝对阈值喊人）。
+验完已把 `space_warn_gb` 还原成 20（`GET /api/config` 复核 `config.space_warn_gb=20`）。
 
 ### 故意不做（记在这里，不许悄悄合入）
 
