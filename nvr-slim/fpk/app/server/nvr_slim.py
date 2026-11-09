@@ -1738,9 +1738,13 @@ def events_payload(frm="", to="", cam="", cat="", limit=200,
                                motion_only=want_motion)
         # 运动事件补图（0.9.134）：每条 motion 且尚无图的事件，向后台抽帧队列投一次。
         # 幂等（窗口内已有图就跳），不阻塞查询线程；抽不到也只丢一张图，不影响列表。
+        #
+        # **从最新往前投**（0.9.135）：事件列表是时间升序的，队列又只有几十个槽位；
+        # 顺着投的话，最老的那些先占满槽位 —— 而老事件的录像早就过期滚掉了，
+        # 永远抽不出来，于是每次刷新都在重投它们，最新的事件一张也排不上。
         ms = STATE.get("motion_shot")
         if ms is not None:
-            for e in evs:
+            for e in reversed(evs):
                 try:
                     if e.get("kind") == "motion" and not e.get("shot"):
                         ms.request(e)
@@ -1776,6 +1780,15 @@ def event_payload(eid):
         conn.close()
     if ev is None:
         return {"ok": False, "error": "没有这条事件（可能已被清理，或判定口径已变）"}
+    # 单条详情也投一次补图（0.9.135）：从通知或分享链接直接点进某条运动事件时，
+    # 列表可能压根没被打开过 —— 只靠列表触发的话，这张图要等他回列表才可能有。
+    try:
+        ms = STATE.get("motion_shot")
+        if (ms is not None and ev.get("kind") == "motion"
+                and not ev.get("shot")):
+            ms.request(ev)
+    except Exception:
+        pass
     return {"ok": True, "event": ev}
 
 
@@ -3279,9 +3292,12 @@ def status_payload():
                         "rate_limited": 0, "capped": 0, "queued": 0,
                         "running": False, "dir": ""}),
         # 运动事件快照的抽帧量（0.9.134）：只读内存计数，不扫盘。
+        # extracted 是"抽到帧"，stored 是"真落盘"（0.9.135 分开：落盘层可能因
+        # 日上限或限流拒收，只报 extracted 会让人以为图已经有了）。
         "motion_shot": (STATE["motion_shot"].status() if STATE.get("motion_shot")
                         else {"queued": 0, "dropped": 0, "extracted": 0,
-                              "failed": 0, "missed": 0, "running": False,
+                              "stored": 0, "rejected": 0, "failed": 0,
+                              "missed": 0, "miss_cached": 0, "running": False,
                               "qsize": 0}),
         # 空间预警结论（0.9.131）：只读内存，监控线程 10 分钟更新一次。
         # 这个接口几秒被轮询一次（fnOS 桌面壳也在问），绝不能在这里扫盘。

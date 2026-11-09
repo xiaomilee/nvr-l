@@ -244,6 +244,24 @@ class TestStore(Tmp):
         self.assertTrue(self.store.offer("cam-02", JPEG, at + 1),
                         "限流是按路算的，不能一路挡全站")
 
+    def test_61b_backfill_skips_rate_limit(self):
+        """补图档位（gap=False）：不同事件各留一张，不被 30 秒闸门整片丢掉。
+
+        0.9.134 生产现象：补旧事件时 at 是**历史时刻**、翻页还会倒退，
+        `at - last` 变成负数 → 被当成"30 秒内又来一张"，于是只有隔 30 秒以上
+        的事件才有图，用户看到的就是"移动侦测没有快照"。
+        """
+        at = time.time()
+        self.assertTrue(self.store.offer("cam-01", JPEG, at))
+        self.assertFalse(self.store.offer("cam-01", JPEG, at + 5))
+        limited = self.store.rate_limited
+        self.assertTrue(self.store.offer("cam-01", JPEG, at + 4, gap=False),
+                        "补图不该被实时限流挡住")
+        self.assertTrue(self.store.offer("cam-01", JPEG, at + 3, gap=False),
+                        "倒退的历史时刻也不该被当成重复确认")
+        self.assertEqual(self.store.rate_limited, limited,
+                         "补图不增加限流计数")
+
     def test_62_daily_cap(self):
         at = time.time()
         n = 0
@@ -252,6 +270,26 @@ class TestStore(Tmp):
                 n += 1
         self.assertEqual(n, 3, "每路每天上限 3 张（测试参数）")
         self.assertEqual(self.store.capped, 3)
+
+    def test_62b_backfill_has_its_own_daily_budget(self):
+        """补图有独立的日预算：检测池顶满后，补图照样能存。
+
+        0.9.135 真机现象：AI 检测开着时每路 300 张上午就用完，共用一份预算的话
+        之后一整天的运动事件补图全被 `capped` 挡掉 —— 生产机「升级后一张运动
+        快照都没有」就是这么来的。
+        """
+        at = time.time()
+        for i in range(3):
+            self.assertTrue(self.store.offer("cam-01", JPEG, at + i * 60))
+        self.assertEqual(self.store.capped, 0)
+        self.assertFalse(self.store.offer("cam-01", JPEG, at + 300),
+                         "检测池已顶满（3 张）")
+        # 补图池另算：还能存 3 张，第 4 张才被拦
+        for i in range(3):
+            self.assertTrue(self.store.offer("cam-01", JPEG, at + 3 + i,
+                                             gap=False),
+                            "补图不该被检测池的用量挡住")
+        self.assertFalse(self.store.offer("cam-01", JPEG, at + 9, gap=False))
 
     def test_63_queue_full_drops_without_blocking(self):
         """队列满就丢：宁可少一张图，也不能让检测线程等在磁盘上。"""

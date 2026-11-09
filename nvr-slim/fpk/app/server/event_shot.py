@@ -46,6 +46,8 @@ import time
 KEEP_DAYS = 7
 # 每路每天最多 300 张（单张按 150KB 估 ≈ 45MB/天/路）。到顶就不再存，
 # 日志记一次 —— 静默丢会让"事件页突然全没图"变成无解的谜。
+# 0.9.135 起这是**每个池**的上限：实时检测 300 + 运动补图 300。共用一份的话，
+# AI 检测开着时上午就把额度用完，之后一整天的运动事件补图全被拒。
 MAX_PER_DAY = 300
 # 同一路两条事件至少隔 30 秒才收第二张：一条 8 秒事件在检测节拍里会被多次
 # 确认（每次 _write_ledger），不限流就是同一个画面存十份。
@@ -338,7 +340,13 @@ class ShotStore:
         self._th = None
         self._lock = threading.Lock()
         self._last = {}             # cam -> 上一次收图的时刻（epoch）
-        self._day_n = {}            # (cam, date) -> 当天已收张数
+        self._day_n = {}            # (cam, date) -> 当天已收张数（实时检测池）
+        # 补图有**独立**的日预算（0.9.135）。为什么不能共用一份：AI 检测开着时，
+        # 每路每天 300 张的额度往往上午就用完了，之后一整天所有运动事件补图全被
+        # `capped` 挡掉 —— 生产机「升级后一张运动快照都没有」就是这个原因。
+        # 两个池各 300，合计上限翻倍（单张约 150KB，按 8 路算 7 天约 5GB），
+        # 仍然有界；补图池每进程从 0 计，且图存在后不再重抽，总量受当天运动事件数约束。
+        self._day_bf = {}           # (cam, date) -> 当天补图张数
         self._cap_logged = set()    # 已就"日上限"记过日志的 (cam, date)
         self._swept = ""            # 上一次 sweep 的日期
         self._du = (0.0, 0)         # (算的时刻, 字节数)
@@ -365,7 +373,7 @@ class ShotStore:
         return bool(self._th and self._th.is_alive())
 
     # -------------------------------------------------------------- 收图
-    def offer(self, cam, data, at=None, dets=None):
+    def offer(self, cam, data, at=None, dets=None, gap=True):
         """检测线程调用：限流 → 判日上限 → 入队。返回是否收下。
 
         这里**只做**：一次时间比较、一次计数、一次 put_nowait。不做磁盘写、
@@ -374,6 +382,14 @@ class ShotStore:
 
         `dets` 是这一拍的保留框（`apply_regions` 之后的）。转换在这里做一次
         （`boxes_of` 只是几个 float 转换，几十微秒量级），写盘仍然留给写线程。
+
+        `gap=False` 是给**补图**用的（motion_shot，0.9.135）：
+        `min_gap` 那条限流的本意是"同一条事件在检测节拍里被多次确认，别存十份"，
+        前提是 `at` 单调递增地跟着现在走。补旧事件时 `at` 是**历史时刻**，往
+        前翻页就会倒退，`at - last` 变成负数 → 被当成"30 秒内又来一张"整片丢掉，
+        于是只有隔 30 秒以上的事件才有图。补图处理的是**不同事件**，本来就该各
+        有一张，所以关掉这条闸；日上限（300/路/天）与队列满丢照旧，护栏不松。
+        关掉时也不更新 `_last`：实时检测的节流口径不该被历史时刻污染。
         """
         cam = str(cam or "")
         if not _CAM_RE.match(cam) or not data:
@@ -383,25 +399,30 @@ class ShotStore:
         at = float(at or time.time())
         boxes = boxes_of(dets)
         date = time.strftime("%Y-%m-%d", time.localtime(at))
+        pool = self._day_n if gap else self._day_bf
         with self._lock:
             last = self._last.get(cam)
-            if last is not None and at - last < self.min_gap:
+            if gap and last is not None and at - last < self.min_gap:
                 self.rate_limited += 1
                 return False
-            n = self._day_n.get((cam, date))
+            n = pool.get((cam, date))
             if n is None:
                 # 每个 (cam, date) 每个进程只数一次目录，之后靠内存计数。
                 # 这一次 listdir 发生在当天第一张图上，不在热路径里。
-                n = len(list_for(self.var_dir, cam, date))
+                # 补图池从 0 起算：目录里的图绝大多数是检测池写的，拿它当补图
+                # 已用量会让补图在升级当天就"继承"一个已经爆掉的上限。
+                n = len(list_for(self.var_dir, cam, date)) if gap else 0
             if n >= self.max_per_day:
                 self.capped += 1
                 if (cam, date) not in self._cap_logged:
                     self._cap_logged.add((cam, date))
-                    self.log("事件快照已达每路每日上限（%d 张）：%s %s 之后的事件不再留图"
-                             % (self.max_per_day, cam, date))
+                    self.log("事件快照已达每路每日上限（%d 张，%s池）：%s %s 之后不再留图"
+                             % (self.max_per_day, "检测" if gap else "补图",
+                                cam, date))
                 return False
-            self._last[cam] = at
-            self._day_n[(cam, date)] = n + 1
+            if gap:
+                self._last[cam] = at
+            pool[(cam, date)] = n + 1
             name = name_at(at)
         d = dir_of(self.var_dir, cam, date)
         try:

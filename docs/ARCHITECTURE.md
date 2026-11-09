@@ -177,8 +177,15 @@ var/event_shots/<cam>/<日期>/<HHMMSS>_<mmm>.jpg   （独立单线程写，7 �
 
 **运动事件快照（0.9.134）补齐纯帧差运动事件的「那一眼」**：0.9.129 的快照只在 AI 确认那一拍落盘（`ShotStore.offer()` 仅 `detect.py` 调用），纯帧差运动事件（`KIND_MOTION`，AI 没框住）在 0.9.133 及之前一直是 `ev.shot is None`。0.9.134 新增 `motion_shot.MotionShotService`：在事件查询路径发现某条 `kind=="motion"` 且还没有图的事件时，后台用 `ffmpeg -ss <offset> -i <分片> -frames:v 1` 从 `recorder` 已录好的分片里抽一帧补进 `event_shots/`，时间锚定事件起点（用图片 mtime 锚到事件当天，不是「现在」），**复用 `ShotStore` 落盘与查询、前端零改动**。抽帧在独立线程、幂等（窗口内已有图就跳过）、队列满丢、分片过期 / 没 ffmpeg 就退化 None，不抛到查询路径、不碰 `recorder.py`、不写 `.json` 旁挂（运动事件没检测框）。
 
-**空间预警（0.9.131）复用存储统计，不另扫一遍盘**：
+**补图在真实事件量下的三处修正（0.9.135）**：0.9.134 在测试机上能出图，生产机却几乎补不出来，原因是三条只在真实事件量下暴露的假设。
 
+1. **限流档位**：`ShotStore.offer()` 的 `min_gap`（30 秒/路）是为「同一条事件被检测节拍反复确认」设的，前提是 `at` 单调跟现在走。补旧事件时 `at` 是历史时刻、翻页还会倒退，`at - last` 变成负数 → 被判定为「30 秒内又来一张」整片丢弃，于是只有相隔 30 秒以上的事件才有图。0.9.135 给 `offer()` 加 `gap=False` 档位：补图绕过实时限流，日上限（`MAX_PER_DAY`）与队列满丢照旧；关掉时不更新 `_last`，实时检测的节流口径不被历史时刻污染。
+2. **投递顺序**：`event_index.query()` 末尾 `reversed(rows)`，返回的是**时间升序**。顺着投，最老的事件先占满队列（`QUEUE_MAX` 32），而它们的录像早已过期、`locate_segment` 恒返回 None，既不出图也不推进；每次刷新都在重投同一批，最新事件永远排不上。0.9.135 改为 `for e in reversed(evs)` 从最新往前投，并给「定位不到分片」加 `MISS_TTL`（600 秒）负缓存，冷却期内 `request()` 直接跳过。
+3. **计数口径**：`_handle` 原先忽略 `offer()` 的返回值，抽到帧就 `extracted += 1`，而落盘层可能以日上限/限流拒收 —— 计数器全绿、列表一张图没有。0.9.135 拆成 `extracted`（抽到帧）/ `stored`（真写进 `event_shots`）/ `rejected`（被拒收），`/api/status` 的 `motion_shot` 一并暴露。
+
+另外单条事件详情（`event_payload`）也会对无图的运动事件投一次补图：从通知或分享链接直接点进来时，列表可能从未被打开过。
+
+**空间预警（0.9.131）复用存储统计，不另扫一遍盘**：
 ```
 storage_usage()   扫 <cam>/<日期>/ 目录元数据（30 分钟缓存）
    │  per-cam {full, archive, clip, days{}} + 分层每日字节 _kind{}

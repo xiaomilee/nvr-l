@@ -105,12 +105,15 @@ class TestLocate(Tmp):
 
 
 class FakeStore(object):
-    def __init__(self):
-        self.got = []
+    """落盘层替身：记下调用参数，尤其是 gap（补图必须为 False）。"""
 
-    def offer(self, cam, data, at=None, dets=None):
-        self.got.append((cam, data, at))
-        return True
+    def __init__(self, ok=True):
+        self.got = []
+        self.ok = ok
+
+    def offer(self, cam, data, at=None, dets=None, gap=True):
+        self.got.append((cam, data, at, gap))
+        return self.ok
 
 
 class FakeExtractService(ms.MotionShotService):
@@ -168,10 +171,11 @@ class TestServiceFlow(Tmp):
             self.assertTrue(wait_for(lambda: len(store.got) >= 1))
         finally:
             svc.stop()
-        cam, data, at = store.got[0]
+        cam, data, at, gap = store.got[0]
         self.assertEqual(cam, "cam-01")
         self.assertEqual(data, JPEG)
         self.assertEqual(time.strftime("%Y-%m-%d", time.localtime(at)), date)
+        self.assertFalse(gap, "补图必须关掉实时限流（gap=False）")
 
     def test_31_no_shot_store_does_not_raise(self):
         """shot_store=None：抽到数据也只跳过落盘，不抛、extracted 仍计数。"""
@@ -187,6 +191,53 @@ class TestServiceFlow(Tmp):
                   "date": date, "start": 100.0, "end": 108.0}
             svc.request(ev)
             self.assertTrue(wait_for(lambda: svc.extracted >= 1))
+        finally:
+            svc.stop()
+
+    def test_32_rejected_store_is_not_counted_as_stored(self):
+        """落盘层拒收（日上限 / 限流）时 stored 必须为 0。
+
+        0.9.134 的坑：`_handle` 不看 offer 的返回值，抽到帧就 extracted+1，
+        计数器全绿而事件列表里一张图都没有。extracted 只该说"抽到了帧"，
+        stored 才是"图真的落在了硬盘上"。
+        """
+        date = day_str()
+        os.makedirs(os.path.join(self.rec, "cam-01", date), exist_ok=True)
+        with open(os.path.join(self.rec, "cam-01", date, "00-00-00.mp4"), "wb") as f:
+            f.write(b"fake-mp4")
+        store = FakeStore(ok=False)          # 落盘层一律拒收
+        svc = FakeExtractService("", self.var, self.rec,
+                                 lambda cam: ["cam-01"], store)
+        svc.start()
+        try:
+            ev = {"id": "cam-01_%s_000100" % date.replace("-", ""), "cam": "cam-01",
+                  "date": date, "start": 100.0, "end": 108.0}
+            self.assertTrue(svc.request(ev))
+            self.assertTrue(wait_for(lambda: svc.rejected >= 1))
+        finally:
+            svc.stop()
+        self.assertEqual(svc.extracted, 1, "抽到帧了，extracted 该记一笔")
+        self.assertEqual(svc.stored, 0, "被拒收就不能算已落盘")
+        self.assertEqual(svc.rejected, 1)
+
+    def test_33_missing_segment_is_not_retried(self):
+        """分片定位不到 → 记进负缓存，冷却期内不再入队（防队列饥饿）。
+
+        事件列表是时间升序的，最老的事件录像早已滚掉。没有负缓存的话，每次
+        刷新都会重投它们、把 32 个槽位吃满，最新的事件永远排不上。
+        """
+        date = day_str()
+        os.makedirs(os.path.join(self.rec, "cam-01", date), exist_ok=True)  # 空目录
+        svc = FakeExtractService("", self.var, self.rec,
+                                 lambda cam: ["cam-01"], None)
+        ev = {"id": "cam-01_%s_000100" % date.replace("-", ""), "cam": "cam-01",
+              "date": date, "start": 100.0, "end": 108.0}
+        svc.start()
+        try:
+            self.assertTrue(svc.request(ev))
+            self.assertTrue(wait_for(lambda: svc.missed >= 1))
+            self.assertFalse(svc.request(ev), "刚确认过分片不在，冷却期内不该重投")
+            self.assertEqual(svc.queued, 1)
         finally:
             svc.stop()
 

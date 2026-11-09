@@ -40,7 +40,15 @@ import ledger
 # 切片是压缩产物，不是证据本身（同 nvr_slim._day_files 的口径）。
 _CLIP_SLICE_RE = re.compile(r"^(.+\.c\d+(\.\d+)?)\.mp4$", re.IGNORECASE)
 
-QUEUE_MAX = 16
+QUEUE_MAX = 32
+
+# 定位不到分片的事件（分片已过期/被删）在这么久之内不再重试。
+# 为什么需要：事件列表按时间**升序**返回，补图从最老的开始投；老事件的录像
+# 早就滚掉了，永远抽不出来。没有这道负缓存，每次刷新都会把它们重新塞进队首，
+# 把队列槽位吃光，最新的事件反而永远排不上（0.9.135 修的就是这种饥饿）。
+MISS_TTL = 600.0
+# 负缓存最多记多少条：超了就把过期的清掉再放，避免长跑进程里无限增长。
+MISS_MAX = 4096
 
 
 def epoch_of(date, start):
@@ -115,9 +123,12 @@ class MotionShotService(object):
         self._th = None
         self.queued = 0
         self.dropped = 0
-        self.extracted = 0
-        self.failed = 0
+        self.extracted = 0    # 抽到帧的张数（ffmpeg 成功出图）
+        self.stored = 0       # 真正落盘的张数（ShotStore 收下才算，0.9.135）
+        self.rejected = 0     # 抽到帧但落盘层没收（日上限 / 限流 / 写盘异常）
+        self.failed = 0       # 抽帧失败（没 ffmpeg / 坏的片 / 超时）
         self.missed = 0       # 分片定位不到（过期 / 被删）
+        self._miss = {}       # (cam,date,start) -> 该时刻之前不再重试
 
     # ---------------------------------------------------------- 生命周期
     def start(self):
@@ -135,6 +146,30 @@ class MotionShotService(object):
         return bool(self._th and self._th.is_alive())
 
     # ---------------------------------------------------------- 入队（查询路径）
+    def _is_miss(self, cam, date, start):
+        """这条事件刚确认过"分片没了"，还在冷却期里吗。"""
+        try:
+            key = (str(cam), str(date), round(float(start), 3))
+        except (TypeError, ValueError):
+            return False
+        exp = self._miss.get(key)
+        if exp is None:
+            return False
+        if exp <= time.time():
+            self._miss.pop(key, None)
+            return False
+        return True
+
+    def _mark_miss(self, cam, date, start):
+        try:
+            key = (str(cam), str(date), round(float(start), 3))
+        except (TypeError, ValueError):
+            return
+        now = time.time()
+        if len(self._miss) >= MISS_MAX:
+            self._miss = dict((k, v) for k, v in self._miss.items() if v > now)
+        self._miss[key] = now + MISS_TTL
+
     def request(self, ev, slack=es.PICK_SLACK):
         """事件 dict → 入队补图（幂等）。返回是否真的排了队。
 
@@ -149,6 +184,10 @@ class MotionShotService(object):
             start = float(ev.get("start") or 0.0)
             end = float(ev.get("end") or 0.0)
         except (TypeError, ValueError):
+            return False
+        # 负缓存：这一片的录像早就滚掉了，冷却期内别再投（否则过期老事件会
+        # 反复占满队列，最新的事件永远排不上）。
+        if self._is_miss(cam, date, start):
             return False
         # 幂等：窗口内已有图就跳过（图在就不必再抽，也不该再抽）
         if es.find(self.var_dir, cam, date, start, end, slack):
@@ -220,24 +259,42 @@ class MotionShotService(object):
         loc = locate_segment(self.record_root, dirs, date, start)
         if loc is None:
             self.missed += 1
+            self._mark_miss(cam, date, start)
             return
         path, offset = loc
         data = self._extract(path, offset)
         if not data:
             self.failed += 1
             return
+        self.extracted += 1
+        if self.shot_store is None:
+            return
         at = epoch_of(date, start)
-        if self.shot_store is not None:
+        try:
+            # gap=False：补的是**不同事件**，各自该有一张；不关这条闸，30 秒内
+            # 的事件会被当成"同一条重复确认"整片丢掉（0.9.135 真机问题）。
+            ok = self.shot_store.offer(cam, data, at, gap=False)
+        except TypeError:
+            # 老签名 / 测试替身不带 gap：退回按位置调用，宁可被限流也别丢图。
             try:
-                self.shot_store.offer(cam, data, at)
+                ok = self.shot_store.offer(cam, data, at)
             except Exception as e:
+                self.rejected += 1
                 self.log("运动事件快照落盘异常（%s）：%r" % (cam, e))
                 return
-        self.extracted += 1
+        except Exception as e:
+            self.rejected += 1
+            self.log("运动事件快照落盘异常（%s）：%r" % (cam, e))
+            return
+        if ok:
+            self.stored += 1
+        else:
+            self.rejected += 1
 
     # ---------------------------------------------------------- 诊断
     def status(self):
         return {"queued": self.queued, "dropped": self.dropped,
-                "extracted": self.extracted, "failed": self.failed,
-                "missed": self.missed, "running": self.alive(),
-                "qsize": self._q.qsize()}
+                "extracted": self.extracted, "stored": self.stored,
+                "rejected": self.rejected, "failed": self.failed,
+                "missed": self.missed, "miss_cached": len(self._miss),
+                "running": self.alive(), "qsize": self._q.qsize()}
