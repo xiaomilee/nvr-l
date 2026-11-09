@@ -25,7 +25,7 @@
 | 3 | 0.9.121 | 事件中心：统一事件模型 + 跨摄像头检索 + 点击定位 | done | 0972f1c |
 | 4 | 0.9.122 | 检测治理：有界并发 + 时间窗确认 + 诊断完整 | done | 55b3773 |
 | 5 | 0.9.123 | 前端拆分 + 文档重构 + 按钮验收自动化 | **done** | ce81b12 |
-| 6 | 0.9.124 | P2 · Webhook 通知补齐：多模板 / 发送历史落盘 / 查询接口 | doing | - |
+| 6 | 0.9.124 | P2 · Webhook 通知补齐：多模板 / 平台手选 / 文案模板 / 发送历史 | **done** | c170220 |
 
 状态取值：`todo` / `doing` / `done` / `blocked`。`blocked` 必须在批次小节里写原因。
 
@@ -126,6 +126,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 23 | 11-09 00:38 | 批次 5 切片十三：**清单第 2 项收尾**——接手并发实例 00:01~00:06 写好但未提交的采集器在制品（`test/btn_harvest.py` 全表 20 项改值→三份快照→还原→四层判定→出报告 + `test_btn_harvest.py` 15 条离线守卫 + `BUILD.md` 用法 + `button_matrix.py` 抽出 `roll_up()` 并修正两处证据口径）；复核闸门全绿后跑出**首份端到端报告** | de5e6a3 | 未出包（清单 3/4 未勾、批次未收尾，按规则不 bump / 不部署）；首跑闸门偶发 `test_btn_effect.py` 起服务失败，单独复跑 12 项全绿后整轮复跑全绿：validate 81 项、后端 **1117** 条（1102+15）、53 文件、前端全绿、0 FAIL；报告 `test-reports/btn-matrix-0.9.123-r23.json`：20 项 **pass 9 / partial 11 / fail 0 / unknown 0**、总判定通过、还原全部成功；11 项 partial 逐条写明免验理由（需重启 / 夜间任务无出口 / ffmpeg argv 无 HTTP 出口），**不是 20 项全验过**；152 只读 0.9.123、18085、两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`，生产机 2.6 未碰 |
 | 24 | 11-09 01:30 | **批次 5 收尾**：清单第 3 项文档重构整项（`README.md` / `docs/USER_GUIDE.md` / `docs/ARCHITECTURE.md` / `docs/TROUBLESHOOTING.md` / `CHANGELOG.md` 五份 + `BUILD.md` 只留构建、历史排障搬进 CHANGELOG）+ `test/test_doc_suite.py` 14 项守卫；清单第 4 项 `nvr_slim.py` 头注释重写；changelog 正式化、**不重复 bump**；出同名正式包并部署 152 跑真机验收 | ce81b12 | **出包** `dist/nvr-0.9.123_x86.fpk` **101169995 字节** md5 `0d3567e1678808a3fbc8c6b31497d6bd`（预览包 101169048 / `e0f7206f51ba5761c9869126eb959e03`，正式包取代预览包）；闸门 validate 81 项、后端 **1131** 条（1117+14）、54 文件、前端全绿、0 FAIL；守卫首跑故意改坏模块名与路由各命中一条断言、恢复后 14 项全绿；`deploy_test.py` 部署 152 八项自检全 OK（`test-reports/deploy-0.9.123.json`），0.9.123→0.9.123 上线 0.1s、端口 18085；按 README §3 真机验收：两路 `hstate=recording`（age 1/0）、`record.enabled=True`、无 stalled、`detect.state=ready`，程序目录含本轮新头注释（正式包实证）；`gaps` 有 1 条 61 秒缺口，原因「录像进程未运行…已恢复」，系部署停服重启所致、非产品问题；**批次 5 标 done**，生产机 2.6 未碰 |
 | 25 | 11-09 07:57 | **批次 6 立项 + 切片一**（按用户「继续、加快进度」取 P2 首项）：`notify_tpl.py` 多模板按 host 适配五平台 + 通用回退、`notify_history.py` jsonl 落盘与过滤查询、`GET /api/notify/history` 只读接口、`status.notify.history` 缓存计数、停机补 `Notifier.stop()`；文档/守卫同步 | 1a6652f | 未出包（清单 5/6 未勾、批次 未收尾，按规则不 bump / 不部署）；闸门 validate 81 项、后端 **1199** 条（1131+68）、58 文件、前端全绿、0 FAIL；四份新单测 68 条含真起本地服务的 HTTP 冒烟 10 项（401 / 落盘读取 / 五种过滤 / 坏参数不 500）；首跑抓到并修掉 「坏 UTF-8 行让整份历史作废」；文档守卫故意改坏两处各命中一条、恢复全绿；152 只读 0.9.123、18085、两路 `hstate=recording`（age 3/0）、无 stalled、`detect.state=ready`，生产机 2.6 未碰；**批次 6 保持 doing** |
+| 26 | 11-09 08:54 | **批次 6 收尾**：设置页平台手选 + 文案模板 + 实际发送方式 + 发送历史查看；`notify.platform` / `notify.template` 两键全链路接通（DEFAULTS / norm_notify / pushCfg / 回读 + `test_notify_ui.py` 16 条守卫）；测试发送带界面值；部署自检加第九项，项数改由代码数出来；五处 bump 0.9.124 并写 changelog | c170220 | **出包** `dist/nvr-0.9.124_x86.fpk` **101180736 字节** md5 `d9191c3aa3bbbc8db8f781820521e42d`；闸门 validate 81 项、后端 **1224** 条（1199+25）、59 文件、前端 514 / 70 / 28 / 166 全绿、0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.124.json`），0.9.123→0.9.124 上线 0.1s、端口 18085、通知历史 0 条、凭证 401；真机验收两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`、`notify.render` 有 platforms 与 `history.persisted`、config 回读带新键、程序目录含新代码；缺口为部署停服窗口（覆盖率 0.9926 / 0.9877）；**批次 6 标 done**，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 
@@ -946,9 +947,9 @@ CSS 831 条规则按 `(媒体查询上下文, 选择器)` 归并后声明序列�
 - [x] 只读接口 `GET /api/notify/history`；`status_payload().notify` 带落盘统计
       （条数 / 最后一条时间，计数缓存在内存，绝不在轮询里扫盘）。
 - [x] 生命周期：`Notifier` 接 `var_dir`，`stop()` 补进 `nvr_slim.py` 停机序列。
-- [ ] 前端：设置页模板选择 + 历史查看入口（本轮不做，留下一轮；动前端会牵动
-      `js_split` 等价守卫与合成器，单独一轮更稳）。
-- [ ] 版本 0.9.124：五处 bump、出包、部署 152、真机验收（批次收尾才做）。
+- [x] 前端：设置页平台手选 + 文案模板 + 实际发送方式 + 历史查看入口
+      （第 26 轮做完；动前端确实牵动了 `js_split` 等价守卫与合成器，单独一轮是对的）。
+- [x] 版本 0.9.124：五处 bump、出包、部署 152、真机验收（第 26 轮收尾）。
 
 **进度（第 25 轮，清单 1~4 已打勾，批次仍 `doing`）**：
 按第四步「批次收尾才 bump」，本轮**不 bump、不出包、不部署**；
@@ -972,10 +973,50 @@ CSS 831 条规则按 `(媒体查询上下文, 选择器)` 归并后声明序列�
 文档守卫也故意改坏两处（删掉模块表里的 `notify_tpl.py`、把路由改成
 `/api/notify/history-ghost`）各命中一条断言，恢复后全绿，不是假绿。
 
-**没做的事（不假装打勾）**：前端设置页还没有模板选择与历史查看入口；
-自定义文本模板的写入口还没设计；`/api/notify/history` 未进 deploy 自检
-（部署自检仍是八项，加项要同步 TROUBLESHOOTING / BUILD 的「八项」文案，
-留到收尾轮一起做）。
+**进度（第 26 轮，清单 5/6 打勾，批次 6 收尾 `done`）**：用户又说「继续」，
+这一轮把前端入口与收尾一起推完，不留半成品。
+
+前端（`settings_cards.js` / `diagnostics.js` / `live.js` / `core/state.js`）：
+- 「通知通道」新增**平台手选**（自动识别 + 飞书 / 钉钉 / 企业微信 / Server酱 /
+  Bark / 通用 JSON）。选项列表从 `/api/status` 的 `notify.render.platforms` 读，
+  前端只留一份兜底，且由 `test_notify_ui.py` 逐项比对，不会悄悄多出后端不认的值。
+- **文案模板**输入（占位符说明也来自 `notify.render.vars`），下面一行写明
+  「实际平台（识别/手选）· 文案（默认/自定义）· 已落盘 N 条」，模板被回退时
+  直接写「模板已回退：未知占位符 xxx」。
+- **查看发送历史**：点一次读一次盘，列最近 20 条（时间 / 路 / 类别 / 成败 /
+  平台 / 重试次数），加载中 / 读取失败 / 空 三态各有话说。列表存在 `NT.hist`
+  里而不是直接写 DOM —— 卡片每次交互都整块重渲染，只写 DOM 会被冲掉。
+- **测试发送**带上界面上刚填的 template / platform（`Notifier.test()` 返回四元组
+  含 platform），测的就是屏幕上那句，不是磁盘旧值。
+
+配置键（第 25 轮特意没加的两个）：`notify.platform` / `notify.template` 这一轮
+**前后端一起加**——`runtime.DEFAULTS`、`detect.NOTIFY_DEFAULTS`、`norm_notify()`
+（平台按白名单强校、写错回落 auto；模板原样保留，非法占位符交给渲染时回退）、
+`pushCfg()`、`applyServerCfg()` 五处齐。第 25 轮担心的「`pushCfg` 整块覆盖把新键
+打回默认」不再靠「不加键」回避，而是靠**前后端同时接线 + 守卫**钉住：
+`test_notify_ui.py` 16 条验 DEFAULTS 键集合等于 `norm_notify` 输出、前端必须推
+必须回读、平台白名单前后端逐项相同、`status()` 不许在读状态时读配置。
+
+部署自检加第九项 `/api/notify/history`（0 条也算通过：守的是「文件还没生成也不
+500」）。项数不再写死：`test_doc_suite.py` 从 `deploy_test.CHECKS` 数出来，
+文档只许跟着代码走——这一轮就是这么红的（文档改了、测试里还写着「八项」）。
+
+收尾实况：五处 bump `0.9.124`（`runtime.VERSION` / manifest 第 2 行与第 15 行
+changelog 新条目 / `test_pixdiff.py` / `test_v0918.py`），历史 changelog 条目全部保留；
+`test_doc_suite.py` 的「不许写下个版本」改为从 `runtime.VERSION` 推导下一个补丁号，
+不再写死字面量。出包 `dist/nvr-0.9.124_x86.fpk` **101180736 字节 /
+md5 `d9191c3aa3bbbc8db8f781820521e42d`**；`deploy_test.py` 部署 152 **九项全 OK**
+（0.9.123→0.9.124 上线 0.1s、端口 18085、通知历史 0 条、凭证 401）。
+
+真机验收：两路 `hstate=recording`（age 1/2）、无 stalled、`detect.state=ready`；
+`notify.render` 返回 platforms 列表与 `history.persisted=true`，`/api/config` 回读
+带 `platform="auto"` / `template=""`，程序目录里 `PLATFORMS` / `describe` / 前端
+`btnNtHist` 都在（新代码实证，不是靠版本号判定）。缺口两段落在部署停服窗口
+（31800→32036 秒，另两条是更早的重启），覆盖率 0.9926 / 0.9877，非产品问题。
+
+测试：闸门 validate 81 项、后端 **1224** 条（1199+25）、59 文件、前端设置页
+**514** 项（+9）全绿、0 FAIL。中途一次整轮里两个「起本地服务」的用例在
+`setUpClass` 超时（端口竞争），单跑均 2 秒全绿、整轮复跑全绿，未改产品代码。
 
 ---
 
