@@ -149,6 +149,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 34 | 11-09 17:16 | **批次 13 立项 + 全量收尾**（按用户「继续」取 P0「存储管理」三格里唯一没做过的一格）：新增 `space.py` 纯函数模块，按**稳态容量**判空间够不够 —— `rate` = 最近 7 个完整日中位数（丢 0 字节日）、`need` = rate × 保留天数（归档按归档速率）、`other` = 总量 − 剩余 − 录像实测、`headroom` = 总量 − other − need；分 `off / unknown / critical / warn / ok` 五档，建议按原因给（装不下 / 稳态余量太小 / 现在剩余就低，多因全保留、取最重定级）；`storage_usage` 顺手按 (日期, 文件名) 去重出 `days` 与 `space`（不额外扫盘，缓存加格式版本号 `STORAGE_CACHE_V=2` 让旧缓存升级后重扫而不是"未知"半小时）；监控线程 10 分钟一算、只读内存喂 `/api/status.space` 与 `/api/health.space`，等级变化才记日志（升级一条、恢复一条，不刷屏）；配置键 `space_warn_gb`（0 = 关闭，大盘 10% 兜底）；诊断页存储卡顶部预警条 + 直播页头部提示 + 设置页阈值输入；**预警只报告不处置** —— 自动删录像等于让"空间紧张"改写事实数据，删录像仍走「保留策略」预览加二次确认；`recorder.py` 一行未改 | 6242a83 | **出包** `dist/nvr-0.9.131_x86.fpk` **101238964 字节** md5 `26c6c9bbed84315c85e291733c1c9b04`；闸门 validate **81** 项、后端 **1425** 条 / **65** 文件，前端 space **30**（新增）/ 设置页 514 / 时间轴 70 / events 113 / export 26 / detect 58 / masks 27 / 样式 28 / 脚本 173，0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.131.json`），0.9.130→0.9.131 上线 **0.1s**、端口 18085；真机 `/api/storage/usage.space` 判 `critical`：`rate=19.3 GB/天`（最近 1 个完整日）、`need=57.9 GB`、`free/total=7.0/55.0`、`headroom=-17.3 GB`、`suggest_days=2`、`keep_text=全时 3 天`；`space_warn_gb` 往返：`0 → off`（`reasons=[]`、无 advice）、`3 → reasons 由 [capacity, free_critical] 收成 [capacity]`（阈值生效，但盘本身装不下所以仍 `critical` —— **计划里"改 3 应降为 warn"那条写错了，已在批次小节记明**）、还原 `20` 复核落盘；清理过期未误报（`cleanup_stale` 不出现）；`/api/status.space` 部署后首轮（等 20 秒）即写回、`/api/health.space={level:critical, free_gb:7.1}`；全程两路 `hstate=recording`、`recorder.py` **git diff 为空**；**批次 13 标 done**，P0 六项全部有落地，生产机 2.6 未碰 |
 | 35 | 11-09 19:05 | **批次 14 立项 + 全量收尾**（按用户「移动端体验还应该进一步优化」取 P1「事件中心」与 P0「回放」的可用性）：全站首个 `@media (max-width:640px)` 断点（字号上浮一档、触控目标 ≥ 40px、卡片重排）；事件详情两段式（先看清那一眼再决定开不开视频，主按钮「▶ 打开录像（约 N 秒）」把代价写在按钮上，±30 秒降为次要）；快照浮层「横过来看（旋转 90° 占满竖屏高）+ 放大一档」；机位筛选从横滑 chips 改底部弹层 + 2 列网格多选（替代 `evchip`）；事件列表加载骨架 + 可重试失败态（断网给「同一个网络」提示）；`player.js` 加 `visibilitychange` 切后台暂停、回来续播；`nav.js` 切走直播/其它页调 `closeLiveRoom()` 主动断 MJPEG 流；`recorder.py` 一行未改 | 7493181 | **出包** `dist/nvr-0.9.132_x86.fpk` **101244567 字节** md5 `5b81e6a5ae713807ea2990fe4725f632`；闸门 validate **81** 项、后端 **1425** 条 / **65** 文件，前端 events **123**（+10）/ space 30 / detect 58 / masks 27 / 设置页 514 / 时间轴 70 / export 26 / 样式 28 / 脚本 173，0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.132.json`），0.9.131→0.9.132 上线 **0.1s**、端口 18085；真机部署后 `curl` 拉 `ui/` 确认新代码已生效：`evCamPopHtml`/`data-evzoomrot`/`data-evzoomzoom`/`evconfirm`/`evcampop-sheet`/`EV_SHOT_ONERR`/`visibilitychange`/`closeLiveRoom` 全部进编译后 HTML、`@media (max-width:640px)` 断点已下发；两路 `hstate=recording`、`recorder.py` **git diff 为空**；**待用户手机确认**：375 宽布局 / 竖屏旋转后检测框不错位 / 后台切回续播 / 切页断流的**视觉与触摸**层面（代码与部署已实锤，机上观感需真机过一眼）；**批次 14 标 done**，生产机 2.6 未碰；0.9.132 部署后用户试出一处回归——打开事件详情会立即跳回放（evOpen 里顺手 `evSeek` 把两段式架空），0.9.133 已修正（见第 36 轮） |
 | 36 | 11-09 19:48 | **0.9.133 修正回归**（批次 14 收尾后用户试出）：`events.js` 的 `evOpen(id)` 在拉到 clip 后顺手调 `evSeek` 跳回放，把"先看清再打开"的两段式架空了——点事件就直接进回放页。修正：`evOpen` 只取定位（决定能不能播、播不了说清原因）**不再跳转**；真正跳回放的是详情里的「打开录像」按钮（`data-evgo` → `evGo` → `evSeek`）与快照浮层的「打开录像」（`data-evzoomplay` 改为 `evOpen(id).then(()=>evGo(0))`，兼容从缩略图进浮层时还没开过卡片、clip 未拉的情形）。七份文档版本戳 bump 0.9.132→0.9.133，manifest `changelog` 首条改写；`recorder.py` 一行未改 | 1d37693 | **出包** `dist/nvr-0.9.133_x86.fpk` **101244890 字节** md5 `5e49d83b56fbf2074a7719016bf4f34c`；闸门 validate **81** 项、后端 **1425** 条 / **65** 文件，前端 events **123** / 其余全绿，0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.133.json`），0.9.132→0.9.133 上线 **0.1s**、端口 18085；机上 `curl ui/` 确认 `evSeek(ev, evClipStart(d))` 已从编译后 HTML 消失、`evOpen(id).then(()=>evGo(0))` 已进、两段式标记 `evconfirm`/`evacts`/`data-evgo` 都在；两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**；真机行为需用户复测确认不再自动跳；**生产机 2.6 未碰** |
+| 37 | 11-09 21:05 | **批次 15 立项 + 全量收尾**（按用户「移动侦测的事件记录，怎么实现快照功能？规划一下」→「执行」）：纯帧差运动事件（`KIND_MOTION`，AI 没框住）在 0.9.133 及之前 `ev.shot` 恒为 None。新增 `motion_shot.py`（`MotionShotService`）——事件查询发现某条 motion 且尚无图时，后台从 recorder 已录分片用 `ffmpeg -ss` 抽一帧补进 `event_shots/`，时间锚定事件起点（图片 mtime 锚到事件当天，不是「现在」）、幂等（窗口内已有图就跳过）、队列满丢、分片过期 / 没 ffmpeg 退化 None，复用 `ShotStore` 落盘与查询、前端零改动；`nvr_slim` 5 处接入（import / 启动挂载 start / 查询触发 / stop / status 暴露）。**真机核对抓到两处 bug 并修**：① `cam_dirs_fn` 收到 cam id 字符串却按 dict 传给 `cam_storage_dirs`（首条就 AttributeError 打死 worker）→ 新增 `cam_dirs_for(id)` 做 id→dict；② `_loop` 逐条处理未兜底（异常静默退出线程、队列只塞不抽）→ 拆 `_handle` + `_loop` try/except 计 `failed`。加 worker 存活回归测试（`test_motion_shot` 12 条） | e1fb14e | **出包** `dist/nvr-0.9.134_x86.fpk` **101249502 字节** md5 `44ec26c678672dd3a70b645de801a2ab`；闸门 validate **81** 项、后端全量绿（新增 `test_motion_shot.py` 12 条，`test_pixdiff` / `test_v0918` 版本守卫同步 0.9.134），前端零改动（index.html 未变）0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.134.json`），0.9.133→0.9.134 上线 **0.1s**、端口 18085；机上核对 `motion_shot` 状态 `running=true / extracted=34 / failed=0 / missed=0 / qsize=0`，`/api/events` 30 条里 24 条 motion 有 **16 条已带 shot**（样例 `at:17:37:04` 锚定事件起点），首轮 bug（`extracted=0 / running=false / dropped=169`）已修；两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**；**批次 15 标 done**，生产机 2.6 未碰 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
 | 项 | 值 |
@@ -1786,6 +1787,83 @@ headroom= 总容量 − other − need               （稳态余量）
 
 ---
 
+## 批次 15 · 0.9.134 运动事件快照（第 37 轮立项并收尾）
+
+**为什么现在做**：批次 11（0.9.129）只在 AI 确认那一拍落图，纯帧差的运动事件
+（`KIND_MOTION`，AI 没框住）从不存图 —— 事件列表 / 详情里 `ev.shot` 恒为 `None`，
+用户想「先看一眼」只能点开回放。批次 11/12 都把它写进「故意不做」（边界事后算、
+没有确认时刻可挂图）。用户问「移动侦测的事件记录，怎么实现快照功能？规划一下」
+→「执行」，于是补上这「那一眼」。
+
+三问自检：① 是 P1「事件中心」的可用性补全（找到 → 看一眼 → 再看全程）；② 只加不改、
+抽帧在独立线程、不碰 `recorder.py`、不改任何事实数据；③ 不混进 P3。
+
+### 方案（选 A：事件查询触发 + 分片抽帧）
+
+判过四条路：A 事件落账后异步从 recorder 分片抽帧（选用）；B 检测那拍把
+`snapshots/<cam>.jpg` 顺手存一份（会被「拍现在不拍当时」污染、且帧差事件没有
+确切的「那一拍」）；C 分析期事后重扫分片（重、且要另一套调度）；D 起临时 RTSP
+抓图（拉流成本 + 与录像不同源）。选 A 的理由：分片已在盘上、时间可锚定事件起点、
+复用现成 `event_shot` 落盘与查询，前端零改动。
+
+```
+/api/events 查到某条 kind==motion 且无 shot
+   │  motion_shot.request(ev)   幂等（窗口内已有图就跳）+ 非阻塞 put_nowait
+   ▼
+后台线程：再判幂等 → locate_segment（复用 event.resolve 定位事件起点所在分片 + 片内偏移）
+   │  ffmpeg -ss <offset> -i <分片> -frames:v 1 → 一帧 JPEG
+   ▼
+ShotStore.offer(cam, data, epoch_of(date,start))   ← 时间锚定事件起点，不是「现在」
+   ▼
+后续 /api/events 的 ev.shot 由现成 shot_of 统一补上（前端零改动）
+```
+
+### 实施清单
+
+1. 新增 `motion_shot.py`：`epoch_of`（本地午夜锚定）、`locate_segment`（纯函数，
+   复用 `event.resolve`，排除 `.cNN` 活动切片）、`MotionShotService`（`request` /
+   `_loop` / `_handle` / `_extract` / `status`）
+2. `nvr_slim` 5 处接入：`import motion_shot`；启动 `MotionShotService(...).start()`
+   挂 `STATE["motion_shot"]`（异常置 None、不拖垮其余链路）；events 查询后对
+   `kind=="motion"` 且无 shot 的事件投一次 `request`；shutdown 调 `.stop()`；
+   `/api/status` 暴露 `motion_shot{queued,dropped,extracted,failed,missed,running,qsize}`
+3. 新增 `test_motion_shot.py`（12 条）：`epoch_of` / `locate_segment`（含前摇、
+   缺失→None、坏日期→None、切片排除）/ `request` 幂等与入队 / 后台抽帧落盘 /
+   `shot_store=None` 不抛 / **单条异常不打死 worker**（回归守卫）
+4. 七份文档 bump 0.9.134（README / BUILD / CONFIGURATION / CHANGELOG / USER_GUIDE /
+   TROUBLESHOOTING / ARCHITECTURE），ARCHITECTURE 模块表补 `motion_shot.py` 行
+
+### 真机核对抓到并修的两处 bug（写清楚，别让下一个人踩）
+
+1. **`cam_dirs_fn` 契约错**：挂载时 `cam_dirs_fn=lambda cam: cam_storage_dirs(cam)`，
+   但 worker 传进来的是事件里的 **cam id 字符串**，而 `cam_storage_dirs(c)` 要的是
+   **摄像头字典**（内部 `c.get("dir_name") or c["id"]`）→ 第一条就
+   `AttributeError: 'str' object has no attribute 'get'`。修：新增 `cam_dirs_for(id)`
+   用 `next((c for c in cameras() if c.get("id") == id), ...)` 做 id→dict 再取目录。
+2. **`_loop` 逐条处理没兜底**：异常不在 try 里 → 线程静默退出，队列只塞不抽、
+   全 dropped、`extracted` 永远 0（线上状态 `running=false / extracted=0 /
+   dropped=169` 即此）。修：拆 `_handle`，`_loop` 对每条 `try/except` 计 `failed`，
+   worker 永不因单条坏数据退出。
+
+修复后机上状态：`running=true / extracted=34 / failed=0 / missed=0 / qsize=0`，
+30 条事件里 16 条 motion 已带图。
+
+### 验收（152 真机）
+
+- `motion_shot` `running=true`、`extracted` 持续增长、队列能排空
+- `/api/events` 的运动事件出现 `shot{url,at,offset}`，`at` 锚定事件起点（不是「现在」）
+- 抽不到（分片过期 / 没 ffmpeg / 队列满）只计 `missed` / `failed` / `dropped`，不抛、不影响列表
+- 两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**
+
+### 故意不做
+
+- **不新建 RTSP / 不重解码整段**：从已录分片 `-ss` 抽一帧，代价最小、与录像同源。
+- **不写检测框 `.json`**：运动事件没有检测框，硬塞空框反而误导（`?meta=1` 回 404 即可）。
+- **不进事件索引**：图是附属物，写进索引会在 7 天过期后留下指向空气的行（同批次 11 口径）。
+- **不做「同步阻塞出图」**：查询线程只入队，出图慢半拍但绝不拖慢打开事件的响应。
+
+---
+
 ## 不在本轮范围
 
 评审 P3 明确不建议投入：人脸识别、车牌识别、自定义模型训练、复杂多用户权限、实时滤镜。
@@ -1795,7 +1873,7 @@ headroom= 总容量 − other − need               （稳态余量）
 `预警转通知`（批次 13 只做「算出结论并说清楚」，系统告警要另一套语义：
 去重键 / 每日一次 / 与事件通知共用一个 webhook）、
 `模型版本管理与效果对比`（仍缺第二份模型与标注样本，挂了六轮）、
-`移动侦测快照`（批次 11/12 都写进「故意不做」：边界事后算，没有确认时刻可挂图）。
+~~`移动侦测快照`~~ → **批次 15（0.9.134）已交付**：纯帧差运动事件从 recorder 已录分片异步抽一帧补进 `event_shots`，时间锚定事件起点（不是「现在」），复用 `event_shot` 落盘与查询、前端零改动。批次 11/12 曾写进「故意不做」（边界事后算、没有确认时刻可挂图），批次 15 用「事件起点所在分片抽帧」绕开了这个限制。
 
 - 「空间预警」已由**批次 13（0.9.131）**接手：评审基线 P0 存储管理三格里的最后一格，
   保留策略与清理预览在批次 5 已交付。做完这格，P0 六项全部有落地。
