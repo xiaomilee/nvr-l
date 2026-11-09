@@ -150,8 +150,10 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 35 | 11-09 19:05 | **批次 14 立项 + 全量收尾**（按用户「移动端体验还应该进一步优化」取 P1「事件中心」与 P0「回放」的可用性）：全站首个 `@media (max-width:640px)` 断点（字号上浮一档、触控目标 ≥ 40px、卡片重排）；事件详情两段式（先看清那一眼再决定开不开视频，主按钮「▶ 打开录像（约 N 秒）」把代价写在按钮上，±30 秒降为次要）；快照浮层「横过来看（旋转 90° 占满竖屏高）+ 放大一档」；机位筛选从横滑 chips 改底部弹层 + 2 列网格多选（替代 `evchip`）；事件列表加载骨架 + 可重试失败态（断网给「同一个网络」提示）；`player.js` 加 `visibilitychange` 切后台暂停、回来续播；`nav.js` 切走直播/其它页调 `closeLiveRoom()` 主动断 MJPEG 流；`recorder.py` 一行未改 | 7493181 | **出包** `dist/nvr-0.9.132_x86.fpk` **101244567 字节** md5 `5b81e6a5ae713807ea2990fe4725f632`；闸门 validate **81** 项、后端 **1425** 条 / **65** 文件，前端 events **123**（+10）/ space 30 / detect 58 / masks 27 / 设置页 514 / 时间轴 70 / export 26 / 样式 28 / 脚本 173，0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.132.json`），0.9.131→0.9.132 上线 **0.1s**、端口 18085；真机部署后 `curl` 拉 `ui/` 确认新代码已生效：`evCamPopHtml`/`data-evzoomrot`/`data-evzoomzoom`/`evconfirm`/`evcampop-sheet`/`EV_SHOT_ONERR`/`visibilitychange`/`closeLiveRoom` 全部进编译后 HTML、`@media (max-width:640px)` 断点已下发；两路 `hstate=recording`、`recorder.py` **git diff 为空**；**待用户手机确认**：375 宽布局 / 竖屏旋转后检测框不错位 / 后台切回续播 / 切页断流的**视觉与触摸**层面（代码与部署已实锤，机上观感需真机过一眼）；**批次 14 标 done**，生产机 2.6 未碰；0.9.132 部署后用户试出一处回归——打开事件详情会立即跳回放（evOpen 里顺手 `evSeek` 把两段式架空），0.9.133 已修正（见第 36 轮） |
 | 36 | 11-09 19:48 | **0.9.133 修正回归**（批次 14 收尾后用户试出）：`events.js` 的 `evOpen(id)` 在拉到 clip 后顺手调 `evSeek` 跳回放，把"先看清再打开"的两段式架空了——点事件就直接进回放页。修正：`evOpen` 只取定位（决定能不能播、播不了说清原因）**不再跳转**；真正跳回放的是详情里的「打开录像」按钮（`data-evgo` → `evGo` → `evSeek`）与快照浮层的「打开录像」（`data-evzoomplay` 改为 `evOpen(id).then(()=>evGo(0))`，兼容从缩略图进浮层时还没开过卡片、clip 未拉的情形）。七份文档版本戳 bump 0.9.132→0.9.133，manifest `changelog` 首条改写；`recorder.py` 一行未改 | 1d37693 | **出包** `dist/nvr-0.9.133_x86.fpk` **101244890 字节** md5 `5e49d83b56fbf2074a7719016bf4f34c`；闸门 validate **81** 项、后端 **1425** 条 / **65** 文件，前端 events **123** / 其余全绿，0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.133.json`），0.9.132→0.9.133 上线 **0.1s**、端口 18085；机上 `curl ui/` 确认 `evSeek(ev, evClipStart(d))` 已从编译后 HTML 消失、`evOpen(id).then(()=>evGo(0))` 已进、两段式标记 `evconfirm`/`evacts`/`data-evgo` 都在；两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**；真机行为需用户复测确认不再自动跳；**生产机 2.6 未碰** |
 | 37 | 11-09 21:05 | **批次 15 立项 + 全量收尾**（按用户「移动侦测的事件记录，怎么实现快照功能？规划一下」→「执行」）：纯帧差运动事件（`KIND_MOTION`，AI 没框住）在 0.9.133 及之前 `ev.shot` 恒为 None。新增 `motion_shot.py`（`MotionShotService`）——事件查询发现某条 motion 且尚无图时，后台从 recorder 已录分片用 `ffmpeg -ss` 抽一帧补进 `event_shots/`，时间锚定事件起点（图片 mtime 锚到事件当天，不是「现在」）、幂等（窗口内已有图就跳过）、队列满丢、分片过期 / 没 ffmpeg 退化 None，复用 `ShotStore` 落盘与查询、前端零改动；`nvr_slim` 5 处接入（import / 启动挂载 start / 查询触发 / stop / status 暴露）。**真机核对抓到两处 bug 并修**：① `cam_dirs_fn` 收到 cam id 字符串却按 dict 传给 `cam_storage_dirs`（首条就 AttributeError 打死 worker）→ 新增 `cam_dirs_for(id)` 做 id→dict；② `_loop` 逐条处理未兜底（异常静默退出线程、队列只塞不抽）→ 拆 `_handle` + `_loop` try/except 计 `failed`。加 worker 存活回归测试（`test_motion_shot` 12 条） | e1fb14e | **出包** `dist/nvr-0.9.134_x86.fpk` **101249502 字节** md5 `44ec26c678672dd3a70b645de801a2ab`；闸门 validate **81** 项、后端全量绿（新增 `test_motion_shot.py` 12 条，`test_pixdiff` / `test_v0918` 版本守卫同步 0.9.134），前端零改动（index.html 未变）0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.134.json`），0.9.133→0.9.134 上线 **0.1s**、端口 18085；机上核对 `motion_shot` 状态 `running=true / extracted=34 / failed=0 / missed=0 / qsize=0`，`/api/events` 30 条里 24 条 motion 有 **16 条已带 shot**（样例 `at:17:37:04` 锚定事件起点），首轮 bug（`extracted=0 / running=false / dropped=169`）已修；两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**；**批次 15 标 done**，生产机 2.6 未碰 |
+| 38 | 11-09 22:55 | **批次 16 · 0.9.135 运动快照补图修正**（按用户「生产机已升级到 134 版本，但是未看到移动侦测的事件快照」）：0.9.134 在测试机 16/24 出图、生产机一张没有。静态审查 + 152 真机复现，定位**三个只在真实事件量下暴露**的病根：① `ShotStore.offer` 的 `min_gap`（30 秒/路）是给实时检测设的，补旧事件时 `at` 是历史时刻、翻页还会倒退，`at-last` 变负 → 被当重复确认整片丢；新增 `gap` 参数，补图走 `gap=False`（保留日上限与队列满丢，且不更新 `_last` 以免污染检测口径）。② 事件索引按时间**升序**返回（`reversed(rows)`），补图顺着投 → 最老的事件先占满队列，而它们录像早滚掉、`locate_segment` 恒 None，既不推进也不出图，最新事件永远排不上；改为 `reversed(evs)` 从最新往前投、`QUEUE_MAX` 16→32、`MISS_TTL=600` 秒负缓存。③ **日上限串池**：300 张/路/天原本只有 AI 快照一个消费者，AI 开着时上午就顶满，之后一整天补图全 `capped`（152 实测 `cam-test02` 当天 487 张 → `rejected` 44/44）；改为检测池 `_day_n` 与补图池 `_day_bf` 各 300，补图池每进程从 0 计。另：`_handle` 忽略 `offer` 返回值、抽到帧就计 `extracted`（计数器全绿而列表没图）→ 拆 `stored`/`rejected`；单条事件详情也触发一次补图 | 8e05c7f | **出包** `dist/nvr-0.9.135_x86.fpk` **101251712 字节** md5 `d567ab2c1acdb0ca16f67a262eaee742`；闸门 validate **81** 项、后端全量绿（`test_event_shot` **52** 条、`test_motion_shot` **14** 条，版本守卫同步 0.9.135，`test_doc_suite` 七份文档一致），前端零改动 0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.135.json`），0.9.134→0.9.135 上线 **0.1s**、端口 18085；机上核对 `motion_shot` `running=true / extracted=128 / stored=128 / rejected=0 / missed=0 / qsize=0`，200 条事件里 **165 条 motion 全部带图（100%）**，其中含此前被日上限挡死的 `cam-test02`（14/14）；`shots` `capped=2` 只剩检测池（AI 当天已顶满，符合预期）；两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**；**批次 16 标 done**，生产机 2.6 待用户升级 0.9.135 |
 
 ## 测试平台（可以随便折腾，与生产隔离）
+
 | 项 | 值 |
 |---|---|
 | 主机 | `192.168.2.152`（飞牛 FN-V，Linux 6.18） |
@@ -1861,6 +1863,35 @@ ShotStore.offer(cam, data, epoch_of(date,start))   ← 时间锚定事件起点�
 - **不写检测框 `.json`**：运动事件没有检测框，硬塞空框反而误导（`?meta=1` 回 404 即可）。
 - **不进事件索引**：图是附属物，写进索引会在 7 天过期后留下指向空气的行（同批次 11 口径）。
 - **不做「同步阻塞出图」**：查询线程只入队，出图慢半拍但绝不拖慢打开事件的响应。
+
+---
+
+## 批次 16 · 0.9.135 运动快照补图修正（第 38 轮）
+
+**为什么现在做**：用户把生产机升到 0.9.134 后反馈「未看到移动侦测的事件快照」。0.9.134 在测试机是 16/24 出图，看起来很绿 —— 但那台机器的运动事件稀疏、且只有一路没顶到日上限，等于只验证了「最理想的那一半」。
+
+**三处病根（都只在真实事件量下暴露）**：
+
+1. **补图被实时限流误伤**。`ShotStore.offer()` 的 `min_gap`（30 秒/路）本意是「同一条事件被检测节拍反复确认，别存十份」，前提是 `at` 单调跟着现在走。补旧事件时 `at` 是历史时刻，翻页还会倒退 → `at - last` 变负数，被判成「30 秒内又来一张」整片丢弃。**修**：`offer()` 加 `gap` 参数，补图走 `gap=False`；日上限与队列满丢不松，且关掉时不更新 `_last`（实时检测的节流口径不被历史时刻污染）。
+2. **队列饥饿**。`event_index.query()` 末尾 `reversed(rows)` → 返回**时间升序**；补图顺着投，最老的事件先占满队列（原 `QUEUE_MAX=16`），而它们的录像早已过期、`locate_segment` 恒返回 None，既不推进也不出图；每次刷新都在重投同一批，最新事件永远排不上。**修**：`for e in reversed(evs)` 从最新往前投、`QUEUE_MAX` 16→32、给「定位不到分片」加 `MISS_TTL=600` 秒负缓存。
+3. **日上限串池**。每路每天 300 张的预算原本只有 AI 快照一个消费者。AI 检测开着时上午就顶满，之后一整天运动事件补图全被 `capped`。152 实测：`cam-test02` 当天目录 **487 张** → 该路补图 `rejected` 44/44，而 `cam-test01`（152 张）正常出图。**修**：检测池 `_day_n` / 补图池 `_day_bf` 各 300（合计上限翻倍，8 路 7 天约 5GB，仍有界），补图池每进程从 0 计。
+
+另外两处顺手修：`_handle` 忽略 `offer()` 返回值、抽到帧就 `extracted+1` → 计数器全绿而列表一张图没有，拆成 `extracted` / **`stored`** / `rejected`；单条事件详情（`event_payload`）也投一次补图，从通知或分享链接直接点进来时列表可能从未被打开过。
+
+**教训**：0.9.134 的验收只看「有没有图」，没看「该有的有没有都出现」。这次验收改成**覆盖率**（165/165）而不是「非零」。
+
+### 验收（152 真机）
+
+- `motion_shot`：`running=true`、`stored=128`、`rejected=0`、`missed=0`、`qsize=0`
+- `/api/events?limit=200`：165 条 motion **全部带 `shot`**（含此前被日上限挡死的 `cam-test02` 14/14）
+- `shots.capped=2` 只来自检测池（AI 当天已顶满 300，符合预期，补图池独立不受影响）
+- 两路 `hstate=recording`、日志 warn=0 err=0、`recorder.py` **git diff 为空**
+
+### 故意不做
+
+- **不取消日上限**：补图是附属物，无上限会在"画面一直在动"的机位上写爆盘；改成两池各 300 是把预算分给两个消费者，不是取消护栏。
+- **不做同步出图**：查询线程仍只入队，宁可慢半拍，也不让打开事件列表等 ffmpeg。
+- **不改 `recorder.py`**：分片枚举与定位全部复用既有代码（`event.resolve` / `ledger.src_start`）。
 
 ---
 
