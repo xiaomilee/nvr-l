@@ -56,6 +56,7 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `event.py` | 统一事件模型：id 只由「哪一路 + 何时开始」推出 | `summary_of` |
 | `event_index.py` | 可从台账整份重建的 SQLite 索引（WAL） | `ensure` `sync_day` `query` `stats` |
 | `event_shot.py` | 事件快照：确认那一帧落盘（`var/event_shots/<cam>/<日期>/`）、检测框旁挂同名 `.json`、7 天过期、每路每天上限、窗口内取最早一张 | `ShotStore` `find` `shot_of` `boxes_of` `meta_of` `read_meta` `pick` |
+| `motion_shot.py` | 运动事件快照：纯帧差运动事件（AI 没框住）在查询路径发现无图时，后台从 recorder 已录分片抽一帧补进 `var/event_shots/`，时间锚定事件起点、幂等（窗口内已有图就跳过）、队列满丢、分片过期 / 没 ffmpeg 就退化 None，复用 `ShotStore` 落盘与查询，前端零改动 | `MotionShotService` `request` `status` `epoch_of` `locate_segment` |
 | `condense.py` | 判定（只读包大小曲线，不解码）与导出（流复制切段 + concat） | `analyze` 导出函数 |
 | `export.py` | 按时间范围批量导出：挑分片、算边界多给、写 manifest / README、流式打 zip | `select` `totals` `manifest` `readme` `write_zip` `Chunked` |
 | `link.py` | 衔接调度：两种入队节奏共用同一套消费端 | `Link.status()` `reconfigure()` |
@@ -173,6 +174,8 @@ var/event_shots/<cam>/<日期>/<HHMMSS>_<mmm>.jpg   （独立单线程写，7 �
    ├──→ /api/events 每条补 shot{url,at,offset} → /api/events/<id>/shot（JPEG）
    └──→ 放大时一次 /api/events/<id>/shot?meta=1（框清单，几百字节）
 ```
+
+**运动事件快照（0.9.134）补齐纯帧差运动事件的「那一眼」**：0.9.129 的快照只在 AI 确认那一拍落盘（`ShotStore.offer()` 仅 `detect.py` 调用），纯帧差运动事件（`KIND_MOTION`，AI 没框住）在 0.9.133 及之前一直是 `ev.shot is None`。0.9.134 新增 `motion_shot.MotionShotService`：在事件查询路径发现某条 `kind=="motion"` 且还没有图的事件时，后台用 `ffmpeg -ss <offset> -i <分片> -frames:v 1` 从 `recorder` 已录好的分片里抽一帧补进 `event_shots/`，时间锚定事件起点（用图片 mtime 锚到事件当天，不是「现在」），**复用 `ShotStore` 落盘与查询、前端零改动**。抽帧在独立线程、幂等（窗口内已有图就跳过）、队列满丢、分片过期 / 没 ffmpeg 就退化 None，不抛到查询路径、不碰 `recorder.py`、不写 `.json` 旁挂（运动事件没检测框）。
 
 **空间预警（0.9.131）复用存储统计，不另扫一遍盘**：
 

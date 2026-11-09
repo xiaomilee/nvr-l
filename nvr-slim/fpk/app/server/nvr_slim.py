@@ -65,6 +65,7 @@ import pixdiff  # noqa: E402
 import ledger  # noqa: E402
 import detect  # noqa: E402
 import event_shot  # noqa: E402
+import motion_shot  # noqa: E402
 import notify  # noqa: E402
 import archive  # noqa: E402
 import health  # noqa: E402
@@ -874,6 +875,18 @@ def cam_storage_dirs(c):
     """一路摄像头实际可能存数据的目录名：新 dir_name + 旧 id，去重保序。"""
     dn = c.get("dir_name") or c["id"]
     return list(dict.fromkeys([dn, c["id"]]))
+
+
+def cam_dirs_for(cam_id):
+    """cam id（字符串）→ 该路可能存数据的目录名列表；找不到退回 [cam_id]。
+
+    motion_shot 的 cam_dirs_fn 收到的是事件里的 cam id（如 "cam-test01"），
+    而 cam_storage_dirs(c) 要的是摄像头配置字典。这里做一次 id → dict 的解析，
+    否则会对着字符串调 .get() 抛 AttributeError（0.9.134 真机核对发现：那一下
+    直接把补图 worker 线程打死，队列塞满后全部丢弃）。
+    """
+    c = next((x for x in cameras() if x.get("id") == cam_id), None)
+    return cam_storage_dirs(c) if c else ([cam_id] if cam_id else [])
 
 
 def snapshot_path(cam_id):
@@ -1723,6 +1736,16 @@ def events_payload(frm="", to="", cam="", cat="", limit=200,
         evs = event_index.query(conn, a, b, None, None, limit,
                                cams=cams, cats=cats, min_dur=md,
                                motion_only=want_motion)
+        # 运动事件补图（0.9.134）：每条 motion 且尚无图的事件，向后台抽帧队列投一次。
+        # 幂等（窗口内已有图就跳），不阻塞查询线程；抽不到也只丢一张图，不影响列表。
+        ms = STATE.get("motion_shot")
+        if ms is not None:
+            for e in evs:
+                try:
+                    if e.get("kind") == "motion" and not e.get("shot"):
+                        ms.request(e)
+                except Exception:
+                    pass
         st = event_index.stats(conn)
     finally:
         conn.close()
@@ -3255,6 +3278,11 @@ def status_payload():
                   else {"written": 0, "dropped": 0, "failed": 0, "bytes": 0,
                         "rate_limited": 0, "capped": 0, "queued": 0,
                         "running": False, "dir": ""}),
+        # 运动事件快照的抽帧量（0.9.134）：只读内存计数，不扫盘。
+        "motion_shot": (STATE["motion_shot"].status() if STATE.get("motion_shot")
+                        else {"queued": 0, "dropped": 0, "extracted": 0,
+                              "failed": 0, "missed": 0, "running": False,
+                              "qsize": 0}),
         # 空间预警结论（0.9.131）：只读内存，监控线程 10 分钟更新一次。
         # 这个接口几秒被轮询一次（fnOS 桌面壳也在问），绝不能在这里扫盘。
         # 空 dict = 还没算过，前端按"未知"处理、不显示红条。
@@ -4744,6 +4772,20 @@ def main():
         STATE["shots"] = None
         _log_line("事件快照启动失败（不影响检测/录制）：%r" % e)
 
+    # 运动事件快照（0.9.134）：事件查询路径发现「运动事件还没图」时，从 recorder
+    # 分片异步抽一帧补进 event_shots。它不依赖取流与录制，性子也是「抽不到就算了」：
+    # 这里出任何异常只记一条，绝不能让检测或录制跟着起不来。
+    try:
+        _mshot = motion_shot.MotionShotService(
+            STATE.get("ffmpeg_bin"), a.var, record_dir(),
+            cam_dirs_fn=cam_dirs_for,
+            shot_store=STATE.get("shots"), log=_log_line)
+        _mshot.start()
+        STATE["motion_shot"] = _mshot
+    except Exception as e:
+        STATE["motion_shot"] = None
+        _log_line("运动事件快照启动失败（不影响其余链路）：%r" % e)
+
     # AI 检测 worker：总闸开了才起（默认关，opt-in）。
     # 外面裹 try：AI 初始化出任何问题都不能把服务带死——录制/预览/缩时是主业，
     # 检测挂了顶多是诊断页一行状态（detect.py 设计底线第 1 条：
@@ -4806,6 +4848,12 @@ def main():
             _shots = STATE.get("shots")
             if _shots is not None:
                 _shots.stop()
+        except Exception:
+            pass
+        try:
+            _ms = STATE.get("motion_shot")
+            if _ms is not None:
+                _ms.stop()
         except Exception:
             pass
         # 通知线程重试里有 2s/4s 的 sleep，不显式 set 就只能靠 daemon 硬退；
