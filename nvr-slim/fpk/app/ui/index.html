@@ -870,31 +870,24 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 /* 标签（0.9.138 起归左列，横排在机位行下面）：以前挂在缩略图下面，
    会把右列撑得比文字块高，缩略图怎么缩都"填不满"卡片高度。 */
 .evtags{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
-/* 事件快照（0.9.129）：展开时上面那张宽图 + 卡片右侧缩略图。
-   0.9.130 起缩略图可点（看大图），所以它不能是 pointer-events:none。
-   图是 720p 的，缩放由浏览器做 —— 服务端不另生成小图（那要再解一次码）。
-
-   0.9.138 尺寸规则（用户要求：比例不变，小图拉满高度、大图拉满宽度）：
-   - 缩略图：.evthumbbox 定 16:9 比例、stretch 拉满卡片内容高，宽度自动跟随；
-     图绝对定位铺满，容器不把 720p 原始高度带进布局。
-   - 展开区大图：width:100% + height:auto，按原图比例铺满整卡宽，
-     去掉旧的 max-height:210 + cover 裁切。 */
-.evthumbbox{flex:0 0 auto;align-self:stretch;aspect-ratio:16/9;position:relative;
-  border-radius:8px;overflow:hidden;background:var(--fill)}
-.evthumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;cursor:zoom-in}
-.evshot{display:block;width:100%;height:auto;
-  border-radius:10px;margin-top:8px;background:var(--fill)}
-/* 图 + 框的容器：框按百分比定位，所以必须有定位上下文，且 overflow 裁掉
-   跑出画面的那半条边（贴边的框常见）。line-height:0 去掉图片底部的行高缝。 */
-.evshotwrap{position:relative;margin-top:8px;line-height:0;border-radius:10px;
+/* 事件快照（0.9.129）→ 0.9.139 全部大图：
+   用户定版「或者全部大图」——列表就是要一眼看清，展开才能看到大图不妥。
+   有图的事件卡片直接画整卡宽大图（第二行，常驻不用展开），小缩略图取消；
+   点大图直接弹放大浮层（不跳页）。图 width:100% + height:auto 按原比例
+   铺满，不裁切；lazy + async 解码，200 条列表滚动到哪加载到哪。
+   检测框仍只在展开/放大时向服务端取（不为叠框发 200 个请求）。 */
+.evshot{display:block;width:100%;height:auto;background:var(--fill)}
+/* 图 + 框的容器独占一行：框按百分比定位，所以必须有定位上下文，且 overflow
+   裁掉跑出画面的那半条边（贴边的框常见）。line-height:0 去掉图片底部行高缝。 */
+.evshotwrap{position:relative;flex:1 1 100%;line-height:0;border-radius:10px;
   overflow:hidden;background:var(--fill)}
-.evshotwrap .evshot{margin-top:0;border-radius:0}
-/* 展开详情（0.9.138 起独占第二行、整卡宽）：换行间距由 .evcard 的 gap 出，
-   各段落自己的 margin-top 归零，避免双重间距。 */
+.evshotwrap .evshot{border-radius:0}
+.evshotcap{flex:1 1 100%;margin-top:4px;font-size:11px;line-height:1.5;color:var(--faint)}
+/* 展开详情（0.9.139 起只剩动作区，整卡宽独占一行）：换行间距由 .evcard 的
+   gap 出，各段落自己的 margin-top 归零，避免双重间距。 */
 .evopen{flex:1 1 100%;min-width:0}
-.evopen>.evconfirm{margin-top:0}
 .evopen>.evnote{margin-top:0}
-.evshotcap{margin-top:4px;font-size:11px;line-height:1.5;color:var(--faint)}
+.evopen>.evcfm:first-child{margin-top:0}
 /* 检测框（0.9.130）：颜色按类别与卡片色条同一套（人蓝 / 车绿 / 两轮车琥珀），
    标签贴在框的上沿 —— 框很小的时候只有标签还认得出来。 */
 .evbox{position:absolute;box-sizing:border-box;border:1.5px solid var(--primary);
@@ -934,16 +927,15 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .evnote .code{margin-left:5px;font-size:10px;color:var(--faint)}
 .eveof{padding:14px 0 4px;text-align:center;font-size:11.5px;color:var(--faint);line-height:1.6}
 
-/* ============ 0.9.132 事件详情：快照/回放拆两段 + 弱网态 + 机位弹层 ============ */
-/* 第一段只有图（可点放大），让用户先"看清那一眼"；第二段才一个主按钮"打开录像"，
-   并把"要花多久"写在按钮上 —— 打开一段录像在手机上是 seek+解码+流量，代价不低，
-   不该和"确认"压成同一次点击。前/后 30 秒降为次要，它们是"已在看"之后的动作。 */
-.evconfirm{margin-top:8px}
+/* ============ 0.9.132 事件详情：快照/回放拆两段 + 弱网态 + 机位弹层 ============
+   两段式是 0.9.132 的设计（先看清那一眼，再决定开不开视频）；0.9.139 起大图
+   常驻卡片、"看清"不再需要展开，展开区只剩动作（打开录像与 ±30 秒），
+   "要花多久"仍写在按钮上 —— 打开一段录像在手机上是 seek+解码+流量，代价不低。 */
 .evcfm{margin-top:6px;font-size:11.5px;color:var(--faint);line-height:1.5}
 .evbtn.wide{flex:1 1 100%;height:38px;font-size:13px}
 .evbtn.sub{flex:1 1 0;min-width:0}
-/* 展开区大图加载失败（弱网最常见）：缩略图静默藏，展开区必须明说 —— 否则用户
-   以为这条事件压根没快照。只给容器加 class，文案交给 CSS ::after，不在内联拼中文。 */
+/* 大图加载失败（弱网最常见）：图没了必须明说 —— 否则用户以为这条事件压根
+   没快照。只给容器加 class，文案交给 CSS ::after，不在内联拼中文。 */
 .evshotwrap.bad::after{content:"快照没加载出来（弱网或已清理）";
   position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   padding:0 14px;text-align:center;font-size:12px;color:var(--faint);background:var(--fill)}
@@ -969,14 +961,13 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .evcamf .evbtn.main{flex:1;height:42px;font-size:13px}
 
 /* 弱网加载骨架（0.9.132）：慢网里"正在读台账"一行字要等十几秒，页面没别的东西在动，
-   用户分不清"在读"还是"卡死"。灰块不做扫光动画 —— 飘动的动画反而像"还要等"。 */
-.evsk{display:flex;align-items:center;gap:10px;padding:10px 11px;margin-bottom:8px;
+   用户分不清"在读"还是"卡死"。灰块不做扫光动画 —— 飘动的动画反而像"还要等"。
+   0.9.139 骨架跟随新卡片形状：两行文字灰条 + 一块 16:9 的大图灰块。 */
+.evsk{display:flex;flex-wrap:wrap;gap:10px;padding:10px 11px;margin-bottom:8px;
   background:var(--surface);border-radius:13px}
-/* 骨架灰块跟随真缩略图的尺寸（0.9.138）：缩略图拉满卡片内容高后约 116×66，
-   骨架如果不跟，加载完那一瞬卡片会"跳"一下。 */
-.evsk i{flex:0 0 116px;height:66px;border-radius:8px;background:var(--fill)}
-.evsk span{flex:1;height:11px;border-radius:6px;background:var(--fill)}
-.evsk b{flex:1;height:9px;max-width:55%;border-radius:6px;background:var(--fill)}
+.evsk span{flex:1 1 100%;height:11px;border-radius:6px;background:var(--fill)}
+.evsk b{flex:1 1 55%;height:9px;border-radius:6px;background:var(--fill)}
+.evsk i{flex:1 1 100%;aspect-ratio:16/9;border-radius:10px;background:var(--fill)}
 /* 明确的失败态：给重试钮，弱网失败多在翻页/切筛选时，用户就在这屏。 */
 .evfail{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 16px;
   text-align:center}
@@ -10948,18 +10939,12 @@ function evFind(id){
   return null;
 }
 
-/* 缩略图 onerror：拿不到图（404 / 没登录 / 断网）就把整个缩略图容器藏掉。
-   0.9.138 起图外面套了一层定比例的容器（.evthumbbox），只藏 <img> 会留下
-   一个灰块，比"没有图"更难看，也更容易被当成页面坏了。
+/* 快照图 onerror：拿不到图（404 / 没登录 / 断网 / 还没下完）必须说出来，
+   静默藏掉会让人以为这条事件根本没快照 —— 0.9.139 起大图常驻卡片，
+   它就是"那一眼"本体，图没了更要说清。只给容器加个 class，
+   文案交给 CSS 的 ::after，不在内联属性里拼中文。
    用内联属性而不是 addEventListener：这些卡片是 innerHTML 一次性生成的，
    逐个绑定会在 200 条列表上多 200 次查询。 */
-const EV_IMG_ONERR = "this.parentNode.style.display='none'";
-
-/* 展开区那张大图失败时的处理与缩略图**故意不同**：
-   列表里 200 张缩略图挨个显示"破图"会把页面变成一片灰块，所以缩略图失败就藏掉；
-   但展开区是用户点开"要看这一眼"的地方，图没了必须说出来 —— 弱网下最常见的
-   就是图还没下完（`loading=lazy` + 慢网），静默藏掉会让人以为这条事件根本没快照。
-   这里只给容器加个 class，文案交给 CSS 的 ::after，不在内联属性里拼中文。 */
 const EV_SHOT_ONERR = "this.parentNode.classList.add('bad')";
 
 /* 快照那一眼（0.9.129）。三件事：
@@ -11004,11 +10989,16 @@ function evBoxLayer(id){
   return (boxes && boxes.length) ? evBoxHtml(boxes) : "";
 }
 
+/* 快照大图（0.9.139 起**常驻**卡片，不再等展开）：
+   用户原话「或者全部大图」——列表就是要一眼看清，展开才能看到大图不妥。
+   0.9.138 的中间态（中等缩略图 + 展开才出大图）两头不讨好：小图看不清内容，
+   大图又被折叠起来。现在有图的事件卡片直接把整卡宽的大图画出来，
+   点大图仍然直接弹放大浮层（不跳页、不用展开），小缩略图整个取消 ——
+   大图模式下它纯属同一张图画两遍。
+   图地址从**服务端给的 url** 来，前端不拼；说明写「快照 HH:MM:SS · 事件
+   开始后 N 秒」，N 用服务端算好的 offset，前端不重新减。 */
 function evShotHtml(ev){
   const sh = (ev && ev.shot) || null;
-  if(!sh || !sh.url)
-    return '<div class="evshotcap">这条没有留快照（0.9.129 之前的事件不存图，'
-      + '或检测当时还没确认）。</div>';
   return '<div class="evshotwrap">'
     + '<img class="evshot" src="' + esc(sh.url) + '" alt="" loading="lazy"'
     + ' decoding="async" data-evzoom="' + esc(ev.id) + '" title="点开看大图"'
@@ -11018,37 +11008,11 @@ function evShotHtml(ev){
     + '<div class="evshotcap">' + evShotWhen(sh) + '</div>';
 }
 
-/* 卡片右侧那张缩略图（0.9.130 起可点）：点它先看大的，再决定要不要点开回放。
-   以前它 pointer-events:none、点了就跳回放 —— 用户只是想看清"那是人还是影子"
-   的时候，代价是一部录像的 seek 与解码。
-
-   0.9.138 起不再写死 76×43：外层 .evthumbbox 用 aspect-ratio 定比例、
-   align-self:stretch 把高度拉满卡片内容高，宽度按 16:9 自动跟随 —— 比例
-   永远不变，高窄屏都成立。图用绝对定位铺满容器：这样容器不参与内容高计算，
-   不会把 720p 的原始高度（几百 px）带进卡片布局。
-   缩略图只在真有图时出现：没有就不占位 —— 一屏 200 条里大多数是
-   0.9.129 之前的老事件，塞满灰块等于把列表变成一片占位符。 */
-function evThumbHtml(ev){
-  if(!ev || !ev.shot || !ev.shot.url) return "";
-  return '<div class="evthumbbox">'
-    + '<img class="evthumb" src="' + esc(ev.shot.url) + '" alt="" loading="lazy"'
-    + ' decoding="async" data-evzoom="' + esc(ev.id) + '" title="点开看大图"'
-    + ' onerror="' + EV_IMG_ONERR + '">'
-    + '</div>';
-}
-
-/* 打开一条事件后展开的内容（0.9.132 起分两段）。
-   播不了时把服务端的中文原因摆出来 —— 需求里"点击直接播放"的前提是这一段
-   真的还在，不在就得说清是哪一种不在。
-
-   为什么要拆成两段（用户原话：「把『事件快照』和『录像回放』的操作分开，让
-   用户先快速确认，再决定是否打开视频」）：以前图上并排三个按钮、主按钮就是
-   「打开回放」，等于把"确认那一眼"和"看全程"压成同一次点击。手机上打开一段
-   录像的代价是 seek + 解码 + 流量，而十次里有九次用户只想确认"那是人还是影子"。
-
-   所以：第一段只有图（可点放大），第二段只有一个主按钮，并且把"要花多久"
+/* 打开一条事件后展开的内容（0.9.139 起只剩「动作」）。
+   大图已经常驻卡片，展开区不再重复出图 —— 它只承载三件事：播不了时的
+   服务端中文原因、没有快照时的如实说明、以及「打开录像」按钮（把要花多久
    写在按钮上 —— 用户得知道自己点下去要付什么代价。前/后 30 秒降为次要，
-   它们是"已经在看录像之后"的动作，不该和"要不要看"并列。 */
+   它们是"已经在看录像之后"的动作，不该和"要不要看"并列）。 */
 function evOpenHtml(ev){
   let note = "";
   if(EV.clipErr){
@@ -11060,11 +11024,11 @@ function evOpenHtml(ev){
     note = '<div class="evnote info">事件前面那段被片头截断，入点从片首开始。</div>';
   }
   const sec = Math.round(+((ev && ev.duration) || 0));
-  return note + '<div class="evconfirm">'
-      + evShotHtml(ev)
-      + ((ev && ev.shot && ev.shot.url)
-          ? '<div class="evcfm">点图可放大 · 先看清，再决定要不要打开录像</div>' : "")
-    + '</div>'
+  const noShot = (ev && ev.shot && ev.shot.url) ? ""
+    : '<div class="evcfm">这条没有留快照（0.9.129 之前的事件不存图，或检测当时还没确认）。</div>';
+  const hint = (ev && ev.shot && ev.shot.url)
+    ? '<div class="evcfm">点图可放大 · 先看清，再决定要不要打开录像</div>' : "";
+  return note + noShot + hint
     + '<div class="evacts">'
       + '<button class="evbtn main wide" data-evgo="0">▶ 打开录像'
         + (sec > 0 ? '（约 ' + sec + ' 秒）' : '') + '</button>'
@@ -11081,11 +11045,13 @@ function evCardHtml(ev){
   const conf = (typeof ev.confidence_max === "number")
     ? " · 置信度 " + ev.confidence_max.toFixed(2) : "";
   const cats = (ev.categories && ev.categories.length) ? ev.categories : ["motion"];
-  /* 0.9.138 结构调整：卡片改成"上下两行"——
-     第一行：色条 + 时间/机位/标签 + 缩略图；第二行（展开时）：详情整卡宽。
-     以前详情塞在左列里，宽度被右侧缩略图列压掉 90px，大图右边永远空一条；
-     标签挂在缩略图下面又把右列撑高。现在标签归左列（文字块的一部分），
-     缩略图直接做卡片子项把高度拉满，详情独占一行铺满整卡宽。 */
+  /* 0.9.139 结构：卡片三行 ——
+     第一行：色条 + 时间/机位/标签（紧凑头部）；
+     第二行：整卡宽快照大图 + 时刻说明（有图才画，常驻不用展开）；
+     第三行（展开时）：动作区（按钮与播不了的原因）。
+     检测框仍只在展开/放大时去问服务端（200 条列表不为叠框发 200 个请求），
+     框进来后叠在常驻大图上。 */
+  const sh = (ev && ev.shot && ev.shot.url) ? evShotHtml(ev) : "";
   return '<div class="evcard" data-ev="' + esc(ev.id) + '">'
     + '<i class="evstrip ' + evMainCat(ev) + '"></i>'
     + '<div class="evmain">'
@@ -11096,7 +11062,7 @@ function evCardHtml(ev){
           '<span class="evtag ' + evCatCls(k) + '">' + esc(evCatText(k)) + '</span>').join("")
       + '</div>'
     + '</div>'
-    + evThumbHtml(ev)
+    + sh
     + (open ? '<div class="evopen">' + evOpenHtml(ev) + '</div>' : "")
   + '</div>';
 }
@@ -11225,7 +11191,7 @@ function evZoomClose(){
 function evSkeleton(n){
   let out = "";
   for(let i = 0; i < n; i++)
-    out += '<div class="evsk"><i></i><span></span><b></b></div>';
+    out += '<div class="evsk"><span></span><b></b><i></i></div>';
   return out;
 }
 

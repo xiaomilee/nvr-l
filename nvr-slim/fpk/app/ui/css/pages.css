@@ -512,31 +512,24 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 /* 标签（0.9.138 起归左列，横排在机位行下面）：以前挂在缩略图下面，
    会把右列撑得比文字块高，缩略图怎么缩都"填不满"卡片高度。 */
 .evtags{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
-/* 事件快照（0.9.129）：展开时上面那张宽图 + 卡片右侧缩略图。
-   0.9.130 起缩略图可点（看大图），所以它不能是 pointer-events:none。
-   图是 720p 的，缩放由浏览器做 —— 服务端不另生成小图（那要再解一次码）。
-
-   0.9.138 尺寸规则（用户要求：比例不变，小图拉满高度、大图拉满宽度）：
-   - 缩略图：.evthumbbox 定 16:9 比例、stretch 拉满卡片内容高，宽度自动跟随；
-     图绝对定位铺满，容器不把 720p 原始高度带进布局。
-   - 展开区大图：width:100% + height:auto，按原图比例铺满整卡宽，
-     去掉旧的 max-height:210 + cover 裁切。 */
-.evthumbbox{flex:0 0 auto;align-self:stretch;aspect-ratio:16/9;position:relative;
-  border-radius:8px;overflow:hidden;background:var(--fill)}
-.evthumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;cursor:zoom-in}
-.evshot{display:block;width:100%;height:auto;
-  border-radius:10px;margin-top:8px;background:var(--fill)}
-/* 图 + 框的容器：框按百分比定位，所以必须有定位上下文，且 overflow 裁掉
-   跑出画面的那半条边（贴边的框常见）。line-height:0 去掉图片底部的行高缝。 */
-.evshotwrap{position:relative;margin-top:8px;line-height:0;border-radius:10px;
+/* 事件快照（0.9.129）→ 0.9.139 全部大图：
+   用户定版「或者全部大图」——列表就是要一眼看清，展开才能看到大图不妥。
+   有图的事件卡片直接画整卡宽大图（第二行，常驻不用展开），小缩略图取消；
+   点大图直接弹放大浮层（不跳页）。图 width:100% + height:auto 按原比例
+   铺满，不裁切；lazy + async 解码，200 条列表滚动到哪加载到哪。
+   检测框仍只在展开/放大时向服务端取（不为叠框发 200 个请求）。 */
+.evshot{display:block;width:100%;height:auto;background:var(--fill)}
+/* 图 + 框的容器独占一行：框按百分比定位，所以必须有定位上下文，且 overflow
+   裁掉跑出画面的那半条边（贴边的框常见）。line-height:0 去掉图片底部行高缝。 */
+.evshotwrap{position:relative;flex:1 1 100%;line-height:0;border-radius:10px;
   overflow:hidden;background:var(--fill)}
-.evshotwrap .evshot{margin-top:0;border-radius:0}
-/* 展开详情（0.9.138 起独占第二行、整卡宽）：换行间距由 .evcard 的 gap 出，
-   各段落自己的 margin-top 归零，避免双重间距。 */
+.evshotwrap .evshot{border-radius:0}
+.evshotcap{flex:1 1 100%;margin-top:4px;font-size:11px;line-height:1.5;color:var(--faint)}
+/* 展开详情（0.9.139 起只剩动作区，整卡宽独占一行）：换行间距由 .evcard 的
+   gap 出，各段落自己的 margin-top 归零，避免双重间距。 */
 .evopen{flex:1 1 100%;min-width:0}
-.evopen>.evconfirm{margin-top:0}
 .evopen>.evnote{margin-top:0}
-.evshotcap{margin-top:4px;font-size:11px;line-height:1.5;color:var(--faint)}
+.evopen>.evcfm:first-child{margin-top:0}
 /* 检测框（0.9.130）：颜色按类别与卡片色条同一套（人蓝 / 车绿 / 两轮车琥珀），
    标签贴在框的上沿 —— 框很小的时候只有标签还认得出来。 */
 .evbox{position:absolute;box-sizing:border-box;border:1.5px solid var(--primary);
@@ -576,16 +569,15 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .evnote .code{margin-left:5px;font-size:10px;color:var(--faint)}
 .eveof{padding:14px 0 4px;text-align:center;font-size:11.5px;color:var(--faint);line-height:1.6}
 
-/* ============ 0.9.132 事件详情：快照/回放拆两段 + 弱网态 + 机位弹层 ============ */
-/* 第一段只有图（可点放大），让用户先"看清那一眼"；第二段才一个主按钮"打开录像"，
-   并把"要花多久"写在按钮上 —— 打开一段录像在手机上是 seek+解码+流量，代价不低，
-   不该和"确认"压成同一次点击。前/后 30 秒降为次要，它们是"已在看"之后的动作。 */
-.evconfirm{margin-top:8px}
+/* ============ 0.9.132 事件详情：快照/回放拆两段 + 弱网态 + 机位弹层 ============
+   两段式是 0.9.132 的设计（先看清那一眼，再决定开不开视频）；0.9.139 起大图
+   常驻卡片、"看清"不再需要展开，展开区只剩动作（打开录像与 ±30 秒），
+   "要花多久"仍写在按钮上 —— 打开一段录像在手机上是 seek+解码+流量，代价不低。 */
 .evcfm{margin-top:6px;font-size:11.5px;color:var(--faint);line-height:1.5}
 .evbtn.wide{flex:1 1 100%;height:38px;font-size:13px}
 .evbtn.sub{flex:1 1 0;min-width:0}
-/* 展开区大图加载失败（弱网最常见）：缩略图静默藏，展开区必须明说 —— 否则用户
-   以为这条事件压根没快照。只给容器加 class，文案交给 CSS ::after，不在内联拼中文。 */
+/* 大图加载失败（弱网最常见）：图没了必须明说 —— 否则用户以为这条事件压根
+   没快照。只给容器加 class，文案交给 CSS ::after，不在内联拼中文。 */
 .evshotwrap.bad::after{content:"快照没加载出来（弱网或已清理）";
   position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   padding:0 14px;text-align:center;font-size:12px;color:var(--faint);background:var(--fill)}
@@ -611,14 +603,13 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .evcamf .evbtn.main{flex:1;height:42px;font-size:13px}
 
 /* 弱网加载骨架（0.9.132）：慢网里"正在读台账"一行字要等十几秒，页面没别的东西在动，
-   用户分不清"在读"还是"卡死"。灰块不做扫光动画 —— 飘动的动画反而像"还要等"。 */
-.evsk{display:flex;align-items:center;gap:10px;padding:10px 11px;margin-bottom:8px;
+   用户分不清"在读"还是"卡死"。灰块不做扫光动画 —— 飘动的动画反而像"还要等"。
+   0.9.139 骨架跟随新卡片形状：两行文字灰条 + 一块 16:9 的大图灰块。 */
+.evsk{display:flex;flex-wrap:wrap;gap:10px;padding:10px 11px;margin-bottom:8px;
   background:var(--surface);border-radius:13px}
-/* 骨架灰块跟随真缩略图的尺寸（0.9.138）：缩略图拉满卡片内容高后约 116×66，
-   骨架如果不跟，加载完那一瞬卡片会"跳"一下。 */
-.evsk i{flex:0 0 116px;height:66px;border-radius:8px;background:var(--fill)}
-.evsk span{flex:1;height:11px;border-radius:6px;background:var(--fill)}
-.evsk b{flex:1;height:9px;max-width:55%;border-radius:6px;background:var(--fill)}
+.evsk span{flex:1 1 100%;height:11px;border-radius:6px;background:var(--fill)}
+.evsk b{flex:1 1 55%;height:9px;border-radius:6px;background:var(--fill)}
+.evsk i{flex:1 1 100%;aspect-ratio:16/9;border-radius:10px;background:var(--fill)}
 /* 明确的失败态：给重试钮，弱网失败多在翻页/切筛选时，用户就在这屏。 */
 .evfail{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 16px;
   text-align:center}

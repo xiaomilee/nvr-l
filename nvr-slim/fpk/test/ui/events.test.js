@@ -293,13 +293,13 @@ ck("定位缺失时 ±30 也不动作",
    没有图如实说原因 / 拿不到图不许留破图。 */
 const EVS = Object.assign({}, EV1, {shot:{url:"/api/events/c1_20261108_102341/shot",
                                           at:"10:23:47", offset:6}});
-/* 0.9.132 事件详情：快照与回放拆成两段（EVS 在上方才声明，断言放这） */
-ck("展开区分「确认区」与「动作区」",
+/* 0.9.139 全部大图：大图常驻卡片（不用展开），展开区只剩动作 */
+ck("展开区只剩动作区（大图已常驻，不重复出「确认区」）",
    run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
-     .indexOf('class="evconfirm"') > 0
+     .indexOf('class="evacts"') > 0
    && run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
-     .indexOf('class="evacts"') > 0);
-ck("确认区提示先看清再决定",
+     .indexOf('class="evshot"') < 0);
+ck("展开区提示先看清再决定",
    run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
      .indexOf("先看清，再决定要不要打开录像") > 0);
 ck("前/后 30 秒降级为同一展开里的次要动作",
@@ -307,33 +307,26 @@ ck("前/后 30 秒降级为同一展开里的次要动作",
      .indexOf('data-evgo="-30"') > 0
    && run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
      .indexOf('data-evgo="30"') > 0);
-ck("有快照：卡片出现缩略图",
-   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf("evthumb") > 0);
-ck("缩略图地址用服务端给的（不自己拼）",
+ck("有快照：卡片直接显示整卡宽大图（不用展开）",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf('class="evshotwrap"') > 0);
+ck("快照图地址用服务端给的（不自己拼）",
    run('EV.open=""; evCardHtml(' + J(EVS) + ')')
      .indexOf("/api/events/c1_20261108_102341/shot") > 0);
-ck("缩略图懒加载 + 异步解码（一次 200 条）",
+ck("大图懒加载 + 异步解码（一次 200 条滚动到哪加载到哪）",
    run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf('loading="lazy"') > 0);
-ck("拿不到图就整个缩略图容器藏掉，不留灰块（0.9.138 起图外有定比例容器）",
+ck("拿不到图就明说（容器加 bad，文案交给 CSS），不留静默灰块",
    run('EV.open=""; evCardHtml(' + J(EVS) + ')')
-     .indexOf("this.parentNode.style.display=\'none\'") > 0);
+     .indexOf("this.parentNode.classList.add(\'bad\')") > 0);
 ck("没有快照：卡片不塞占位图",
-   run('EV.open=""; evCardHtml(' + J(EV1) + ')').indexOf("evthumb") < 0);
-ck("展开时有宽图",
-   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
-     .indexOf('class="evshot"') > 0);
-/* 0.9.138 尺寸规则：小图拉满高度（定比例容器）、大图拉满宽度（独占一行），
-   两者都不再裁切原比例。 */
-ck("缩略图套定比例容器（拉满卡片内容高，宽度按 16:9 跟随）",
-   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf('class="evthumbbox"') > 0);
-ck("展开详情独占整卡宽（不在左列里被缩略图列压窄）",
+   run('EV.open=""; evCardHtml(' + J(EV1) + ')').indexOf("evshot") < 0);
+ck("展开详情独占整卡宽（动作区不是另一张图）",
    run('EV.open="c1_20261108_102341"; evCardHtml(' + J(EVS) + ')')
      .indexOf('class="evopen"') > 0);
-ck("展开时写清快照时刻与偏移",
-   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
+ck("卡片写清快照时刻与偏移（大图下面一行小字）",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')')
      .indexOf("快照 10:23:47 · 事件开始后 6 秒") > 0);
 ck("图早于事件起点：写\"开始前\"而不是负号",
-   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(Object.assign({}, EVS,
+   run('evShotHtml(' + J(Object.assign({}, EVS,
      {shot:{url:"/api/events/x/shot", at:"10:23:35", offset:-6}})) + ')')
      .indexOf("事件开始前 6 秒") > 0);
 ck("没有快照：展开区说清原因（不是播放失败）",
@@ -344,12 +337,12 @@ ck("没有快照时也照常给三个动作按钮",
      + ' evOpenHtml(' + J(EV1) + ')').indexOf("data-evgo=\"0\"") > 0);
 
 /* ---- 放大与检测框（0.9.130） ----
-   缩略图太小，看不清"那是人还是影子"；叠框是为了回答"检测器当时框住了什么"。
+   图上看不清"那是人还是影子"；叠框是为了回答"检测器当时框住了什么"。
    框的位置**必须**由服务端给的归一化坐标换算，前端不猜、不重新跑推理。 */
-ck("缩略图可点（带 data-evzoom 与事件 id）",
+ck("大图可点放大（带 data-evzoom 与事件 id）",
    run('EV.open=""; evCardHtml(' + J(EVS) + ')')
      .indexOf('data-evzoom="' + EVS.id + '"') > 0);
-ck("缩略图提示「点开看大图」",
+ck("大图提示「点开看大图」",
    run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf("点开看大图") > 0);
 ck("归一化框 → 百分比定位（左上角 = 中心 - 半个尺寸）",
    run('evBoxHtml([{c:"person",s:0.9,b:[0.5,0.5,0.2,0.4]}])')
