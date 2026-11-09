@@ -13,7 +13,7 @@
 
 ```
 fpk/
-├── manifest               appname=nvr / version=0.9.131 / platform=x86 / service_port=18080 / checkport=false
+├── manifest               appname=nvr / version=0.9.132 / platform=x86 / service_port=18080 / checkport=false
 ├── ICON.PNG / ICON_256.PNG   图标（gen_icons.py 纯标准库生成）
 ├── (无 health.json)       探活由 cmd/main 的 wait_health 读 var/port.txt 的真实端口
 ├── (无 *.sc)              端口是安装时自选的，不写死端口转发声明

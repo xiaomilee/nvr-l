@@ -560,6 +560,79 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .evnote .code{margin-left:5px;font-size:10px;color:var(--faint)}
 .eveof{padding:14px 0 4px;text-align:center;font-size:11.5px;color:var(--faint);line-height:1.6}
 
+/* ============ 0.9.132 事件详情：快照/回放拆两段 + 弱网态 + 机位弹层 ============ */
+/* 第一段只有图（可点放大），让用户先"看清那一眼"；第二段才一个主按钮"打开录像"，
+   并把"要花多久"写在按钮上 —— 打开一段录像在手机上是 seek+解码+流量，代价不低，
+   不该和"确认"压成同一次点击。前/后 30 秒降为次要，它们是"已在看"之后的动作。 */
+.evconfirm{margin-top:8px}
+.evcfm{margin-top:6px;font-size:11.5px;color:var(--faint);line-height:1.5}
+.evbtn.wide{flex:1 1 100%;height:38px;font-size:13px}
+.evbtn.sub{flex:1 1 0;min-width:0}
+/* 展开区大图加载失败（弱网最常见）：缩略图静默藏，展开区必须明说 —— 否则用户
+   以为这条事件压根没快照。只给容器加 class，文案交给 CSS ::after，不在内联拼中文。 */
+.evshotwrap.bad::after{content:"快照没加载出来（弱网或已清理）";
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  padding:0 14px;text-align:center;font-size:12px;color:var(--faint);background:var(--fill)}
+.evshotwrap.bad .evshot{visibility:hidden}
+
+/* 机位筛选弹层（0.9.132）：8 路机位在 375 屏上是 900+ 像素横条，横滑三四屏才找得到
+   最后一路，而手机横滚条看不见。改成底部弹层 + 2 列网格，一眼看全、可连点多选。 */
+.evcampop{position:fixed;inset:0;z-index:70}
+.evcampop[hidden]{display:none}
+#evCamMask{background:rgba(8,10,14,.5)}
+.evcampop-sheet{position:fixed;left:0;right:0;bottom:0;z-index:71;
+  background:var(--surface);border-radius:16px 16px 0 0;
+  padding:14px 16px calc(16px + env(safe-area-inset-bottom));
+  box-shadow:0 -6px 24px rgba(0,0,0,.28)}
+.evcamt{display:flex;flex-direction:column;gap:2px;margin-bottom:10px}
+.evcamt b{font-size:14px;color:var(--text)}
+.evcamt span{font-size:11px;color:var(--faint)}
+.evcamg{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.evcamb{height:42px;border-radius:10px;border:1px solid var(--line);background:var(--bg);
+  font-size:13px;color:var(--text2)}
+.evcamb.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.evcamf{margin-top:12px;display:flex}
+.evcamf .evbtn.main{flex:1;height:42px;font-size:13px}
+
+/* 弱网加载骨架（0.9.132）：慢网里"正在读台账"一行字要等十几秒，页面没别的东西在动，
+   用户分不清"在读"还是"卡死"。灰块不做扫光动画 —— 飘动的动画反而像"还要等"。 */
+.evsk{display:flex;align-items:center;gap:10px;padding:10px 11px;margin-bottom:8px;
+  background:var(--surface);border-radius:13px}
+.evsk i{flex:0 0 76px;height:43px;border-radius:8px;background:var(--fill)}
+.evsk span{flex:1;height:11px;border-radius:6px;background:var(--fill)}
+.evsk b{flex:1;height:9px;max-width:55%;border-radius:6px;background:var(--fill)}
+/* 明确的失败态：给重试钮，弱网失败多在翻页/切筛选时，用户就在这屏。 */
+.evfail{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 16px;
+  text-align:center}
+.evfail b{font-size:13px;color:var(--warn-fg)}
+.evfail span{font-size:11.5px;color:var(--faint);line-height:1.5}
+.evfail .evbtn.main{margin-top:4px;height:40px;padding:0 20px;font-size:13px}
+.evfailhint{font-size:10.5px;color:var(--faint);opacity:.85}
+
+/* 放大浮层竖屏适配（0.9.132）：16:9 横图按屏宽铺满只占屏高 1/3，人脸车牌看不清。
+   旋转 90° 后图长边变屏高，能占 65%+；放大则让图超出容器可滚动。两者互斥
+   （evZoomRoot 里 toggle 时先 remove 另一个），否则 transform 与滚动叠一起拖不动。 */
+.evzoomwrap.rot{transform:rotate(90deg);overflow:visible}
+.evzoomwrap.rot .evzoomimg{max-width:90vh;max-height:90vw;width:auto;height:auto}
+.evzoomwrap.z2{overflow:auto;-webkit-overflow-scrolling:touch}
+.evzoomwrap.z2 .evzoomimg{max-height:none;width:auto;height:auto;min-width:100%}
+
+/* ============ 0.9.132 窄屏（手机）断点：信息密度 + 触控尺寸 ============ */
+@media (max-width:640px){
+  /* 全站此前零 @media：evchip 29px / evbtn 28px 都低于 44px 触控下限，
+     23 处 10.5px 字号。这里只动事件页相关控件，先解决最痛的几处。 */
+  .evwrap{padding:8px 12px 18px}
+  .evmore{padding:9px 12px 10px}
+  .evcard{padding:9px 10px;gap:9px;margin-bottom:7px}
+  .evtime{font-size:15px}
+  .evchip{height:34px;padding:0 13px;font-size:12.5px}
+  .evbtn{height:38px;padding:0 12px;font-size:12.5px}
+  .evbtn.wide{height:42px;font-size:14px}
+  .evthumb{width:70px;height:39px}   /* 略缩，一屏多塞一两张卡片 = 更高密度 */
+  .evbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .evbar::-webkit-scrollbar{display:none}
+}
+
 /* 空间预警（0.9.131）：诊断存储卡顶部一条，直播页头部一个角标。
    配色复用状态色（告急 danger / 偏低 warn / 未知 faint），不另造一套 ——
    同一种"要注意"在页面上应该长成同一个颜色。 */

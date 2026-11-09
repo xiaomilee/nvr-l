@@ -24,7 +24,7 @@
 const EV = {day: jsToday(), cams: [], cats: [], from: "", to: "", minDur: "",
             more: false, data: null, key: "", at: 0, err: "",
             loading: false, open: "", focus: "", clip: null, clipErr: "",
-            box: {}, zoom: ""};
+            box: {}, zoom: "", campop: false};
 
 /* 筛选状态一律是数组 + 字符串，且**只在发请求时拼成参数**：
    界面上"选中"只是数组里有这一项，服务端只认拼好的查询串。中间不留第二份
@@ -125,6 +125,13 @@ function evFind(id){
    逐个绑定会在 200 条列表上多 200 次查询。 */
 const EV_IMG_ONERR = "this.style.display='none'";
 
+/* 展开区那张大图失败时的处理与缩略图**故意不同**：
+   列表里 200 张缩略图挨个显示"破图"会把页面变成一片灰块，所以缩略图失败就藏掉；
+   但展开区是用户点开"要看这一眼"的地方，图没了必须说出来 —— 弱网下最常见的
+   就是图还没下完（`loading=lazy` + 慢网），静默藏掉会让人以为这条事件根本没快照。
+   这里只给容器加个 class，文案交给 CSS 的 ::after，不在内联属性里拼中文。 */
+const EV_SHOT_ONERR = "this.parentNode.classList.add('bad')";
+
 /* 快照那一眼（0.9.129）。三件事：
    - 图从**服务端给的 url** 来，前端不拼（与 clip 同一套契约）；
    - 说明写"快照 HH:MM:SS · 事件开始后 N 秒"，N 用服务端算好的 offset，
@@ -174,7 +181,8 @@ function evShotHtml(ev){
       + '或检测当时还没确认）。</div>';
   return '<div class="evshotwrap">'
     + '<img class="evshot" src="' + esc(sh.url) + '" alt="" loading="lazy"'
-    + ' decoding="async" onerror="' + EV_IMG_ONERR + '">'
+    + ' decoding="async" data-evzoom="' + esc(ev.id) + '" title="点开看大图"'
+    + ' onerror="' + EV_SHOT_ONERR + '">'
     + evBoxLayer(ev.id)
     + '</div>'
     + '<div class="evshotcap">' + evShotWhen(sh) + '</div>';
@@ -190,8 +198,18 @@ function evThumbHtml(ev){
     + ' onerror="' + EV_IMG_ONERR + '">';
 }
 
-/* 打开一条事件后展开的操作区。播不了时把服务端的中文原因摆出来 ——
-   需求里"点击直接播放"的前提是这一段真的还在，不在就得说清是哪一种不在。 */
+/* 打开一条事件后展开的内容（0.9.132 起分两段）。
+   播不了时把服务端的中文原因摆出来 —— 需求里"点击直接播放"的前提是这一段
+   真的还在，不在就得说清是哪一种不在。
+
+   为什么要拆成两段（用户原话：「把『事件快照』和『录像回放』的操作分开，让
+   用户先快速确认，再决定是否打开视频」）：以前图上并排三个按钮、主按钮就是
+   「打开回放」，等于把"确认那一眼"和"看全程"压成同一次点击。手机上打开一段
+   录像的代价是 seek + 解码 + 流量，而十次里有九次用户只想确认"那是人还是影子"。
+
+   所以：第一段只有图（可点放大），第二段只有一个主按钮，并且把"要花多久"
+   写在按钮上 —— 用户得知道自己点下去要付什么代价。前/后 30 秒降为次要，
+   它们是"已经在看录像之后"的动作，不该和"要不要看"并列。 */
 function evOpenHtml(ev){
   let note = "";
   if(EV.clipErr){
@@ -202,10 +220,17 @@ function evOpenHtml(ev){
   }else if(EV.clip && EV.clip.clamped){
     note = '<div class="evnote info">事件前面那段被片头截断，入点从片首开始。</div>';
   }
-  return note + evShotHtml(ev) + '<div class="evacts">'
-    + '<button class="evbtn" data-evgo="-30">◀ 前 30 秒</button>'
-    + '<button class="evbtn main" data-evgo="0">▶ 打开回放</button>'
-    + '<button class="evbtn" data-evgo="30">后 30 秒 ▶</button>'
+  const sec = Math.round(+((ev && ev.duration) || 0));
+  return note + '<div class="evconfirm">'
+      + evShotHtml(ev)
+      + ((ev && ev.shot && ev.shot.url)
+          ? '<div class="evcfm">点图可放大 · 先看清，再决定要不要打开录像</div>' : "")
+    + '</div>'
+    + '<div class="evacts">'
+      + '<button class="evbtn main wide" data-evgo="0">▶ 打开录像'
+        + (sec > 0 ? '（约 ' + sec + ' 秒）' : '') + '</button>'
+      + '<button class="evbtn sub" data-evgo="-30">◀ 前 30 秒</button>'
+      + '<button class="evbtn sub" data-evgo="30">后 30 秒 ▶</button>'
     + '</div>';
 }
 
@@ -249,17 +274,25 @@ function evZoomHtml(ev){
   return '<div class="evzoombox">'
     + '<div class="evzoomwrap">'
       + '<img class="evzoomimg" src="' + esc(sh.url) + '" alt=""'
-      + ' onerror="' + EV_IMG_ONERR + '">'
+      + ' onerror="' + EV_SHOT_ONERR + '">'
       + evBoxLayer(ev.id)
     + '</div>'
     + '<div class="evzoomcap"><b>' + esc(evCamName(ev)) + ' · '
       + gfmtClock(ev.start) + '</b> · ' + evShotWhen(sh) + boxNote + '</div>'
     + '<div class="evzoombar">'
-      + '<button class="evbtn main" data-evzoomplay="' + esc(ev.id) + '">▶ 打开回放</button>'
+      + '<button class="evbtn main" data-evzoomplay="' + esc(ev.id) + '">▶ 打开录像</button>'
+      /* 竖屏那两个按钮（0.9.132）：16:9 的横图按屏宽铺满只有 96vw 宽，
+         高度自然只有屏高的 1/3，人脸和车牌都看不清。旋转 90° 后图的长边
+         变成屏幕的高，能占到屏高 65% 以上 —— 这是手机看横图最省事的办法，
+         比让用户自己横过手机再关掉方向锁定可靠。 */
+      + '<button class="evbtn" data-evzoomrot="1" title="竖屏时横过来看">⟳ 横过来看</button>'
+      + '<button class="evbtn" data-evzoomzoom="1" title="放大一档">＋ 放大</button>'
       + '<button class="evbtn" data-evzoomclose="1">关闭</button>'
     + '</div></div>';
 }
-/* 浮层根节点建一次就复用：每次点图都新建 DOM 会让 document 上堆一串死节点。 */
+/* 浮层根节点建一次就复用：每次点图都新建 DOM 会让 document 上堆一串死节点。
+   「横过来看」与「放大」互斥：一个是把图转 90°，一个是让图超出容器可滚动，
+   同时开会让 transform 与滚动叠在一起，用户拖半天不知道该往哪拖。 */
 function evZoomRoot(){
   let el = document.getElementById("evZoomRoot");
   if(el) return el;
@@ -267,15 +300,37 @@ function evZoomRoot(){
   el.id = "evZoomRoot";
   el.onclick = e=>{
     const t = e.target;
-    const play = (t && t.closest) ? t.closest("[data-evzoomplay]") : null;
+    if(!t || !t.closest) return;
+    const play = t.closest("[data-evzoomplay]");
     if(play){
       const id = play.getAttribute("data-evzoomplay");
       evZoomClose();
       evOpen(id);                    /* 关浮层再走原来那条"展开 + 定位"的路 */
       return;
     }
+    const wrap = () => el.querySelector(".evzoomwrap");
+    const rot = t.closest("[data-evzoomrot]");
+    if(rot){
+      const w = wrap();
+      if(w){
+        const on = w.classList.toggle("rot");
+        w.classList.remove("z2");    /* 互斥：转过来就不再放大 */
+        rot.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      return;
+    }
+    const zm = t.closest("[data-evzoomzoom]");
+    if(zm){
+      const w = wrap();
+      if(w){
+        const on = w.classList.toggle("z2");
+        w.classList.remove("rot");
+        zm.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      return;
+    }
     /* 点图本身不关（用户可能正对着框看）；点背景、点"关闭"才关。 */
-    if((t && t.closest && t.closest("[data-evzoomclose]")) || t === el) evZoomClose();
+    if(t.closest("[data-evzoomclose]") || t === el) evZoomClose();
   };
   document.body.appendChild(el);
   return el;
@@ -317,14 +372,31 @@ function evZoomClose(){
   return true;
 }
 
+/* 加载骨架（0.9.132）：弱网下"正在读事件台账…"一行字要等十几秒，页面上再没有
+   别的东西在动，用户分不清是在读还是卡死了。骨架条只是灰块，不做扫光动画 ——
+   慢网里飘来飘去的动画比静止更容易被当成"还在加载所以要等"。
+   文案保留原句（老用户认得这句），骨架垫在它下面。 */
+function evSkeleton(n){
+  let out = "";
+  for(let i = 0; i < n; i++)
+    out += '<div class="evsk"><i></i><span></span><b></b></div>';
+  return out;
+}
+
 function renderEvList(){
   const el = document.getElementById("evList");
   if(!el) return;
   let body;
   if(EV.err){
-    body = '<div class="eveof">读取失败：' + esc(EV.err) + '<br>点右上角重新读一次</div>';
+    /* 失败要有可点的出口：以前写"点右上角重新读一次"，用户得先找到那个图标。
+       弱网下最常见的失败是翻页/切筛选时超时，此时他就在这一屏，重试钮该在这。 */
+    body = '<div class="evfail"><b>读取失败</b>'
+      + '<span>' + esc(EV.err) + '</span>'
+      + '<button class="evbtn main" data-evretry="1">重试</button>'
+      + '<i class="evfailhint">检查一下手机和 NAS 是不是同一个网络</i></div>';
   }else if(!EV.data){
-    body = '<div class="eveof">正在读事件台账（首次会按台账同步这一天的索引）…</div>';
+    body = '<div class="eveof">正在读事件台账（首次会按台账同步这一天的索引）…</div>'
+      + evSkeleton(EV.loading ? 5 : 2);
   }else{
     const evs = EV.data.events || [];
     /* 接口给的是时间正序（那是时间轴的读法：从早到晚读一天）。事件页要的是
@@ -370,6 +442,39 @@ function evReload(){
   renderEvChips(); renderEvHead(); loadEvents(true);
 }
 
+/* ---------------- 机位弹层（0.9.132） ----------------
+   弹层内容每次打开时重算：机位列表可能刚在设置页里改过名、增删过路数。
+   选完不关：多选要在同一个弹层里连着点，点一下就关等于让人反复开合。 */
+function evCamPopHtml(){
+  const opts = [{id: "", name: "全部机位"}].concat(
+    (CAMERAS || []).map(c => ({id: c.id, name: c.name || c.id})));
+  const all = EV.cams.length === 0;
+  return '<div class="evcamt"><b>按机位筛选</b><span>可多选，同一次只看这些</span></div>'
+    + '<div class="evcamg">' + opts.map(o=>{
+        const on = o.id ? EV.cams.indexOf(o.id) >= 0 : all;
+        return '<button class="evcamb' + (on ? " on" : "") + '" data-evname="'
+          + esc(o.id) + '">' + esc(o.name) + '</button>';
+      }).join("") + '</div>'
+    + '<div class="evcamf"><button class="evbtn main" data-evcamclose="1">完成</button></div>';
+}
+
+function evCamPopOpen(on){
+  const pop = document.getElementById("evCamPop");
+  const mask = document.getElementById("evCamMask");
+  if(!pop) return false;
+  if(on){
+    pop.innerHTML = evCamPopHtml();
+    pop.hidden = false;
+    if(mask) mask.hidden = false;
+    EV.campop = true;
+  }else{
+    pop.hidden = true;
+    if(mask) mask.hidden = true;
+    EV.campop = false;
+  }
+  return EV.campop;
+}
+
 function renderEvChips(){
   const dayBar = document.getElementById("evDayBar");
   if(dayBar){
@@ -384,20 +489,15 @@ function renderEvChips(){
   }
   const camBar = document.getElementById("evCamBar");
   if(camBar){
-    const opts = [{id: "", name: "全部机位"}].concat(
-      (CAMERAS || []).map(c => ({id: c.id, name: c.name || c.id})));
-    camBar.innerHTML = opts.map(o => {
-      const on = o.id ? EV.cams.indexOf(o.id) >= 0 : EV.cams.length === 0;
-      return '<button class="evchip' + (on ? " on" : "") + '" data-evname="'
-        + esc(o.id) + '">' + esc(o.name) + '</button>';
-    }).join("");
-    camBar.querySelectorAll("[data-evname]").forEach(b=>{
-      b.onclick = ()=>{
-        const id = b.getAttribute("data-evname");
-        if(id) evToggle(EV.cams, id); else EV.cams = [];
-        evReload();
-      };
-    });
+    /* 机位筛选从"横向滚动的 chips"改成"一个按钮 + 底部弹层"（0.9.132）。
+       为什么：8 路机位在 375 宽的屏上是 900 多像素的横条，要横滑三四屏才能
+       找到最后一路，而横向滚动条在手机上是看不见的 —— 用户根本不知道右边还有。
+       弹层是 2 列网格，一眼看全；多选就在弹层里连续点，不用反复开合。
+       按钮上写"全部机位"或"3 个机位"：不打开弹层也知道现在筛了什么。 */
+    const n = EV.cams.length;
+    camBar.innerHTML = '<button class="evchip on" data-evcampop="1">'
+      + (n ? n + " 个机位" : "全部机位") + ' ▾</button>'
+      + (n ? '<button class="evchip" data-evcamclear="1">清除机位</button>' : "");
   }
   const catBar = document.getElementById("evCatBar");
   if(catBar){
@@ -586,6 +686,10 @@ function evGo(delta){
        否则同一个点击会先被卡片接走，用户还是会被弹去回放。 */
     const z = (t && t.closest) ? t.closest("[data-evzoom]") : null;
     if(z){ e.stopPropagation(); evZoomOpen(z.getAttribute("data-evzoom")); return; }
+    /* 失败态里的重试：必须在卡片判断之前（失败时列表里没有卡片，但顺序
+       写反了将来加了别的东西就会莫名被卡片吃掉）。 */
+    const rt = (t && t.closest) ? t.closest("[data-evretry]") : null;
+    if(rt){ e.stopPropagation(); loadEvents(true); return; }
     const g = (t && t.closest) ? t.closest("[data-evgo]") : null;
     if(g){ e.stopPropagation(); evGo(+g.getAttribute("data-evgo")); return; }
     const c = (t && t.closest) ? t.closest("[data-ev]") : null;
@@ -597,6 +701,22 @@ function evGo(delta){
   });
   const rf = document.getElementById("btnEvRefresh");
   if(rf) rf.onclick = ()=>{ loadEvents(true); };
+  /* 机位弹层的开合与选择：全走 document 代理。
+     弹层内容是每次打开时重算的，逐个绑定会在每次重算后留下一批死监听。 */
+  document.addEventListener("click", e=>{
+    const t = e.target;
+    if(!t || !t.closest) return;
+    if(t.closest("[data-evcampop]")){ evCamPopOpen(!EV.campop); return; }
+    if(t.closest("[data-evcamclose]") || t.id === "evCamMask"){ evCamPopOpen(false); return; }
+    if(t.closest("[data-evcamclear]")){ EV.cams = []; evCamPopOpen(false); evReload(); return; }
+    const nm = t.closest("#evCamPop [data-evname]");
+    if(nm){
+      const id = nm.getAttribute("data-evname");
+      if(id) evToggle(EV.cams, id); else EV.cams = [];
+      evReload();                       /* 列表立刻跟着变，弹层保持打开 */
+      evCamPopOpen(true);               /* 重画弹层的选中态（evReload 不动弹层） */
+    }
+  });
   /* 「更多筛选」的两个时间框与最短时长：用 change（失焦/回车）而不是 input，
      否则每敲一个数字就发一次请求 —— 服务端一次要按天跑指纹同步，不是免费的。
      最短时长只收非负整数秒：小数在这里没有意义（事件精度就是秒）。 */

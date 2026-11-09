@@ -485,6 +485,16 @@ function syncPlayer(){
   bar.addEventListener("pointerup", ()=>{ on=false; bar.classList.remove("drag"); });
 })();
 
+/* 后台切回自动续播（0.9.132）：手机上切到别的 App 再回来，浏览器会把 <video>
+   暂停，但 state.playing 仍为真 —— 表现出来就是"还显示播放中，画面却不动"。
+   回到前台时若本应在播、而视频被暂停了，主动 resume 一次（存档/解码状态都在）。 */
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState !== "visible") return;
+  if(!player.classList.contains("on") || !state.playing) return;
+  const v = activeVideo();
+  if(v && v.paused) v.play().catch(()=>{});
+});
+
 /* 左右滑动切换片段 */
 (function bindSwipe(){
   const stage = document.getElementById("stage");

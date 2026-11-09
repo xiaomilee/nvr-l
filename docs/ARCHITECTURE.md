@@ -262,6 +262,12 @@ error_code / error_message / last_success_at`）+ 四档 state + 十个错误码
 - `css/` 与 `js/` 不进包（`pack_fpk.py` 的 `PKG_SKIP_DIRS`），
   否则会让人以为在设备上改它们能生效。
 
+移动端适配（0.9.132）仍在同一套单 `index.html` 里做，不新增页面与路由：事件详情把快照与
+回放拆成两段（先确认再打开视频）、放大浮层加「横过来看 / 放大」适配竖屏、机位筛选从横滑
+chips 改为底部弹层多选、事件列表加加载骨架与可重试失败态；回放 `<video>` 在 `visibilitychange`
+回前台时自动 resume，离开直播单路实时层或切 tab 时主动断 MJPEG 流。新增窄屏断点只在事件页
+相关控件上动，全站此前零 `@media`。
+
 **合成必须排在 `validate.py` 之前**（`build.sh` 的 `0/5`），
 否则 validate 核对的是上一轮的产物。包布局与目录树见 [`../nvr-slim/fpk/BUILD.md`](../nvr-slim/fpk/BUILD.md)。
 

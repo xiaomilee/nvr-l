@@ -50,8 +50,8 @@ function popToRoot(){
 
 function activatePage(page){
   if(page !== "live" && state.liveView !== "snap"){
-    state.liveView = "snap";
-    document.getElementById("liveRoom").classList.remove("on");
+    closeLiveRoom();   // 离开直播页时若还在单路实时层，主动断 MJPEG 流（摘 src + 清空容器），
+                       // 否则隐藏的 liveRoom 会继续拉流，手机上白白耗流量与 ffmpeg 转发
   }
   document.querySelectorAll(".tb").forEach(x=>x.classList.toggle("on", x.dataset.page===page));
   document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on", p.id==="page-"+page));

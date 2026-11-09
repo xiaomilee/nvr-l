@@ -106,6 +106,27 @@ ck("前摇被截断要说明",
 ck("定位读失败要说读不到定位",
    run('EV.clip=null; EV.clipErr="boom"; evOpenHtml(' + J(EV1) + ')').indexOf("读不到定位") > 0);
 
+/* 0.9.132 事件详情：快照与回放拆成两段（用户原话：先快速确认，再决定打开视频） */
+ck("主按钮是「打开录像」且写明大约时长",
+   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EV1) + ')')
+     .indexOf('▶ 打开录像（约 22 秒）') > 0);
+
+/* 0.9.132 弱网：明确的失败态 + 加载骨架（慢网里一行字干等像卡死） */
+run('EV.err="网络超时"; EV.data=null; EV.loading=false; renderEvList();');
+ck("读取失败有「重试」钮与提示",
+   els["evList"]._html.indexOf('data-evretry="1"') > 0
+   && els["evList"]._html.indexOf("读取失败") > 0);
+run('EV.err=""; EV.data=null; EV.loading=true; renderEvList();');
+ck("加载中给骨架而不是一行字干等",
+   els["evList"]._html.indexOf('class="evsk"') > 0);
+
+/* 0.9.132 机位筛选弹层（从横滑 chips 改为底部弹层 + 2 列网格） */
+ck("机位弹层含「全部机位」与每路按钮",
+   run('EV.cams=[]; evCamPopHtml()').indexOf("全部机位") > 0
+   && run('EV.cams=[]; evCamPopHtml()').indexOf('data-evname="cam-01"') > 0);
+ck("机位弹层按 EV.cams 标出已选",
+   run('EV.cams=["cam-01"]; evCamPopHtml()').indexOf('camb on') > 0);
+
 /* ---- ±30 秒的基准 ---- */
 ck("没播过这条事件：基准是入点",
    run('EV.focus="x"; PPLAY.segIdx=-1; evPlayPoint(' + J(EV1)
@@ -151,9 +172,11 @@ ck("空事件返回 false", run('evTargetState(null)') === false);
 ck("没数据时说明在同步索引",
    run('EV.data=null; EV.err=""; renderEvList();' 
      + ' document.getElementById("evList").innerHTML').indexOf("正在读事件台账") > 0);
-ck("失败时给出重读口径",
+ck("失败时给出重读口径（重试钮 + 网络提示）",
    run('EV.data=null; EV.err="boom"; renderEvList();'
-     + ' document.getElementById("evList").innerHTML').indexOf("重新读一次") > 0);
+     + ' document.getElementById("evList").innerHTML').indexOf('data-evretry="1"') > 0
+   && run('EV.data=null; EV.err="boom"; renderEvList();'
+     + ' document.getElementById("evList").innerHTML').indexOf("同一个网络") > 0);
 
 const EMPTY = {ok:true, summary:{count:0, by_category:{}}, events:[]};
 ck("空列表要和'加载失败'区分开",
@@ -270,6 +293,20 @@ ck("定位缺失时 ±30 也不动作",
    没有图如实说原因 / 拿不到图不许留破图。 */
 const EVS = Object.assign({}, EV1, {shot:{url:"/api/events/c1_20261108_102341/shot",
                                           at:"10:23:47", offset:6}});
+/* 0.9.132 事件详情：快照与回放拆成两段（EVS 在上方才声明，断言放这） */
+ck("展开区分「确认区」与「动作区」",
+   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
+     .indexOf('class="evconfirm"') > 0
+   && run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
+     .indexOf('class="evacts"') > 0);
+ck("确认区提示先看清再决定",
+   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
+     .indexOf("先看清，再决定要不要打开录像") > 0);
+ck("前/后 30 秒降级为同一展开里的次要动作",
+   run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
+     .indexOf('data-evgo="-30"') > 0
+   && run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
+     .indexOf('data-evgo="30"') > 0);
 ck("有快照：卡片出现缩略图",
    run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf("evthumb") > 0);
 ck("缩略图地址用服务端给的（不自己拼）",
@@ -335,6 +372,14 @@ ck("点缩略图开浮层、Esc/关闭能退回",
    run('EV.data={events:[' + J(EVS) + ']}; EV.box["' + EVS.id + '"]=[];'
      + ' evZoomOpen("' + EVS.id + '"); EV.zoom') === EVS.id
    && run('evZoomClose(); EV.zoom') === "");
+
+/* 0.9.132 放大浮层竖屏适配：横图在竖屏只占屏高 1/3，给「横过来看」与「放大」 */
+ck("浮层有「横过来看」与「放大」两个竖屏按钮",
+   run('EV.box["' + EVS.id + '"]=[]; EV.data={events:[' + J(EVS) + ']};'
+     + ' evZoomHtml(' + J(EVS) + ')').indexOf('data-evzoomrot="1"') > 0
+   && run('evZoomHtml(' + J(EVS) + ')').indexOf('data-evzoomzoom="1"') > 0);
+ck("浮层主按钮文案是「打开录像」",
+   run('evZoomHtml(' + J(EVS) + ')').indexOf("▶ 打开录像") > 0);
 
 console.log((fail ? "FAIL" : "OK") + "  events  " + pass + " 通过 / " + fail + " 失败");
 process.exit(fail ? 1 : 0);

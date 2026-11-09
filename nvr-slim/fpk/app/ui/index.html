@@ -918,6 +918,79 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .evnote .code{margin-left:5px;font-size:10px;color:var(--faint)}
 .eveof{padding:14px 0 4px;text-align:center;font-size:11.5px;color:var(--faint);line-height:1.6}
 
+/* ============ 0.9.132 事件详情：快照/回放拆两段 + 弱网态 + 机位弹层 ============ */
+/* 第一段只有图（可点放大），让用户先"看清那一眼"；第二段才一个主按钮"打开录像"，
+   并把"要花多久"写在按钮上 —— 打开一段录像在手机上是 seek+解码+流量，代价不低，
+   不该和"确认"压成同一次点击。前/后 30 秒降为次要，它们是"已在看"之后的动作。 */
+.evconfirm{margin-top:8px}
+.evcfm{margin-top:6px;font-size:11.5px;color:var(--faint);line-height:1.5}
+.evbtn.wide{flex:1 1 100%;height:38px;font-size:13px}
+.evbtn.sub{flex:1 1 0;min-width:0}
+/* 展开区大图加载失败（弱网最常见）：缩略图静默藏，展开区必须明说 —— 否则用户
+   以为这条事件压根没快照。只给容器加 class，文案交给 CSS ::after，不在内联拼中文。 */
+.evshotwrap.bad::after{content:"快照没加载出来（弱网或已清理）";
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  padding:0 14px;text-align:center;font-size:12px;color:var(--faint);background:var(--fill)}
+.evshotwrap.bad .evshot{visibility:hidden}
+
+/* 机位筛选弹层（0.9.132）：8 路机位在 375 屏上是 900+ 像素横条，横滑三四屏才找得到
+   最后一路，而手机横滚条看不见。改成底部弹层 + 2 列网格，一眼看全、可连点多选。 */
+.evcampop{position:fixed;inset:0;z-index:70}
+.evcampop[hidden]{display:none}
+#evCamMask{background:rgba(8,10,14,.5)}
+.evcampop-sheet{position:fixed;left:0;right:0;bottom:0;z-index:71;
+  background:var(--surface);border-radius:16px 16px 0 0;
+  padding:14px 16px calc(16px + env(safe-area-inset-bottom));
+  box-shadow:0 -6px 24px rgba(0,0,0,.28)}
+.evcamt{display:flex;flex-direction:column;gap:2px;margin-bottom:10px}
+.evcamt b{font-size:14px;color:var(--text)}
+.evcamt span{font-size:11px;color:var(--faint)}
+.evcamg{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.evcamb{height:42px;border-radius:10px;border:1px solid var(--line);background:var(--bg);
+  font-size:13px;color:var(--text2)}
+.evcamb.on{background:var(--primary);border-color:var(--primary);color:#fff}
+.evcamf{margin-top:12px;display:flex}
+.evcamf .evbtn.main{flex:1;height:42px;font-size:13px}
+
+/* 弱网加载骨架（0.9.132）：慢网里"正在读台账"一行字要等十几秒，页面没别的东西在动，
+   用户分不清"在读"还是"卡死"。灰块不做扫光动画 —— 飘动的动画反而像"还要等"。 */
+.evsk{display:flex;align-items:center;gap:10px;padding:10px 11px;margin-bottom:8px;
+  background:var(--surface);border-radius:13px}
+.evsk i{flex:0 0 76px;height:43px;border-radius:8px;background:var(--fill)}
+.evsk span{flex:1;height:11px;border-radius:6px;background:var(--fill)}
+.evsk b{flex:1;height:9px;max-width:55%;border-radius:6px;background:var(--fill)}
+/* 明确的失败态：给重试钮，弱网失败多在翻页/切筛选时，用户就在这屏。 */
+.evfail{display:flex;flex-direction:column;align-items:center;gap:8px;padding:20px 16px;
+  text-align:center}
+.evfail b{font-size:13px;color:var(--warn-fg)}
+.evfail span{font-size:11.5px;color:var(--faint);line-height:1.5}
+.evfail .evbtn.main{margin-top:4px;height:40px;padding:0 20px;font-size:13px}
+.evfailhint{font-size:10.5px;color:var(--faint);opacity:.85}
+
+/* 放大浮层竖屏适配（0.9.132）：16:9 横图按屏宽铺满只占屏高 1/3，人脸车牌看不清。
+   旋转 90° 后图长边变屏高，能占 65%+；放大则让图超出容器可滚动。两者互斥
+   （evZoomRoot 里 toggle 时先 remove 另一个），否则 transform 与滚动叠一起拖不动。 */
+.evzoomwrap.rot{transform:rotate(90deg);overflow:visible}
+.evzoomwrap.rot .evzoomimg{max-width:90vh;max-height:90vw;width:auto;height:auto}
+.evzoomwrap.z2{overflow:auto;-webkit-overflow-scrolling:touch}
+.evzoomwrap.z2 .evzoomimg{max-height:none;width:auto;height:auto;min-width:100%}
+
+/* ============ 0.9.132 窄屏（手机）断点：信息密度 + 触控尺寸 ============ */
+@media (max-width:640px){
+  /* 全站此前零 @media：evchip 29px / evbtn 28px 都低于 44px 触控下限，
+     23 处 10.5px 字号。这里只动事件页相关控件，先解决最痛的几处。 */
+  .evwrap{padding:8px 12px 18px}
+  .evmore{padding:9px 12px 10px}
+  .evcard{padding:9px 10px;gap:9px;margin-bottom:7px}
+  .evtime{font-size:15px}
+  .evchip{height:34px;padding:0 13px;font-size:12.5px}
+  .evbtn{height:38px;padding:0 12px;font-size:12.5px}
+  .evbtn.wide{height:42px;font-size:14px}
+  .evthumb{width:70px;height:39px}   /* 略缩，一屏多塞一两张卡片 = 更高密度 */
+  .evbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .evbar::-webkit-scrollbar{display:none}
+}
+
 /* 空间预警（0.9.131）：诊断存储卡顶部一条，直播页头部一个角标。
    配色复用状态色（告急 danger / 偏低 warn / 未知 faint），不另造一套 ——
    同一种"要注意"在页面上应该长成同一个颜色。 */
@@ -1799,6 +1872,9 @@ body.fsmode.rail #fsTools button span{display:none}
         <div class="evhint">留空 = 整天 · 时长按事件本身算（秒）· 条件只影响本次列表</div>
       </div>
       <div class="evwrap" id="evList"></div>
+      <!-- 机位筛选弹层（0.9.132）：从横向滚动 chips 改成底部弹层，手机一眼看全、可多选 -->
+      <div class="evcampop" id="evCamMask" hidden></div>
+      <div class="evcampop-sheet" id="evCamPop" hidden></div>
     </section>
 
     <!-- ============ 设置 ============ -->
@@ -2911,8 +2987,8 @@ function popToRoot(){
 
 function activatePage(page){
   if(page !== "live" && state.liveView !== "snap"){
-    state.liveView = "snap";
-    document.getElementById("liveRoom").classList.remove("on");
+    closeLiveRoom();   // 离开直播页时若还在单路实时层，主动断 MJPEG 流（摘 src + 清空容器），
+                       // 否则隐藏的 liveRoom 会继续拉流，手机上白白耗流量与 ffmpeg 转发
   }
   document.querySelectorAll(".tb").forEach(x=>x.classList.toggle("on", x.dataset.page===page));
   document.querySelectorAll(".page").forEach(p=>p.classList.toggle("on", p.id==="page-"+page));
@@ -4451,6 +4527,16 @@ function syncPlayer(){
   bar.addEventListener("pointercancel", ()=>{ on=false; bar.classList.remove("drag"); });
   bar.addEventListener("pointerup", ()=>{ on=false; bar.classList.remove("drag"); });
 })();
+
+/* 后台切回自动续播（0.9.132）：手机上切到别的 App 再回来，浏览器会把 <video>
+   暂停，但 state.playing 仍为真 —— 表现出来就是"还显示播放中，画面却不动"。
+   回到前台时若本应在播、而视频被暂停了，主动 resume 一次（存档/解码状态都在）。 */
+document.addEventListener("visibilitychange", ()=>{
+  if(document.visibilityState !== "visible") return;
+  if(!player.classList.contains("on") || !state.playing) return;
+  const v = activeVideo();
+  if(v && v.paused) v.play().catch(()=>{});
+});
 
 /* 左右滑动切换片段 */
 (function bindSwipe(){
@@ -10640,7 +10726,7 @@ function pvResume(){
 const EV = {day: jsToday(), cams: [], cats: [], from: "", to: "", minDur: "",
             more: false, data: null, key: "", at: 0, err: "",
             loading: false, open: "", focus: "", clip: null, clipErr: "",
-            box: {}, zoom: ""};
+            box: {}, zoom: "", campop: false};
 
 /* 筛选状态一律是数组 + 字符串，且**只在发请求时拼成参数**：
    界面上"选中"只是数组里有这一项，服务端只认拼好的查询串。中间不留第二份
@@ -10741,6 +10827,13 @@ function evFind(id){
    逐个绑定会在 200 条列表上多 200 次查询。 */
 const EV_IMG_ONERR = "this.style.display='none'";
 
+/* 展开区那张大图失败时的处理与缩略图**故意不同**：
+   列表里 200 张缩略图挨个显示"破图"会把页面变成一片灰块，所以缩略图失败就藏掉；
+   但展开区是用户点开"要看这一眼"的地方，图没了必须说出来 —— 弱网下最常见的
+   就是图还没下完（`loading=lazy` + 慢网），静默藏掉会让人以为这条事件根本没快照。
+   这里只给容器加个 class，文案交给 CSS 的 ::after，不在内联属性里拼中文。 */
+const EV_SHOT_ONERR = "this.parentNode.classList.add('bad')";
+
 /* 快照那一眼（0.9.129）。三件事：
    - 图从**服务端给的 url** 来，前端不拼（与 clip 同一套契约）；
    - 说明写"快照 HH:MM:SS · 事件开始后 N 秒"，N 用服务端算好的 offset，
@@ -10790,7 +10883,8 @@ function evShotHtml(ev){
       + '或检测当时还没确认）。</div>';
   return '<div class="evshotwrap">'
     + '<img class="evshot" src="' + esc(sh.url) + '" alt="" loading="lazy"'
-    + ' decoding="async" onerror="' + EV_IMG_ONERR + '">'
+    + ' decoding="async" data-evzoom="' + esc(ev.id) + '" title="点开看大图"'
+    + ' onerror="' + EV_SHOT_ONERR + '">'
     + evBoxLayer(ev.id)
     + '</div>'
     + '<div class="evshotcap">' + evShotWhen(sh) + '</div>';
@@ -10806,8 +10900,18 @@ function evThumbHtml(ev){
     + ' onerror="' + EV_IMG_ONERR + '">';
 }
 
-/* 打开一条事件后展开的操作区。播不了时把服务端的中文原因摆出来 ——
-   需求里"点击直接播放"的前提是这一段真的还在，不在就得说清是哪一种不在。 */
+/* 打开一条事件后展开的内容（0.9.132 起分两段）。
+   播不了时把服务端的中文原因摆出来 —— 需求里"点击直接播放"的前提是这一段
+   真的还在，不在就得说清是哪一种不在。
+
+   为什么要拆成两段（用户原话：「把『事件快照』和『录像回放』的操作分开，让
+   用户先快速确认，再决定是否打开视频」）：以前图上并排三个按钮、主按钮就是
+   「打开回放」，等于把"确认那一眼"和"看全程"压成同一次点击。手机上打开一段
+   录像的代价是 seek + 解码 + 流量，而十次里有九次用户只想确认"那是人还是影子"。
+
+   所以：第一段只有图（可点放大），第二段只有一个主按钮，并且把"要花多久"
+   写在按钮上 —— 用户得知道自己点下去要付什么代价。前/后 30 秒降为次要，
+   它们是"已经在看录像之后"的动作，不该和"要不要看"并列。 */
 function evOpenHtml(ev){
   let note = "";
   if(EV.clipErr){
@@ -10818,10 +10922,17 @@ function evOpenHtml(ev){
   }else if(EV.clip && EV.clip.clamped){
     note = '<div class="evnote info">事件前面那段被片头截断，入点从片首开始。</div>';
   }
-  return note + evShotHtml(ev) + '<div class="evacts">'
-    + '<button class="evbtn" data-evgo="-30">◀ 前 30 秒</button>'
-    + '<button class="evbtn main" data-evgo="0">▶ 打开回放</button>'
-    + '<button class="evbtn" data-evgo="30">后 30 秒 ▶</button>'
+  const sec = Math.round(+((ev && ev.duration) || 0));
+  return note + '<div class="evconfirm">'
+      + evShotHtml(ev)
+      + ((ev && ev.shot && ev.shot.url)
+          ? '<div class="evcfm">点图可放大 · 先看清，再决定要不要打开录像</div>' : "")
+    + '</div>'
+    + '<div class="evacts">'
+      + '<button class="evbtn main wide" data-evgo="0">▶ 打开录像'
+        + (sec > 0 ? '（约 ' + sec + ' 秒）' : '') + '</button>'
+      + '<button class="evbtn sub" data-evgo="-30">◀ 前 30 秒</button>'
+      + '<button class="evbtn sub" data-evgo="30">后 30 秒 ▶</button>'
     + '</div>';
 }
 
@@ -10865,17 +10976,25 @@ function evZoomHtml(ev){
   return '<div class="evzoombox">'
     + '<div class="evzoomwrap">'
       + '<img class="evzoomimg" src="' + esc(sh.url) + '" alt=""'
-      + ' onerror="' + EV_IMG_ONERR + '">'
+      + ' onerror="' + EV_SHOT_ONERR + '">'
       + evBoxLayer(ev.id)
     + '</div>'
     + '<div class="evzoomcap"><b>' + esc(evCamName(ev)) + ' · '
       + gfmtClock(ev.start) + '</b> · ' + evShotWhen(sh) + boxNote + '</div>'
     + '<div class="evzoombar">'
-      + '<button class="evbtn main" data-evzoomplay="' + esc(ev.id) + '">▶ 打开回放</button>'
+      + '<button class="evbtn main" data-evzoomplay="' + esc(ev.id) + '">▶ 打开录像</button>'
+      /* 竖屏那两个按钮（0.9.132）：16:9 的横图按屏宽铺满只有 96vw 宽，
+         高度自然只有屏高的 1/3，人脸和车牌都看不清。旋转 90° 后图的长边
+         变成屏幕的高，能占到屏高 65% 以上 —— 这是手机看横图最省事的办法，
+         比让用户自己横过手机再关掉方向锁定可靠。 */
+      + '<button class="evbtn" data-evzoomrot="1" title="竖屏时横过来看">⟳ 横过来看</button>'
+      + '<button class="evbtn" data-evzoomzoom="1" title="放大一档">＋ 放大</button>'
       + '<button class="evbtn" data-evzoomclose="1">关闭</button>'
     + '</div></div>';
 }
-/* 浮层根节点建一次就复用：每次点图都新建 DOM 会让 document 上堆一串死节点。 */
+/* 浮层根节点建一次就复用：每次点图都新建 DOM 会让 document 上堆一串死节点。
+   「横过来看」与「放大」互斥：一个是把图转 90°，一个是让图超出容器可滚动，
+   同时开会让 transform 与滚动叠在一起，用户拖半天不知道该往哪拖。 */
 function evZoomRoot(){
   let el = document.getElementById("evZoomRoot");
   if(el) return el;
@@ -10883,15 +11002,37 @@ function evZoomRoot(){
   el.id = "evZoomRoot";
   el.onclick = e=>{
     const t = e.target;
-    const play = (t && t.closest) ? t.closest("[data-evzoomplay]") : null;
+    if(!t || !t.closest) return;
+    const play = t.closest("[data-evzoomplay]");
     if(play){
       const id = play.getAttribute("data-evzoomplay");
       evZoomClose();
       evOpen(id);                    /* 关浮层再走原来那条"展开 + 定位"的路 */
       return;
     }
+    const wrap = () => el.querySelector(".evzoomwrap");
+    const rot = t.closest("[data-evzoomrot]");
+    if(rot){
+      const w = wrap();
+      if(w){
+        const on = w.classList.toggle("rot");
+        w.classList.remove("z2");    /* 互斥：转过来就不再放大 */
+        rot.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      return;
+    }
+    const zm = t.closest("[data-evzoomzoom]");
+    if(zm){
+      const w = wrap();
+      if(w){
+        const on = w.classList.toggle("z2");
+        w.classList.remove("rot");
+        zm.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      return;
+    }
     /* 点图本身不关（用户可能正对着框看）；点背景、点"关闭"才关。 */
-    if((t && t.closest && t.closest("[data-evzoomclose]")) || t === el) evZoomClose();
+    if(t.closest("[data-evzoomclose]") || t === el) evZoomClose();
   };
   document.body.appendChild(el);
   return el;
@@ -10933,14 +11074,31 @@ function evZoomClose(){
   return true;
 }
 
+/* 加载骨架（0.9.132）：弱网下"正在读事件台账…"一行字要等十几秒，页面上再没有
+   别的东西在动，用户分不清是在读还是卡死了。骨架条只是灰块，不做扫光动画 ——
+   慢网里飘来飘去的动画比静止更容易被当成"还在加载所以要等"。
+   文案保留原句（老用户认得这句），骨架垫在它下面。 */
+function evSkeleton(n){
+  let out = "";
+  for(let i = 0; i < n; i++)
+    out += '<div class="evsk"><i></i><span></span><b></b></div>';
+  return out;
+}
+
 function renderEvList(){
   const el = document.getElementById("evList");
   if(!el) return;
   let body;
   if(EV.err){
-    body = '<div class="eveof">读取失败：' + esc(EV.err) + '<br>点右上角重新读一次</div>';
+    /* 失败要有可点的出口：以前写"点右上角重新读一次"，用户得先找到那个图标。
+       弱网下最常见的失败是翻页/切筛选时超时，此时他就在这一屏，重试钮该在这。 */
+    body = '<div class="evfail"><b>读取失败</b>'
+      + '<span>' + esc(EV.err) + '</span>'
+      + '<button class="evbtn main" data-evretry="1">重试</button>'
+      + '<i class="evfailhint">检查一下手机和 NAS 是不是同一个网络</i></div>';
   }else if(!EV.data){
-    body = '<div class="eveof">正在读事件台账（首次会按台账同步这一天的索引）…</div>';
+    body = '<div class="eveof">正在读事件台账（首次会按台账同步这一天的索引）…</div>'
+      + evSkeleton(EV.loading ? 5 : 2);
   }else{
     const evs = EV.data.events || [];
     /* 接口给的是时间正序（那是时间轴的读法：从早到晚读一天）。事件页要的是
@@ -10986,6 +11144,39 @@ function evReload(){
   renderEvChips(); renderEvHead(); loadEvents(true);
 }
 
+/* ---------------- 机位弹层（0.9.132） ----------------
+   弹层内容每次打开时重算：机位列表可能刚在设置页里改过名、增删过路数。
+   选完不关：多选要在同一个弹层里连着点，点一下就关等于让人反复开合。 */
+function evCamPopHtml(){
+  const opts = [{id: "", name: "全部机位"}].concat(
+    (CAMERAS || []).map(c => ({id: c.id, name: c.name || c.id})));
+  const all = EV.cams.length === 0;
+  return '<div class="evcamt"><b>按机位筛选</b><span>可多选，同一次只看这些</span></div>'
+    + '<div class="evcamg">' + opts.map(o=>{
+        const on = o.id ? EV.cams.indexOf(o.id) >= 0 : all;
+        return '<button class="evcamb' + (on ? " on" : "") + '" data-evname="'
+          + esc(o.id) + '">' + esc(o.name) + '</button>';
+      }).join("") + '</div>'
+    + '<div class="evcamf"><button class="evbtn main" data-evcamclose="1">完成</button></div>';
+}
+
+function evCamPopOpen(on){
+  const pop = document.getElementById("evCamPop");
+  const mask = document.getElementById("evCamMask");
+  if(!pop) return false;
+  if(on){
+    pop.innerHTML = evCamPopHtml();
+    pop.hidden = false;
+    if(mask) mask.hidden = false;
+    EV.campop = true;
+  }else{
+    pop.hidden = true;
+    if(mask) mask.hidden = true;
+    EV.campop = false;
+  }
+  return EV.campop;
+}
+
 function renderEvChips(){
   const dayBar = document.getElementById("evDayBar");
   if(dayBar){
@@ -11000,20 +11191,15 @@ function renderEvChips(){
   }
   const camBar = document.getElementById("evCamBar");
   if(camBar){
-    const opts = [{id: "", name: "全部机位"}].concat(
-      (CAMERAS || []).map(c => ({id: c.id, name: c.name || c.id})));
-    camBar.innerHTML = opts.map(o => {
-      const on = o.id ? EV.cams.indexOf(o.id) >= 0 : EV.cams.length === 0;
-      return '<button class="evchip' + (on ? " on" : "") + '" data-evname="'
-        + esc(o.id) + '">' + esc(o.name) + '</button>';
-    }).join("");
-    camBar.querySelectorAll("[data-evname]").forEach(b=>{
-      b.onclick = ()=>{
-        const id = b.getAttribute("data-evname");
-        if(id) evToggle(EV.cams, id); else EV.cams = [];
-        evReload();
-      };
-    });
+    /* 机位筛选从"横向滚动的 chips"改成"一个按钮 + 底部弹层"（0.9.132）。
+       为什么：8 路机位在 375 宽的屏上是 900 多像素的横条，要横滑三四屏才能
+       找到最后一路，而横向滚动条在手机上是看不见的 —— 用户根本不知道右边还有。
+       弹层是 2 列网格，一眼看全；多选就在弹层里连续点，不用反复开合。
+       按钮上写"全部机位"或"3 个机位"：不打开弹层也知道现在筛了什么。 */
+    const n = EV.cams.length;
+    camBar.innerHTML = '<button class="evchip on" data-evcampop="1">'
+      + (n ? n + " 个机位" : "全部机位") + ' ▾</button>'
+      + (n ? '<button class="evchip" data-evcamclear="1">清除机位</button>' : "");
   }
   const catBar = document.getElementById("evCatBar");
   if(catBar){
@@ -11202,6 +11388,10 @@ function evGo(delta){
        否则同一个点击会先被卡片接走，用户还是会被弹去回放。 */
     const z = (t && t.closest) ? t.closest("[data-evzoom]") : null;
     if(z){ e.stopPropagation(); evZoomOpen(z.getAttribute("data-evzoom")); return; }
+    /* 失败态里的重试：必须在卡片判断之前（失败时列表里没有卡片，但顺序
+       写反了将来加了别的东西就会莫名被卡片吃掉）。 */
+    const rt = (t && t.closest) ? t.closest("[data-evretry]") : null;
+    if(rt){ e.stopPropagation(); loadEvents(true); return; }
     const g = (t && t.closest) ? t.closest("[data-evgo]") : null;
     if(g){ e.stopPropagation(); evGo(+g.getAttribute("data-evgo")); return; }
     const c = (t && t.closest) ? t.closest("[data-ev]") : null;
@@ -11213,6 +11403,22 @@ function evGo(delta){
   });
   const rf = document.getElementById("btnEvRefresh");
   if(rf) rf.onclick = ()=>{ loadEvents(true); };
+  /* 机位弹层的开合与选择：全走 document 代理。
+     弹层内容是每次打开时重算的，逐个绑定会在每次重算后留下一批死监听。 */
+  document.addEventListener("click", e=>{
+    const t = e.target;
+    if(!t || !t.closest) return;
+    if(t.closest("[data-evcampop]")){ evCamPopOpen(!EV.campop); return; }
+    if(t.closest("[data-evcamclose]") || t.id === "evCamMask"){ evCamPopOpen(false); return; }
+    if(t.closest("[data-evcamclear]")){ EV.cams = []; evCamPopOpen(false); evReload(); return; }
+    const nm = t.closest("#evCamPop [data-evname]");
+    if(nm){
+      const id = nm.getAttribute("data-evname");
+      if(id) evToggle(EV.cams, id); else EV.cams = [];
+      evReload();                       /* 列表立刻跟着变，弹层保持打开 */
+      evCamPopOpen(true);               /* 重画弹层的选中态（evReload 不动弹层） */
+    }
+  });
   /* 「更多筛选」的两个时间框与最短时长：用 change（失焦/回车）而不是 input，
      否则每敲一个数字就发一次请求 —— 服务端一次要按天跑指纹同步，不是免费的。
      最短时长只收非负整数秒：小数在这里没有意义（事件精度就是秒）。 */
