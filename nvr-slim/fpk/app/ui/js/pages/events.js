@@ -305,7 +305,10 @@ function evZoomRoot(){
     if(play){
       const id = play.getAttribute("data-evzoomplay");
       evZoomClose();
-      evOpen(id);                    /* 关浮层再走原来那条"展开 + 定位"的路 */
+      /* 关浮层后展开并取定位，再走「打开录像」逻辑跳回放（evGo→evSeek）。
+         不直接 evSeek 是因为 clip 可能还没拉（比如从缩略图进浮层时没开过卡片），
+         让 evOpen 把定位拿到、evGo 自己判就绪再跳。 */
+      evOpen(id).then(()=>evGo(0));
       return;
     }
     const wrap = () => el.querySelector(".evzoomwrap");
@@ -632,7 +635,8 @@ function evSeek(ev, t){
   return true;
 }
 
-/* 点卡片：先问定位，能播就跳；播不了留在卡片上把原因说清（不跳页、不给黑框）。 */
+/* 点卡片 = 展开详情（两段式）：先取定位（决定能不能播、播不了说清原因），
+   但**不跳转** —— 跳回放是详情里「打开录像」按钮的事。 */
 function evOpen(id){
   const ev = evFind(id);
   if(!ev) return Promise.resolve(null);
@@ -654,8 +658,12 @@ function evOpen(id){
     }
     EV.clip = d;
     renderEvList();
-    if(d.missing_reason) return d;
-    evSeek(ev, evClipStart(d));             /* 入点 = 分片起点 + 偏移（事件前 10 秒） */
+    /* 0.9.132 修正：这里**只取定位、不跳转**。
+       打开事件 = 展开详情（图 + 「打开录像」按钮）；真正跳回放的是详情里的
+       主按钮（data-evgo）或快照浮层的「打开录像」（data-evzoomplay），由 evGo
+       走 evSeek。以前这里顺手 evSeek，等于点开事件就直接进回放，把"先看清
+       那一眼"的两段式设计架空了。播不了（missing_reason）也只是留在卡片上
+       说清原因，不跳。 */
     return d;
   }).catch(e=>{
     if(EV.open === id){
