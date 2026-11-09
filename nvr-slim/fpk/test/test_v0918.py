@@ -243,9 +243,9 @@ class TestR5ClipTimeline(unittest.TestCase):
 
 class TestVersion(unittest.TestCase):
     def test_version_bumped(self):
-        self.assertEqual(runtime.VERSION, "0.9.137")
+        self.assertEqual(runtime.VERSION, "0.9.138")
         m = _read(MANIFEST)
-        self.assertRegex(m, r"(?m)^version\s*=\s*0\.9\.137\s*$")
+        self.assertRegex(m, r"(?m)^version\s*=\s*0\.9\.138\s*$")
 
 
 class TestWizardPackaging(unittest.TestCase):

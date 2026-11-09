@@ -496,8 +496,10 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .expgo{background:var(--primary);border-color:var(--primary);color:#fff}
 .expgo[disabled]{opacity:.45}
 .evwrap{flex:1;overflow-y:auto;padding:11px 16px 20px;-webkit-overflow-scrolling:touch}
-.evcard{display:flex;align-items:stretch;gap:10px;background:var(--surface);border-radius:13px;
-  padding:10px 11px;margin-bottom:8px}
+/* 0.9.138 卡片改两行结构：第一行（色条+文字+缩略图），第二行（展开详情整卡宽）。
+   flex-wrap 让 .evopen 换到第二行并独占一行；行距由 gap 兼管。 */
+.evcard{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;background:var(--surface);
+  border-radius:13px;padding:10px 11px;margin-bottom:8px}
 .evcard:active{opacity:.62}
 /* 左侧细色条 = 这条事件的主类别，与时间轴三车道同一套配色 */
 .evstrip{flex:0 0 4px;border-radius:2px;background:var(--warn)}
@@ -507,19 +509,33 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
 .evtime{font-size:15.5px;font-weight:600;letter-spacing:-.3px}
 .evmeta{margin-top:2px;font-size:11.5px;color:var(--faint);overflow:hidden;white-space:nowrap;
   text-overflow:ellipsis}
-.evtags{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
-/* 事件快照（0.9.129）：卡片右侧 76×43（16:9），展开时上面那张宽图。
+/* 标签（0.9.138 起归左列，横排在机位行下面）：以前挂在缩略图下面，
+   会把右列撑得比文字块高，缩略图怎么缩都"填不满"卡片高度。 */
+.evtags{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+/* 事件快照（0.9.129）：展开时上面那张宽图 + 卡片右侧缩略图。
    0.9.130 起缩略图可点（看大图），所以它不能是 pointer-events:none。
-   图是 720p 的，缩到 76 宽由浏览器做 —— 服务端不另生成小图（那要再解一次码）。 */
-.evthumb{width:76px;height:43px;object-fit:cover;border-radius:8px;
-  background:var(--fill);cursor:zoom-in}
-.evshot{display:block;width:100%;max-height:210px;object-fit:cover;
+   图是 720p 的，缩放由浏览器做 —— 服务端不另生成小图（那要再解一次码）。
+
+   0.9.138 尺寸规则（用户要求：比例不变，小图拉满高度、大图拉满宽度）：
+   - 缩略图：.evthumbbox 定 16:9 比例、stretch 拉满卡片内容高，宽度自动跟随；
+     图绝对定位铺满，容器不把 720p 原始高度带进布局。
+   - 展开区大图：width:100% + height:auto，按原图比例铺满整卡宽，
+     去掉旧的 max-height:210 + cover 裁切。 */
+.evthumbbox{flex:0 0 auto;align-self:stretch;aspect-ratio:16/9;position:relative;
+  border-radius:8px;overflow:hidden;background:var(--fill)}
+.evthumb{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;cursor:zoom-in}
+.evshot{display:block;width:100%;height:auto;
   border-radius:10px;margin-top:8px;background:var(--fill)}
 /* 图 + 框的容器：框按百分比定位，所以必须有定位上下文，且 overflow 裁掉
    跑出画面的那半条边（贴边的框常见）。line-height:0 去掉图片底部的行高缝。 */
 .evshotwrap{position:relative;margin-top:8px;line-height:0;border-radius:10px;
   overflow:hidden;background:var(--fill)}
-.evshotwrap .evshot{margin-top:0;border-radius:0;max-height:210px}
+.evshotwrap .evshot{margin-top:0;border-radius:0}
+/* 展开详情（0.9.138 起独占第二行、整卡宽）：换行间距由 .evcard 的 gap 出，
+   各段落自己的 margin-top 归零，避免双重间距。 */
+.evopen{flex:1 1 100%;min-width:0}
+.evopen>.evconfirm{margin-top:0}
+.evopen>.evnote{margin-top:0}
 .evshotcap{margin-top:4px;font-size:11px;line-height:1.5;color:var(--faint)}
 /* 检测框（0.9.130）：颜色按类别与卡片色条同一套（人蓝 / 车绿 / 两轮车琥珀），
    标签贴在框的上沿 —— 框很小的时候只有标签还认得出来。 */
@@ -598,7 +614,9 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
    用户分不清"在读"还是"卡死"。灰块不做扫光动画 —— 飘动的动画反而像"还要等"。 */
 .evsk{display:flex;align-items:center;gap:10px;padding:10px 11px;margin-bottom:8px;
   background:var(--surface);border-radius:13px}
-.evsk i{flex:0 0 76px;height:43px;border-radius:8px;background:var(--fill)}
+/* 骨架灰块跟随真缩略图的尺寸（0.9.138）：缩略图拉满卡片内容高后约 116×66，
+   骨架如果不跟，加载完那一瞬卡片会"跳"一下。 */
+.evsk i{flex:0 0 116px;height:66px;border-radius:8px;background:var(--fill)}
 .evsk span{flex:1;height:11px;border-radius:6px;background:var(--fill)}
 .evsk b{flex:1;height:9px;max-width:55%;border-radius:6px;background:var(--fill)}
 /* 明确的失败态：给重试钮，弱网失败多在翻页/切筛选时，用户就在这屏。 */
@@ -628,7 +646,8 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
   .evchip{height:34px;padding:0 13px;font-size:12.5px}
   .evbtn{height:38px;padding:0 12px;font-size:12.5px}
   .evbtn.wide{height:42px;font-size:14px}
-  .evthumb{width:70px;height:39px}   /* 略缩，一屏多塞一两张卡片 = 更高密度 */
+  /* 缩略图（0.9.138）尺寸由卡片内容高决定，不再写死 —— 窄屏下文字块略矮，
+     它自己跟着变，这里不再干预。 */
   .evbar{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
   .evbar::-webkit-scrollbar{display:none}
 }

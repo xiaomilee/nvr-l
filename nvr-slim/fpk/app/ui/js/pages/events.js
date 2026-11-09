@@ -119,11 +119,12 @@ function evFind(id){
   return null;
 }
 
-/* 缩略图 onerror：拿不到图（404 / 没登录 / 断网）就把 <img> 自己藏掉。
-   留一个破图图标比"没有图"更难看，也更容易被当成页面坏了。
+/* 缩略图 onerror：拿不到图（404 / 没登录 / 断网）就把整个缩略图容器藏掉。
+   0.9.138 起图外面套了一层定比例的容器（.evthumbbox），只藏 <img> 会留下
+   一个灰块，比"没有图"更难看，也更容易被当成页面坏了。
    用内联属性而不是 addEventListener：这些卡片是 innerHTML 一次性生成的，
    逐个绑定会在 200 条列表上多 200 次查询。 */
-const EV_IMG_ONERR = "this.style.display='none'";
+const EV_IMG_ONERR = "this.parentNode.style.display='none'";
 
 /* 展开区那张大图失败时的处理与缩略图**故意不同**：
    列表里 200 张缩略图挨个显示"破图"会把页面变成一片灰块，所以缩略图失败就藏掉；
@@ -188,14 +189,23 @@ function evShotHtml(ev){
     + '<div class="evshotcap">' + evShotWhen(sh) + '</div>';
 }
 
-/* 卡片右侧那张 76×43（0.9.130 起可点）：点它先看大的，再决定要不要点开回放。
+/* 卡片右侧那张缩略图（0.9.130 起可点）：点它先看大的，再决定要不要点开回放。
    以前它 pointer-events:none、点了就跳回放 —— 用户只是想看清"那是人还是影子"
-   的时候，代价是一部录像的 seek 与解码。 */
+   的时候，代价是一部录像的 seek 与解码。
+
+   0.9.138 起不再写死 76×43：外层 .evthumbbox 用 aspect-ratio 定比例、
+   align-self:stretch 把高度拉满卡片内容高，宽度按 16:9 自动跟随 —— 比例
+   永远不变，高窄屏都成立。图用绝对定位铺满容器：这样容器不参与内容高计算，
+   不会把 720p 的原始高度（几百 px）带进卡片布局。
+   缩略图只在真有图时出现：没有就不占位 —— 一屏 200 条里大多数是
+   0.9.129 之前的老事件，塞满灰块等于把列表变成一片占位符。 */
 function evThumbHtml(ev){
   if(!ev || !ev.shot || !ev.shot.url) return "";
-  return '<img class="evthumb" src="' + esc(ev.shot.url) + '" alt="" loading="lazy"'
+  return '<div class="evthumbbox">'
+    + '<img class="evthumb" src="' + esc(ev.shot.url) + '" alt="" loading="lazy"'
     + ' decoding="async" data-evzoom="' + esc(ev.id) + '" title="点开看大图"'
-    + ' onerror="' + EV_IMG_ONERR + '">';
+    + ' onerror="' + EV_IMG_ONERR + '">'
+    + '</div>';
 }
 
 /* 打开一条事件后展开的内容（0.9.132 起分两段）。
@@ -242,20 +252,24 @@ function evCardHtml(ev){
   const conf = (typeof ev.confidence_max === "number")
     ? " · 置信度 " + ev.confidence_max.toFixed(2) : "";
   const cats = (ev.categories && ev.categories.length) ? ev.categories : ["motion"];
+  /* 0.9.138 结构调整：卡片改成"上下两行"——
+     第一行：色条 + 时间/机位/标签 + 缩略图；第二行（展开时）：详情整卡宽。
+     以前详情塞在左列里，宽度被右侧缩略图列压掉 90px，大图右边永远空一条；
+     标签挂在缩略图下面又把右列撑高。现在标签归左列（文字块的一部分），
+     缩略图直接做卡片子项把高度拉满，详情独占一行铺满整卡宽。 */
   return '<div class="evcard" data-ev="' + esc(ev.id) + '">'
     + '<i class="evstrip ' + evMainCat(ev) + '"></i>'
     + '<div class="evmain">'
       + '<div class="evtime mono">' + gfmtClock(ev.start) + '</div>'
       + '<div class="evmeta">' + esc(cam) + " · " + gfmtDur(ev.duration) + conf + '</div>'
-      + (open ? evOpenHtml(ev) : "")
+      + '<div class="evtags">'
+        + cats.map(k =>
+          '<span class="evtag ' + evCatCls(k) + '">' + esc(evCatText(k)) + '</span>').join("")
+      + '</div>'
     + '</div>'
-    + '<div class="evtags">'
-      /* 缩略图只在真有图时出现：没有就不占位 —— 一屏 200 条里大多数是
-         0.9.129 之前的老事件，塞满灰块等于把列表变成一片占位符。 */
-      + evThumbHtml(ev)
-      + cats.map(k =>
-        '<span class="evtag ' + evCatCls(k) + '">' + esc(evCatText(k)) + '</span>').join("")
-    + '</div></div>';
+    + evThumbHtml(ev)
+    + (open ? '<div class="evopen">' + evOpenHtml(ev) + '</div>' : "")
+  + '</div>';
 }
 
 /* ---------------- 放大看（0.9.130） ----------------

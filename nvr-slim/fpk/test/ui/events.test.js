@@ -314,13 +314,21 @@ ck("缩略图地址用服务端给的（不自己拼）",
      .indexOf("/api/events/c1_20261108_102341/shot") > 0);
 ck("缩略图懒加载 + 异步解码（一次 200 条）",
    run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf('loading="lazy"') > 0);
-ck("拿不到图就隐藏，不留破图",
-   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf("this.style.display=\'none\'") > 0);
+ck("拿不到图就整个缩略图容器藏掉，不留灰块（0.9.138 起图外有定比例容器）",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')')
+     .indexOf("this.parentNode.style.display=\'none\'") > 0);
 ck("没有快照：卡片不塞占位图",
    run('EV.open=""; evCardHtml(' + J(EV1) + ')').indexOf("evthumb") < 0);
 ck("展开时有宽图",
    run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
      .indexOf('class="evshot"') > 0);
+/* 0.9.138 尺寸规则：小图拉满高度（定比例容器）、大图拉满宽度（独占一行），
+   两者都不再裁切原比例。 */
+ck("缩略图套定比例容器（拉满卡片内容高，宽度按 16:9 跟随）",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf('class="evthumbbox"') > 0);
+ck("展开详情独占整卡宽（不在左列里被缩略图列压窄）",
+   run('EV.open="c1_20261108_102341"; evCardHtml(' + J(EVS) + ')')
+     .indexOf('class="evopen"') > 0);
 ck("展开时写清快照时刻与偏移",
    run('EV.clipErr=""; EV.clip=null; evOpenHtml(' + J(EVS) + ')')
      .indexOf("快照 10:23:47 · 事件开始后 6 秒") > 0);
