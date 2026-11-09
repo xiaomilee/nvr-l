@@ -1,4 +1,4 @@
-# 配置项参考（0.9.123）
+# 配置项参考（0.9.124）
 
 这份文档回答一个设置项被改完之后**到底谁会重新读它**。它属于批次 5 的文档重构，
 方向上是 P0「可信、能无人值守」：前几轮在按钮验收表上连续抓到三个「接口回 ok、
@@ -114,7 +114,7 @@
 
 ### 4.1 `detect`
 
-默认来自 `detect.DETECT_DEFAULTS`（`detect.py:81`），`_ENUM_KEYS` 管的是顶层键，
+默认来自 `detect.DETECT_DEFAULTS`（`detect.py:88`），`_ENUM_KEYS` 管的是顶层键，
 这里另外由 `DETECT_ENUMS` 管：
 
 - `enable=false` 总闸，默认关（opt-in）；`mode=snap | live`、
@@ -128,18 +128,32 @@
 
 ### 4.2 `notify`
 
-默认来自 `detect.NOTIFY_DEFAULTS`（`detect.py:91`）：
-`webhook=""`、`motion/person/vehicle=false`、`cooldown=60`。
-`norm_notify()` 把 `webhook` 截到 500 字符、`cooldown` 夹到 `30~600`。
+默认来自 `detect.NOTIFY_DEFAULTS`（`detect.py:98`）：
+`webhook=""`、`motion/person/vehicle=false`、`cooldown=60`、
+`platform="auto"`、`template=""`。
+`norm_notify()` 把 `webhook` / `template` 各截到 500 字符、`cooldown` 夹到
+`30~600`、`platform` 按 `notify_tpl.PLATFORMS` 白名单强校（写错一个词回落
+`auto`，不会让整条通知发不出去）。
 分发器 `Notifier` 用 `cfg_fn` 每轮读盘，所以改冷却时间不需要重启。
 
-**模板与发送历史不占配置键**：消息体由 `notify_tpl.render()` 按 webhook 的
-host 自动选平台（飞书 / 钉钉 / 企业微信 / Server酱 / Bark，其余回退通用胖 JSON），
-填 URL 即生效；发送结果落在 `<var>/notify-history.jsonl`，保留最近 2000 条，
-用 `GET /api/notify/history` 查。这么做是刻意的：`pushCfg()` 每次保存都会把
-整个 `notify` 块推回来，多一个键就多一处「用户改了却被前端整块打回默认」的
-风险（§4.1 的 `detect.confirm` 就栽过）。真正需要自定义文案时，应给模板单独
-设计一个写入口，而不是塞进这个块。
+- `platform`：`auto` 表示按 webhook 的 host 自动识别（飞书 / 钉钉 / 企业微信 /
+  Server酱 / Bark，认不出来回退通用胖 JSON）；其余值强制按该平台出 body。
+  存在的理由是公司网关常把机器人地址代理成自家域名，host 已经不是官方域名，
+  **自动识别永远认不出来，只能由人指定**。
+- `template`：自定义文案，占位符只认 `{cam} {cat} {label} {time} {date}`。
+  写了未知占位符、或超过 500 字，不会丢通知，只在渲染时回退默认文案，
+  并把原因报到 `/api/status` 的 `notify.render.template_why`——界面上那句
+  「模板已回退：未知占位符 xxx」就是从这儿来的。
+
+**这两个键必须由 `pushCfg()` 一起推**：`/api/config` 对 `notify` 块是整块
+覆盖的，少推一个键就等于把用户在另一台设备上的选择抹回默认值（§4.1 的
+`detect.confirm` 栽过同一个坑）。`test/test_notify_ui.py` 双向钉住：`DEFAULTS`
+与 `norm_notify` 的键集合必须相同，前端 `pushCfg` 必须带上这两个键、
+`applyServerCfg` 必须能回读，平台白名单前后端逐项一致。
+
+发送历史不占配置键：结果落在 `<var>/notify-history.jsonl`（保留最近 2000 条），
+用 `GET /api/notify/history` 查，`/api/status` 的 `notify.history` 只报缓存计数
+（条数 / 最后一条时间），**绝不在轮询路径上扫盘**。
 
 ### 4.3 已知「假设置」
 

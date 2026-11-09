@@ -13,7 +13,7 @@
 
 ```
 fpk/
-├── manifest               appname=nvr / version=0.9.123 / platform=x86 / service_port=18080 / checkport=false
+├── manifest               appname=nvr / version=0.9.124 / platform=x86 / service_port=18080 / checkport=false
 ├── ICON.PNG / ICON_256.PNG   图标（gen_icons.py 纯标准库生成）
 ├── (无 health.json)       探活由 cmd/main 的 wait_health 读 var/port.txt 的真实端口
 ├── (无 *.sc)              端口是安装时自选的，不写死端口转发声明
@@ -48,7 +48,7 @@ fpk/
 │   ├── compose_ui.py      前端合成：css/*.css 与 js/**/*.js → index.html（幂等，可 --check）
 │   ├── gen_icons.py       纯标准库生成四件图标
 │   ├── pack_fpk.py        无 fnpack 时的 fpk 打包器（checksum=md5(app.tgz) 自动回填）
-│   └── deploy_test.py     测试机部署与八项接口自检（失败自动回滚）
+│   └── deploy_test.py     测试机部署与九项接口自检（失败自动回滚）
 ├── dist/                  打包产物 nvr-<版本>_x86.fpk（不入库）
 └── test/
     ├── test_*.py          后端单测：build.sh 遍历，**新增文件自动进闸门**
@@ -181,7 +181,7 @@ cd nvr-slim/fpk && python tools/deploy_test.py \
   --fpk dist/nvr-<版本>_x86.fpk --report ../../test-reports/deploy-<版本>.json
 ```
 
-八项接口自检（含「无凭证必须 401」，这项要求的是「被拦住」，口径与其余相反），
+九项接口自检（含「无凭证必须 401」，这项要求的是「被拦住」，口径与其余相反），
 任一步失败自动回滚到备份并重启。**测试机 `192.168.2.152` 允许自动部署；
 生产机 `192.168.2.6` 一律手动升级**，自动任务不碰它。
 部署规则与测试平台参数见 `docs/ROADMAP.md`。

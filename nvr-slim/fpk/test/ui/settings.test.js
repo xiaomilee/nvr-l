@@ -1238,9 +1238,70 @@ ck("检测·通知块只剩投递参数（类别已上移）",
    h.includes("通知通道") && h.includes('id="ntWebhook"')
    && !h.includes("人员检测通知") && !h.includes("车辆检测通知"));
 /* 0.9.120：这处 POST 以前自己拼头，漏了 X-NVR-Request —— 服务端 _write_ok 一律 403，
-   于是一个完全能用的 Webhook 地址永远只回"发送失败"。走请求层后才不会再漏。 */
+   于是一个完全能用的 Webhook 地址永远只回"发送失败"。走请求层后才不会再漏。
+   0.9.124 起还要带上「屏幕上刚填的模板与平台」：测的必须是这一句，
+   否则测试成功、真实通知却被改坏的模板回退，问题查不出来。 */
 ck("通知·测试发送走请求层（不再手拼请求头）",
-   src.includes('API.post("/api/notify/test", { webhook: url }'));
+   src.includes('API.post("/api/notify/test",')
+   && src.includes("template: tpl || \"\"")
+   && src.includes("platform: LK.ntPlatform || \"auto\""));
+
+/* ---- 0.9.124 批次 6：平台手选 / 文案模板 / 发送历史 ----
+   这三项都是「控件 + 真出口」：前几轮抓到过四个只有控件没有出口的假设置，
+   所以每个都验到「值真的进了 pushCfg / 界面真读了服务端状态」。 */
+ck("通知·平台手选齐全（自动识别 + 五个平台 + 通用 JSON）", (()=>{
+  const vals = (body().match(/data-ntplat="([a-z]+)"/g) || []).map(s=>s.slice(13, -1));
+  return ["auto","feishu","dingtalk","wecom","serverchan","bark","generic"]
+    .every(v=>vals.indexOf(v) >= 0);
+})());
+ck("通知·文案模板输入 + 占位符说明", (()=>{
+  const x = body();
+  return x.includes('id="ntTemplate"') && x.includes("{cam}")
+    && x.includes("留空＝默认文案");
+})());
+ck("通知·实际发送方式未就绪时如实说明，不乱猜平台",
+   body().includes('id="ntRender"') && body().includes("状态未就绪"));
+ck("通知·状态到位后写明平台来源 / 文案来源 / 落盘条数", (()=>{
+  run('NT.st = { render:{platform:"dingtalk", label:"钉钉", auto:false,'
+    + ' custom_template:true, template_why:"", vars:["cam"], platforms:[]},'
+    + ' history:{persisted:true, total:3} }; renderCamTabs();');
+  const x = body();
+  return x.includes("钉钉") && x.includes("手动指定") && x.includes("自定义")
+    && x.includes("已落盘 3 条");
+})());
+ck("通知·模板被回退时把原因摆出来（不许静默用默认文案）", (()=>{
+  run('NT.st.render.template_why = "未知占位符 bogus"; renderCamTabs();');
+  return body().includes("模板已回退") && body().includes("未知占位符");
+})());
+ck("通知·历史列表按落盘事实渲染（成败 / 耗时 / 平台 / 重试次数）", (()=>{
+  run('NT.hist = { items:['
+    + '{at:1793500000, cam:"院子", cat:"person", ok:true, ms:320, platform:"feishu", tries:1},'
+    + '{at:1793500060, cam:"门口", cat:"motion", ok:false, ms:0, err:"HTTP 404",'
+    + ' platform:"dingtalk", tries:3}] }; renderCamTabs();');
+  const x = body();
+  return x.includes("✓") && x.includes("✗") && x.includes("HTTP 404")
+    && x.includes("试 3 次") && x.includes("飞书") && x.includes("最近 2 条");
+})());
+ck("通知·历史三态各有话说（加载中 / 读取失败 / 空）", (()=>{
+  run('NT.hist = { loading:true }; renderCamTabs();');
+  const a = body().includes("正在读取发送历史");
+  run('NT.hist = { err:"网络错误" }; renderCamTabs();');
+  const b = body().includes("读取失败");
+  run('NT.hist = { items:[] }; renderCamTabs();');
+  const c = body().includes("还没有落盘记录");
+  run('NT.hist = null; NT.st = null; renderCamTabs();');
+  return a && b && c;
+})());
+ck("通知·平台与模板都进 pushCfg（少推一个键就会被别的设备推回默认）",
+   src.includes("platform: LK.ntPlatform || \"auto\"")
+   && src.includes("template: LK.ntTemplate || \"\""));
+ck("通知·平台与模板能从服务端回读", (()=>{
+  run('applyServerCfg({ notify:{ webhook:"https://x/y", platform:"bark",'
+    + ' template:"{cam} 有人" } });');
+  const ok = get('LK.ntPlatform') === "bark" && get('LK.ntTemplate') === "{cam} 有人";
+  run('LK.ntPlatform = "auto"; LK.ntTemplate = "";');   /* 复位，别影响后续断言 */
+  return ok;
+})());
 
 
 /* 每路检测段（手风琴第四段）——先把总闸打开、本路回到 follow，

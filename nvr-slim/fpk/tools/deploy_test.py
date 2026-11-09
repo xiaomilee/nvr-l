@@ -55,6 +55,13 @@ CHECKS = [
     # 路径不加查询串：走默认「今天 00:00:00 ~ 23:59:59」，免得 curl 把 & 当后台符号。
     ("/api/events", "事件索引", lambda d: (bool(d.get("ok")), "count=%s 索引天数=%s" % (
         d.get("count"), (d.get("index") or {}).get("days")))),
+    # 通知发送历史（0.9.124）。只验「接口在、结构对」，不要求有条数：
+    # 测试机不一定发过通知，count=0 是正常结果。历史文件在第一条记录之前
+    # 根本不存在，所以这一项真正守的是「读不到也不 500」——它能红，
+    # 说明落盘模块或路由被新包漏掉了。
+    ("/api/notify/history?limit=5", "通知历史", lambda d: (
+        bool(d.get("ok")) and isinstance(d.get("items"), list),
+        "%s 条" % d.get("count"))),
 ]
 
 

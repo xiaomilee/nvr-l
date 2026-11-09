@@ -3588,15 +3588,20 @@ class Handler(BaseHTTPRequestHandler):
                                                      if "record_dir" in changed else "")})
 
         if path == "/api/notify/test":
-            # 设置页「测试发送」：同步发一条到指定 webhook，如实反馈成败与耗时
+            # 设置页「测试发送」：同步发一条到指定 webhook，如实反馈成败与耗时。
+            # template / platform 允许临时带上：界面上刚改还没保存时，
+            # 测的应当是屏幕上那句话，不是磁盘上的旧值。
             url = str(body.get("webhook") or "").strip()
             if not url:
                 return self._send(200, {"ok": False, "error": "Webhook 地址为空"})
             nt = STATE.get("notifier")
             if nt is None:
                 return self._send(200, {"ok": False, "error": "通知服务未就绪"})
-            ok, ms, err = nt.test(url)
-            return self._send(200, {"ok": ok, "ms": ms, "error": err})
+            tpl = body.get("template") if body.get("template") is not None else None
+            plat = body.get("platform") if body.get("platform") is not None else None
+            ok, ms, err, platform = nt.test(url, tpl=tpl, platform=plat)
+            return self._send(200, {"ok": ok, "ms": ms, "error": err,
+                                    "platform": platform})
 
         if path == "/api/scan":
             # 「扫描」按钮的落地实现：不碰解码，只列磁盘上每个通道有没有数据、

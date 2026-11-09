@@ -126,13 +126,20 @@ class DocSuite(unittest.TestCase):
     # ---------------------------------------------------------------- 版本
 
     def test_20_version_agrees_with_runtime(self):
-        """文档里的版本号从 runtime.VERSION 来，测试里不抄字面量。"""
+        """文档里的版本号从 runtime.VERSION 来，测试里不抄字面量。
+
+        「不许提前写下个版本」那条也从 runtime.VERSION 推：以前把 0.9.124
+        写死在断言里，收尾轮一 bump 就得改测试，改的时候很容易顺手把整条
+        断言删掉（那就再也抓不到「文档抢先说了个还没发的版本」）。
+        """
+        major, minor = runtime.VERSION.split(".")[:2]
+        nxt = "%s.%s.%d" % (major, minor, int(runtime.VERSION.split(".")[2]) + 1)
         for name in ("readme", "guide", "arch", "config", "trouble",
                      "changelog", "build"):
             with self.subTest(文档=name):
                 self.assertIn(runtime.VERSION, self.text[name])
-                self.assertNotIn("0.9.124", self.text[name],
-                                 "别提前写下下一个版本，批次 5 的目标版本就是 0.9.123")
+                self.assertNotIn(nxt, self.text[name],
+                                 "别提前写下个版本 %s：文档只能说已经发的版本" % nxt)
 
     # ---------------------------------------------------------------- 模块表
 
@@ -251,11 +258,22 @@ class DocSuite(unittest.TestCase):
         self.assertIn(port, self.text["trouble"])
 
     def test_82_deploy_selfcheck_count_is_documented(self):
-        """八项 = 7 项要通 + 1 项要被拦住，别再写成「六项」。"""
+        """自检项数从 `deploy_test.CHECKS` 数出来，文档只许跟着它走。
+
+        以前这里写死「八项」：0.9.124 加了一项「通知历史」，文档改了、
+        测试没改，于是闸门红在测试自己身上。项数是代码事实，不该有第二份。
+        """
         deploy = read(os.path.join(ROOT, "tools", "deploy_test.py"))
         self.assertIn("CHECKS", deploy)
-        self.assertIn("八项", self.text["trouble"])
-        self.assertIn("八项", self.text["build"])
+        n = len(re.findall(r'(?m)^    \("/api/', deploy))
+        self.assertGreaterEqual(n, 7, "CHECKS 条目数解析异常：%d" % n)
+        # 再加「无凭证必须 401」那一项（它不在 CHECKS 里，口径相反）。
+        total = n + 1
+        zh = {7: "七", 8: "八", 9: "九", 10: "十", 11: "十一"}.get(total, str(total))
+        self.assertIn("%s项" % zh, self.text["trouble"],
+                      "排障手册没写对自检项数（代码里是 %d 项）" % total)
+        self.assertIn("%s项" % zh, self.text["build"],
+                      "BUILD.md 没写对自检项数（代码里是 %d 项）" % total)
 
 
 if __name__ == "__main__":

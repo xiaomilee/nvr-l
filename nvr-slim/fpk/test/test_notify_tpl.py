@@ -181,5 +181,52 @@ class TestNormalizeTpl(unittest.TestCase):
         self.assertEqual(len(tpl.VARS), 5)
 
 
+class TestPlatformOverride(unittest.TestCase):
+    """手选平台：公司网关把机器人地址代理成自家域名时，host 认不出来。"""
+
+    def test_forced_platform_wins_over_host(self):
+        body, p = tpl.render("https://mrobot.example.com/hook", ITEM,
+                             None, "dingtalk")
+        self.assertEqual(p, "dingtalk")
+        self.assertEqual(body["msgtype"], "text")
+        self.assertNotIn("desp", body, "手选钉钉就不该再带 Server酱 的键")
+
+    def test_auto_still_uses_host(self):
+        _body, p = tpl.render("https://mrobot.example.com/hook", ITEM, None, "auto")
+        self.assertEqual(p, "generic")
+
+    def test_invalid_platform_falls_back_to_auto(self):
+        self.assertEqual(tpl.norm_platform("wechat"), "auto")
+        self.assertEqual(tpl.norm_platform(""), "auto")
+        self.assertEqual(tpl.norm_platform(None), "auto")
+
+    def test_norm_platform_case_and_space(self):
+        self.assertEqual(tpl.norm_platform("  BARK "), "bark")
+
+    def test_effective_platform_flags_auto(self):
+        self.assertEqual(tpl.effective_platform("https://api.day.app/k"),
+                         ("bark", True))
+        self.assertEqual(tpl.effective_platform("https://api.day.app/k", "feishu"),
+                         ("feishu", False))
+
+    def test_describe_explains_forced(self):
+        d = tpl.describe("https://mrobot.example.com/hook", "{cam}", "dingtalk")
+        self.assertEqual(d["platform"], "dingtalk")
+        self.assertFalse(d["auto"])
+        self.assertTrue(d["custom_template"])
+        self.assertEqual(d["forced"], "dingtalk")
+        self.assertEqual([x["v"] for x in d["platforms"]], list(tpl.PLATFORMS))
+
+    def test_describe_reports_template_reason(self):
+        d = tpl.describe("https://api.day.app/k", "{bogus}")
+        self.assertFalse(d["custom_template"])
+        self.assertIn("占位符", d["template_why"])
+
+    def test_describe_without_url(self):
+        d = tpl.describe("", "", "auto")
+        self.assertEqual(d["platform"], "generic")
+        self.assertTrue(d["auto"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

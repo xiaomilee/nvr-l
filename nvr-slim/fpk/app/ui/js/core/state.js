@@ -382,12 +382,18 @@ const LK = {
   detTrigger:{ motion:true, person:true, vehicle:true },   // 活动触发：未勾选=静止画面
   detFps:5,            // 实时帧率（P1）
   detNight:"throttle", // 夜间策略（P1）
-  /* ---- 通知（0.9.60）：三开关 + 自定义 Webhook + 冷却 ---- */
+  /* ---- 通知（0.9.60）：三开关 + 自定义 Webhook + 冷却 ----
+     平台与模板（0.9.124）：platform=auto 时按 Webhook 的 host 自动识别；
+     公司网关把机器人地址代理成自家域名时才需要手选。空模板 = 默认文案。
+     这两个键必须一起进 pushCfg —— 只放 localStorage 的话，保存设置时
+     服务端那份会被别的设备推回默认值。 */
   ntWebhook:"",
   ntMotion:false,
   ntPerson:false,
   ntVehicle:false,
   ntCooldown:60,
+  ntPlatform:"auto",
+  ntTemplate:"",
   pending:0,          // 待处理数 —— 以 /api/link 返回为准，不再本地编数
   done:0,
   silent:0,

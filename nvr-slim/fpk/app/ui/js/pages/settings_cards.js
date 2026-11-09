@@ -295,7 +295,88 @@ const DET = { st:null };   /* /api/status 的 detect 快照：loaded/error/avg_m
    ING.st = {enabled, cams:{id:{port,clients,idle_sec,tries,stall,error,state}}}
    ING.fr = {id:{frames,ok,interval,age,error}}（老流程时为 null） */
 const ING = { st:null, fr:null };
-const NT  = { st:null };   /* /api/status 的 notify 快照：recent/pending */
+const NT  = { st:null, hist:null };
+/* st   = /api/status 的 notify 快照（recent / pending / render / history 计数）
+   hist = 显式点「查看发送历史」后 GET /api/notify/history 的结果：
+          {loading} | {items:[...]} | {err:"..."}。
+          存在这里而不是直接写 DOM，是因为卡片每次交互都会整块重渲染，
+          只写 DOM 的话一点别的开关就把列表清掉了。 */
+
+/* 平台列表的兜底。正常情况下吃服务端 /api/status 的 notify.render.platforms
+   （唯一一份），这里只为「状态还没回来时按钮先画出来」。
+   两边不一致由 test/test_notify_ui.py 的守卫抓——前端不该悄悄多出一个
+   后端不认的平台值，那会让保存直接被 norm_notify 打回 auto。 */
+const NT_PLATFORMS = [
+  ["auto", "自动识别"], ["feishu", "飞书"], ["dingtalk", "钉钉"],
+  ["wecom", "企业微信"], ["serverchan", "Server酱"], ["bark", "Bark"],
+  ["generic", "通用 JSON"]
+];
+const NT_CAT = {person: "人员", two_wheeler: "两轮车", vehicle: "车辆",
+                motion: "移动侦测"};
+
+function ntPlatformList(){
+  const r = (NT.st && NT.st.render) || null;
+  const list = (r && r.platforms) || [];
+  return list.length ? list.map(o=>[o.v, o.label]) : NT_PLATFORMS;
+}
+
+function ntPlatformLabel(v){
+  const hit = ntPlatformList().find(p=>p[0] === v);
+  return hit ? hit[1] : (v || "—");
+}
+
+/* 「这条通知实际会怎么发」——平台是识别来的还是手选的、文案有没有被回退。
+   全部照抄 /api/status 的 notify.render，前端不再自己猜一遍平台。 */
+function ntRenderLine(){
+  const r = (NT.st && NT.st.render) || null;
+  if(!r) return '实际发送方式：状态未就绪（稍后自动刷新）';
+  let s = '实际平台：<b>' + esc(r.label || ntPlatformLabel(r.platform)) + '</b>'
+    + (r.auto ? '（按地址自动识别）' : '（手动指定）');
+  s += ' · 文案：' + (r.custom_template ? "自定义" : "默认");
+  if(r.template_why){
+    s += ' · <span style="color:var(--warn)">模板已回退：' + esc(r.template_why) + '</span>';
+  }
+  const h = (NT.st && NT.st.history) || null;
+  if(h && h.persisted) s += ' · 已落盘 ' + (h.total || 0) + ' 条';
+  return s;
+}
+
+function ntWhen(ts){
+  const n = Number(ts);
+  if(!n) return "—";
+  const d = new Date(n * 1000);
+  return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " "
+    + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+}
+
+/* 发送历史：只列事实（时间 / 路 / 类别 / 成败 / 平台 / 重试次数）。
+   失败行把错误原文压到 60 字——排障要看的是「HTTP 404」这种码，
+   而不是一整段被截断的堆栈。 */
+function ntHistHtml(){
+  const h = NT.hist;
+  if(!h) return "";
+  if(h.loading) return '<div class="hint" style="margin-top:10px">正在读取发送历史…</div>';
+  if(h.err) return '<div class="hint" style="margin-top:10px;color:var(--warn)">读取失败：' + esc(h.err) + '</div>';
+  const items = h.items || [];
+  if(!items.length){
+    return '<div class="hint" style="margin-top:10px">还没有落盘记录。发出一条通知（或点「测试发送」）后这里会出现。</div>';
+  }
+  const rows = items.map(x=>{
+    const ok = !!x.ok;
+    const who = (x.cam || "?") + " · " + (NT_CAT[x.cat] || x.cat || "?");
+    const tail = ok
+      ? ("成功" + (x.ms ? " " + x.ms + "ms" : ""))
+      : ("失败 " + esc(String(x.err || "").slice(0, 60))
+         + (x.tries ? "（试 " + x.tries + " 次）" : ""));
+    return '<div class="hint" style="margin-top:4px">'
+      + '<span style="color:var(--' + (ok ? "keep" : "warn") + ')">' + (ok ? "✓" : "✗") + '</span> '
+      + esc(ntWhen(x.at)) + ' · ' + esc(who) + ' · ' + esc(ntPlatformLabel(x.platform))
+      + ' · ' + tail + '</div>';
+  }).join("");
+  const total = ((NT.st && NT.st.history && NT.st.history.total) || items.length);
+  return '<div class="hint" style="margin-top:10px">最近 ' + items.length
+    + ' 条（最新在前）· 落盘共 ' + total + ' 条</div>' + rows;
+}
 
 /* 0.9.122：检测"能不能用"由后端给 state 判（disabled/starting/unavailable/ready），
    这里只做翻译。以前前端自己拼 running/loaded/error 三段判断，同一个现场在
@@ -458,11 +539,31 @@ function cardDetect(){
       + '<div class="h" style="margin-top:6px;line-height:1.55">上表里勾了「通知」的类别，经这个 Webhook 发出'
         + '（飞书 / 钉钉 / 企业微信 / Server酱 / Bark 等标准格式）。'
         + 'fnOS 未开放应用级系统通知接口，故不走系统通知中心。没有冷却，移动侦测通知能把手机炸掉。</div>'
+      /* 平台：默认按地址识别。公司网关把机器人地址代理成自家域名时 host 认不出来，
+         只能手选；手选后服务端按该平台的 body 发，不再按 host 猜。 */
+      + '<div class="h" style="margin-top:10px;line-height:1.55"><b>平台</b>：默认按地址自动识别；'
+        + '机器人地址被网关改写过就手选一项。</div>'
+      + '<div class="chips" style="margin-top:6px">'
+        + ntPlatformList().map(p=>
+            '<button class="chip ' + ((LK.ntPlatform || "auto") === p[0] ? "on" : "") + '"'
+            + ' data-ntplat="' + esc(p[0]) + '">' + esc(p[1]) + '</button>').join("")
+      + '</div>'
+      /* 文案模板：留空用默认；非法占位符不会丢通知，只回退并在这里说明原因。 */
+      + '<div class="h" style="margin-top:10px;line-height:1.55"><b>文案模板</b>（留空＝默认文案）。可用占位符：'
+        + esc(((NT.st && NT.st.render && (NT.st.render.vars || []).join("  ")) || "{cam}  {cat}  {label}  {time}  {date}"))
+      + '</div>'
+      + '<input type="text" class="mono" id="ntTemplate" maxlength="500"'
+        + ' placeholder="【NVR · {cam}】检测到{label} · {time}" value="' + esc(LK.ntTemplate) + '"'
+        + ' style="margin-top:6px;width:100%;box-sizing:border-box;height:36px;padding:0 10px;'
+        + 'border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font-size:12.5px">'
+      + '<div class="h" id="ntRender" style="margin-top:6px;line-height:1.55">' + ntRenderLine() + '</div>'
       + '<div style="display:flex;gap:8px;margin-top:8px">'
         + '<button class="btnline" id="btnNtTest" style="flex:1">测试发送</button>'
         + '<button class="btnline" id="btnNtSave" style="flex:1">保存 Webhook</button>'
+        + '<button class="btnline" id="btnNtHist" style="flex:1">查看发送历史</button>'
       + '</div>'
       + '<div class="hint" id="ntOut" style="margin-top:6px"></div>'
+      + '<div id="ntHist">' + ntHistHtml() + '</div>'
     + '</div>'
   + '</div>';
 }

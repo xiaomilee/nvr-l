@@ -191,12 +191,12 @@ class TestDispatch(NotifierTestBase):
 
 class TestSyncTest(NotifierTestBase):
     def test_empty_url(self):
-        ok, ms, err = self.n.test("")
+        ok, ms, err, plat = self.n.test("")
         self.assertFalse(ok)
         self.assertEqual(err, "Webhook 地址为空")
 
     def test_ok(self):
-        ok, ms, err = self.n.test(self.url)
+        ok, ms, err, plat = self.n.test(self.url)
         self.assertTrue(ok, err)
         self.assertGreaterEqual(ms, 0)
         body = self.sink.hits[0][1]
@@ -205,7 +205,7 @@ class TestSyncTest(NotifierTestBase):
     def test_failure_reported(self):
         self.srv.shutdown()
         self.srv.server_close()
-        ok, ms, err = self.n.test(self.url)
+        ok, ms, err, plat = self.n.test(self.url)
         self.assertFalse(ok)
         self.assertTrue(err)
 

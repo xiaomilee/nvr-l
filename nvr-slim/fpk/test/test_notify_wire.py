@@ -193,11 +193,23 @@ class WireTest(unittest.TestCase):
 
     def test_test_send_also_persists(self):
         """设置页「测试发送」也是一次发送，历史里该能对上账。"""
-        ok, ms, err = self.n.test(self.url)
+        ok, ms, err, plat = self.n.test(self.url)
         self.assertTrue(ok, err)
+        self.assertEqual(plat, "generic", "本地测试服务器认不出平台，应回通用 body")
         rows = self.history_rows()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["cam"], "测试")
+        self.assertEqual(rows[0]["platform"], "generic")
+
+    def test_test_send_honours_override(self):
+        """界面上刚改还没保存时，测的必须是屏幕上那句，而不是磁盘旧值。"""
+        ok, ms, err, plat = self.n.test(self.url, tpl="{cam}·{label}",
+                                        platform="bark")
+        self.assertTrue(ok, err)
+        self.assertEqual(plat, "bark")
+        body = self.sink.hits[-1]
+        self.assertIn("body", body, "手选 Bark 就该发 Bark 那套 body")
+        self.assertIn("测试", body["body"])
 
     def test_history_filters_are_wired(self):
         self.assertTrue(self.n.offer("院子", "person", t=1000.0))

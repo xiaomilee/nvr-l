@@ -36,6 +36,11 @@ class Notifier:
         self._fail_streak = {}          # (cam, cat) -> 连续失败次数
         self.recent = []                # 最近 20 条 [{cam,cat,ok,at,ms}]
         self._lock = threading.Lock()
+        # 最近一次已知的 notify 块。status() 要回答「这条通知会按哪个平台、
+        # 哪句文案发」，但不能为了一次轮询去 load_config 读盘：/api/status
+        # 几秒一次，扫盘会把状态接口拖成 IO 等待。
+        self._cfg = {}
+        self._nt = {}
         # var_dir 为空时不落盘：单测直接 new 一个 Notifier 不该往工作区写文件。
         # 计数在启动时读一次文件，之后靠 append 的返回值累加，/api/status
         # 每几秒被轮询一次，绝不能在那个路径上扫盘。
@@ -59,6 +64,9 @@ class Notifier:
     def reconfigure(self, cfg):
         """设置改了直接读新配置（notify 块由 runtime 强校过）。"""
         self._cfg = cfg
+        # 通知块单独留一份：status() 只读这一份，不再回头读整份配置。
+        nt = (cfg or {}).get("notify") if isinstance(cfg, dict) else None
+        self._nt = nt if isinstance(nt, dict) else {}
 
     # ------------------------------------------------------------ 入队
     def offer(self, cam_name, category, t=None):
@@ -90,7 +98,12 @@ class Notifier:
         if not isinstance(cfg, dict):
             return {}
         nt = cfg.get("notify")
-        return nt if isinstance(nt, dict) else {}
+        if isinstance(nt, dict):
+            # 顺手刷新 status() 用的那份副本：派发时既然已经读到了新值，
+            # 就没必要让状态接口还停在 reconfigure 那一刻。
+            self._nt = nt
+            return nt
+        return {}
 
     # ------------------------------------------------------------ 派发循环
     def _loop(self):
@@ -109,9 +122,9 @@ class Notifier:
         url = str(nt.get("webhook") or "").strip()
         if not url:
             return
-        # 模板按目标平台选；nt 里没有 template 键时拿 None，走默认文案。
-        # 配置入口（下一轮）只要往 notify 块放一个键，这里不用再改。
-        msg, platform = notify_tpl.render(url, item, nt.get("template"))
+        # 模板按目标平台选；template / platform 缺省时走默认文案与自动识别。
+        msg, platform = notify_tpl.render(url, item, nt.get("template"),
+                                          nt.get("platform"))
         key = (item["cam"], item["cat"])
         delay = 2.0
         for attempt in range(3):
@@ -175,21 +188,27 @@ class Notifier:
             return False, int((time.time() - t0) * 1000), str(e)[:120]
 
     # ------------------------------------------------------------ 测试发送
-    def test(self, url):
-        """设置页「测试发送」：同步发一条，返回 (ok, ms, err)。
+    def test(self, url, tpl=None, platform=None):
+        """设置页「测试发送」：同步发一条，返回 (ok, ms, err, platform)。
 
         测试发送也按目标平台出 body，否则「测试成功、真实通知却被拒收」
         会变成一个查不出来的假象。测试同样记一笔历史，方便事后对账。
+        模板 / 平台可由调用方临时指定：界面上刚改还没保存时，测的就该是
+        屏幕上那句文案，而不是磁盘上的旧值。
         """
         url = str(url or "").strip()
         if not url:
-            return False, 0, "Webhook 地址为空"
+            return False, 0, "Webhook 地址为空", ""
         item = {"cam": "测试", "cat": "person", "t": time.time()}
-        msg, platform = notify_tpl.render(url, item,
-                                          self._notify_cfg().get("template"))
+        nt = self._notify_cfg()
+        if tpl is None:
+            tpl = nt.get("template")
+        if platform is None:
+            platform = nt.get("platform")
+        msg, plat = notify_tpl.render(url, item, tpl, platform)
         ok, ms, err = self._post(url, msg)
-        self._persist(item, ok, ms, err, 1, platform)
-        return ok, ms, err
+        self._persist(item, ok, ms, err, 1, plat)
+        return ok, ms, err, plat
 
     # ------------------------------------------------------------ 状态
     def _record(self, item, ok, ms, err=""):
@@ -199,11 +218,17 @@ class Notifier:
         del self.recent[20:]
 
     def status(self):
+        # render 段是「这条通知实际会怎么发」的唯一出处：平台是识别来的还是
+        # 人选的、文案有没有因为占位符写错被回退。设置页照抄这三行，不自己猜。
+        nt = self._nt if isinstance(self._nt, dict) else {}
         with self._lock:
             # history 是启动读一次 + 每次 append 累加的缓存值，不是当场扫盘：
             # /api/status 被前端几秒轮询一次，扫盘会把通知线程拖进 IO 等待。
             return {"recent": list(self.recent),
                     "pending": self.q.qsize(),
+                    "render": notify_tpl.describe(nt.get("webhook"),
+                                                  nt.get("template"),
+                                                  nt.get("platform")),
                     "history": {"file": self._hist.get("file"),
                                 "total": self._hist.get("total", 0),
                                 "last_at": self._hist.get("last_at"),

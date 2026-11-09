@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.123"
+VERSION = "0.9.124"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -94,6 +94,11 @@ DEFAULTS = {
         "person": False,
         "vehicle": False,
         "cooldown": 60,
+        # 平台与文案模板（0.9.124）：auto = 按 webhook 的 host 自动识别；
+        # 空模板 = 默认文案。两个键都由前端 pushCfg 一并推，不然保存设置时
+        # 会被整块覆盖打回默认（第 21 轮 detect.confirm 踩过同一个坑）。
+        "platform": "auto",
+        "template": "",
     },
     "updated_at": None,
 }

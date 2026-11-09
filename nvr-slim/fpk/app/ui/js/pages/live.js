@@ -78,7 +78,12 @@ function pushCfg(){
                            night: LK.detNight },
                  notify: { webhook: LK.ntWebhook, motion: !!LK.ntMotion,
                            person: !!LK.ntPerson, vehicle: !!LK.ntVehicle,
-                           cooldown: LK.ntCooldown },
+                           cooldown: LK.ntCooldown,
+                           /* 平台与文案模板（0.9.124）必须一起推：
+                              服务端 notify 块是整块覆盖的，少推一个键就等于
+                              把用户在另一台设备上的选择抹回默认。 */
+                           platform: LK.ntPlatform || "auto",
+                           template: LK.ntTemplate || "" },
                  /* 必须是枚举值：以前推的是 !!GS.gpu 布尔，后端把 "auto" 顶成了
                     true，于是"核显不可用 → 强制单路"的降级保护静默失效 */
                  gpu: (GS.gpu === false ? "off" : "auto") };
@@ -143,6 +148,10 @@ function applyServerCfg(c){
     if(typeof n.person === "boolean") LK.ntPerson = n.person;
     if(typeof n.vehicle === "boolean") LK.ntVehicle = n.vehicle;
     if(n.cooldown) LK.ntCooldown = +n.cooldown || 60;
+    /* 平台 / 模板（0.9.124）：服务端强校过的值才是真相。缺键时保持当前值，
+       不能因为旧服务端没这两个键就把它清成默认。 */
+    if(typeof n.platform === "string" && n.platform) LK.ntPlatform = n.platform;
+    if(typeof n.template === "string") LK.ntTemplate = n.template;
   }
   if(c.link_interval_h){
     const h = +c.link_interval_h;

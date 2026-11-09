@@ -2260,12 +2260,18 @@ const LK = {
   detTrigger:{ motion:true, person:true, vehicle:true },   // 活动触发：未勾选=静止画面
   detFps:5,            // 实时帧率（P1）
   detNight:"throttle", // 夜间策略（P1）
-  /* ---- 通知（0.9.60）：三开关 + 自定义 Webhook + 冷却 ---- */
+  /* ---- 通知（0.9.60）：三开关 + 自定义 Webhook + 冷却 ----
+     平台与模板（0.9.124）：platform=auto 时按 Webhook 的 host 自动识别；
+     公司网关把机器人地址代理成自家域名时才需要手选。空模板 = 默认文案。
+     这两个键必须一起进 pushCfg —— 只放 localStorage 的话，保存设置时
+     服务端那份会被别的设备推回默认值。 */
   ntWebhook:"",
   ntMotion:false,
   ntPerson:false,
   ntVehicle:false,
   ntCooldown:60,
+  ntPlatform:"auto",
+  ntTemplate:"",
   pending:0,          // 待处理数 —— 以 /api/link 返回为准，不再本地编数
   done:0,
   silent:0,
@@ -4477,7 +4483,12 @@ function pushCfg(){
                            night: LK.detNight },
                  notify: { webhook: LK.ntWebhook, motion: !!LK.ntMotion,
                            person: !!LK.ntPerson, vehicle: !!LK.ntVehicle,
-                           cooldown: LK.ntCooldown },
+                           cooldown: LK.ntCooldown,
+                           /* 平台与文案模板（0.9.124）必须一起推：
+                              服务端 notify 块是整块覆盖的，少推一个键就等于
+                              把用户在另一台设备上的选择抹回默认。 */
+                           platform: LK.ntPlatform || "auto",
+                           template: LK.ntTemplate || "" },
                  /* 必须是枚举值：以前推的是 !!GS.gpu 布尔，后端把 "auto" 顶成了
                     true，于是"核显不可用 → 强制单路"的降级保护静默失效 */
                  gpu: (GS.gpu === false ? "off" : "auto") };
@@ -4542,6 +4553,10 @@ function applyServerCfg(c){
     if(typeof n.person === "boolean") LK.ntPerson = n.person;
     if(typeof n.vehicle === "boolean") LK.ntVehicle = n.vehicle;
     if(n.cooldown) LK.ntCooldown = +n.cooldown || 60;
+    /* 平台 / 模板（0.9.124）：服务端强校过的值才是真相。缺键时保持当前值，
+       不能因为旧服务端没这两个键就把它清成默认。 */
+    if(typeof n.platform === "string" && n.platform) LK.ntPlatform = n.platform;
+    if(typeof n.template === "string") LK.ntTemplate = n.template;
   }
   if(c.link_interval_h){
     const h = +c.link_interval_h;
@@ -5619,7 +5634,88 @@ const DET = { st:null };   /* /api/status 的 detect 快照：loaded/error/avg_m
    ING.st = {enabled, cams:{id:{port,clients,idle_sec,tries,stall,error,state}}}
    ING.fr = {id:{frames,ok,interval,age,error}}（老流程时为 null） */
 const ING = { st:null, fr:null };
-const NT  = { st:null };   /* /api/status 的 notify 快照：recent/pending */
+const NT  = { st:null, hist:null };
+/* st   = /api/status 的 notify 快照（recent / pending / render / history 计数）
+   hist = 显式点「查看发送历史」后 GET /api/notify/history 的结果：
+          {loading} | {items:[...]} | {err:"..."}。
+          存在这里而不是直接写 DOM，是因为卡片每次交互都会整块重渲染，
+          只写 DOM 的话一点别的开关就把列表清掉了。 */
+
+/* 平台列表的兜底。正常情况下吃服务端 /api/status 的 notify.render.platforms
+   （唯一一份），这里只为「状态还没回来时按钮先画出来」。
+   两边不一致由 test/test_notify_ui.py 的守卫抓——前端不该悄悄多出一个
+   后端不认的平台值，那会让保存直接被 norm_notify 打回 auto。 */
+const NT_PLATFORMS = [
+  ["auto", "自动识别"], ["feishu", "飞书"], ["dingtalk", "钉钉"],
+  ["wecom", "企业微信"], ["serverchan", "Server酱"], ["bark", "Bark"],
+  ["generic", "通用 JSON"]
+];
+const NT_CAT = {person: "人员", two_wheeler: "两轮车", vehicle: "车辆",
+                motion: "移动侦测"};
+
+function ntPlatformList(){
+  const r = (NT.st && NT.st.render) || null;
+  const list = (r && r.platforms) || [];
+  return list.length ? list.map(o=>[o.v, o.label]) : NT_PLATFORMS;
+}
+
+function ntPlatformLabel(v){
+  const hit = ntPlatformList().find(p=>p[0] === v);
+  return hit ? hit[1] : (v || "—");
+}
+
+/* 「这条通知实际会怎么发」——平台是识别来的还是手选的、文案有没有被回退。
+   全部照抄 /api/status 的 notify.render，前端不再自己猜一遍平台。 */
+function ntRenderLine(){
+  const r = (NT.st && NT.st.render) || null;
+  if(!r) return '实际发送方式：状态未就绪（稍后自动刷新）';
+  let s = '实际平台：<b>' + esc(r.label || ntPlatformLabel(r.platform)) + '</b>'
+    + (r.auto ? '（按地址自动识别）' : '（手动指定）');
+  s += ' · 文案：' + (r.custom_template ? "自定义" : "默认");
+  if(r.template_why){
+    s += ' · <span style="color:var(--warn)">模板已回退：' + esc(r.template_why) + '</span>';
+  }
+  const h = (NT.st && NT.st.history) || null;
+  if(h && h.persisted) s += ' · 已落盘 ' + (h.total || 0) + ' 条';
+  return s;
+}
+
+function ntWhen(ts){
+  const n = Number(ts);
+  if(!n) return "—";
+  const d = new Date(n * 1000);
+  return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " "
+    + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+}
+
+/* 发送历史：只列事实（时间 / 路 / 类别 / 成败 / 平台 / 重试次数）。
+   失败行把错误原文压到 60 字——排障要看的是「HTTP 404」这种码，
+   而不是一整段被截断的堆栈。 */
+function ntHistHtml(){
+  const h = NT.hist;
+  if(!h) return "";
+  if(h.loading) return '<div class="hint" style="margin-top:10px">正在读取发送历史…</div>';
+  if(h.err) return '<div class="hint" style="margin-top:10px;color:var(--warn)">读取失败：' + esc(h.err) + '</div>';
+  const items = h.items || [];
+  if(!items.length){
+    return '<div class="hint" style="margin-top:10px">还没有落盘记录。发出一条通知（或点「测试发送」）后这里会出现。</div>';
+  }
+  const rows = items.map(x=>{
+    const ok = !!x.ok;
+    const who = (x.cam || "?") + " · " + (NT_CAT[x.cat] || x.cat || "?");
+    const tail = ok
+      ? ("成功" + (x.ms ? " " + x.ms + "ms" : ""))
+      : ("失败 " + esc(String(x.err || "").slice(0, 60))
+         + (x.tries ? "（试 " + x.tries + " 次）" : ""));
+    return '<div class="hint" style="margin-top:4px">'
+      + '<span style="color:var(--' + (ok ? "keep" : "warn") + ')">' + (ok ? "✓" : "✗") + '</span> '
+      + esc(ntWhen(x.at)) + ' · ' + esc(who) + ' · ' + esc(ntPlatformLabel(x.platform))
+      + ' · ' + tail + '</div>';
+  }).join("");
+  const total = ((NT.st && NT.st.history && NT.st.history.total) || items.length);
+  return '<div class="hint" style="margin-top:10px">最近 ' + items.length
+    + ' 条（最新在前）· 落盘共 ' + total + ' 条</div>' + rows;
+}
 
 /* 0.9.122：检测"能不能用"由后端给 state 判（disabled/starting/unavailable/ready），
    这里只做翻译。以前前端自己拼 running/loaded/error 三段判断，同一个现场在
@@ -5782,11 +5878,31 @@ function cardDetect(){
       + '<div class="h" style="margin-top:6px;line-height:1.55">上表里勾了「通知」的类别，经这个 Webhook 发出'
         + '（飞书 / 钉钉 / 企业微信 / Server酱 / Bark 等标准格式）。'
         + 'fnOS 未开放应用级系统通知接口，故不走系统通知中心。没有冷却，移动侦测通知能把手机炸掉。</div>'
+      /* 平台：默认按地址识别。公司网关把机器人地址代理成自家域名时 host 认不出来，
+         只能手选；手选后服务端按该平台的 body 发，不再按 host 猜。 */
+      + '<div class="h" style="margin-top:10px;line-height:1.55"><b>平台</b>：默认按地址自动识别；'
+        + '机器人地址被网关改写过就手选一项。</div>'
+      + '<div class="chips" style="margin-top:6px">'
+        + ntPlatformList().map(p=>
+            '<button class="chip ' + ((LK.ntPlatform || "auto") === p[0] ? "on" : "") + '"'
+            + ' data-ntplat="' + esc(p[0]) + '">' + esc(p[1]) + '</button>').join("")
+      + '</div>'
+      /* 文案模板：留空用默认；非法占位符不会丢通知，只回退并在这里说明原因。 */
+      + '<div class="h" style="margin-top:10px;line-height:1.55"><b>文案模板</b>（留空＝默认文案）。可用占位符：'
+        + esc(((NT.st && NT.st.render && (NT.st.render.vars || []).join("  ")) || "{cam}  {cat}  {label}  {time}  {date}"))
+      + '</div>'
+      + '<input type="text" class="mono" id="ntTemplate" maxlength="500"'
+        + ' placeholder="【NVR · {cam}】检测到{label} · {time}" value="' + esc(LK.ntTemplate) + '"'
+        + ' style="margin-top:6px;width:100%;box-sizing:border-box;height:36px;padding:0 10px;'
+        + 'border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font-size:12.5px">'
+      + '<div class="h" id="ntRender" style="margin-top:6px;line-height:1.55">' + ntRenderLine() + '</div>'
       + '<div style="display:flex;gap:8px;margin-top:8px">'
         + '<button class="btnline" id="btnNtTest" style="flex:1">测试发送</button>'
         + '<button class="btnline" id="btnNtSave" style="flex:1">保存 Webhook</button>'
+        + '<button class="btnline" id="btnNtHist" style="flex:1">查看发送历史</button>'
       + '</div>'
       + '<div class="hint" id="ntOut" style="margin-top:6px"></div>'
+      + '<div id="ntHist">' + ntHistHtml() + '</div>'
     + '</div>'
   + '</div>';
 }
@@ -7822,28 +7938,67 @@ function bindSettings(body){
       saveCfgSoon();
     };
   });
+  /* 平台手选（0.9.124）：公司网关会改写机器人地址的 host，自动识别不出来。
+     保存后由 pushCfg 一起推，服务端按该平台出 body。 */
+  body.querySelectorAll("[data-ntplat]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.ntPlatform = el.dataset.ntplat || "auto";
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  body.querySelectorAll("#ntTemplate").forEach(inp=>{
+    inp.onchange = ()=>{
+      LK.ntTemplate = (inp.value || "").trim();
+      saveCfgSoon();
+    };
+  });
   const bNtSave = body.querySelector("#btnNtSave");
   if(bNtSave) bNtSave.onclick = ()=>{
     const inp = body.querySelector("#ntWebhook");
+    const tp = body.querySelector("#ntTemplate");
     LK.ntWebhook = ((inp && inp.value) || "").trim();
+    if(tp) LK.ntTemplate = (tp.value || "").trim();
     saveCfgSoon();
     const out = body.querySelector("#ntOut");
     if(out) out.textContent = LK.ntWebhook ? "已保存 · 记得点右下角「保存通用设置」" : "已清空（保存后不再发送）";
   };
+  /* 发送历史（0.9.124）：只在点按钮时读盘。列表存在 NT.hist 里，
+     因为卡片每次交互都会整块重渲染，直接写 DOM 会被下一次 render 冲掉。 */
+  const bNtHist = body.querySelector("#btnNtHist");
+  if(bNtHist) bNtHist.onclick = async ()=>{
+    NT.hist = { loading:true };
+    renderCamTabs();
+    try{
+      const d = await API.get("/api/notify/history?limit=20");
+      NT.hist = (d && d.items) ? { items:d.items }
+               : { err:(d && d.error) || "服务端没返回历史" };
+    }catch(e){
+      NT.hist = { err:"网络错误，读不到发送历史" };
+    }
+    renderCamTabs();
+  };
   const bNtTest = body.querySelector("#btnNtTest");
   if(bNtTest) bNtTest.onclick = async ()=>{
     const inp = body.querySelector("#ntWebhook");
+    const tp = body.querySelector("#ntTemplate");
     const out = body.querySelector("#ntOut");
     const url = ((inp && inp.value) || "").trim();
     if(!url){ if(out) out.textContent = "先填 Webhook 地址再测试"; return; }
+    /* 测试发的是「你现在填的这句」而不是磁盘上旧的：否则测试成功、
+       真实通知却被改坏的模板回退，问题查不出来。 */
+    const tpl = tp ? (tp.value || "").trim() : LK.ntTemplate;
+    LK.ntWebhook = url; LK.ntTemplate = tpl || "";
     if(out) out.textContent = "发送中…";
     try{
       /* 这处以前自己拼请求头，漏了 X-NVR-Request —— 服务端 _write_ok 直接 403，
          于是一个能用的 Webhook 地址永远只回"发送失败"。走请求层后由它统一带。
          要等对端 webhook 回应，20 秒是给慢端点的（默认 15 秒偏紧）。 */
-      const d = await API.post("/api/notify/test", { webhook: url }, { timeout: 20000 });
+      const d = await API.post("/api/notify/test",
+        { webhook: url, template: tpl || "", platform: LK.ntPlatform || "auto" },
+        { timeout: 20000 });
       if(out) out.textContent = d && d.ok
-        ? ("测试发送成功" + (d.ms ? "（" + d.ms + "ms）" : ""))
+        ? ("测试发送成功" + (d.ms ? "（" + d.ms + "ms）" : "")
+           + (d.platform ? "· 按 " + ntPlatformLabel(d.platform) + " 格式发出" : ""))
         : ("发送失败：" + ((d && d.error) || "未知原因"));
     }catch(e){
       if(out) out.textContent = "发送失败：网络错误";

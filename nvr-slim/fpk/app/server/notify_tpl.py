@@ -12,6 +12,10 @@ title / body。多余字段轻则被忽略、重则整条拒收，而且用户�
 （自建钩子、内网转发、本地测试服务器）就回退原来的胖 JSON —— 这是兼容底线，
 已有的部署不该因为升级就收不到通知。
 
+自动识别有它认不出的情况：钉钉 / 飞书的自定义机器人常被公司网关代理成
+`https://mrobot.example.com/...`，host 已经不是官方域名，此时只能由人在设置页
+显式指定平台。所以 `platform="auto"` 走识别，其余值直接按指定平台出 body。
+
 三条不变式
 ----------
 1. **纯计算**：不读配置、不读盘、不看时钟。时间从 item["t"] 由调用方传进来，
@@ -37,6 +41,13 @@ PLATFORM_HOSTS = (
     ("bark", ("api.day.app",)),
 )
 GENERIC = "generic"
+# 平台可选值：auto 之外都是「强制按这套 body 发」。顺序即设置页下拉顺序，
+# 前端不另抄一份 —— 服务端把这张表原样放进 /api/status，界面照它渲染。
+PLATFORMS = ("auto", "feishu", "dingtalk", "wecom", "serverchan", "bark",
+             GENERIC)
+PLATFORM_LABEL = {"auto": "自动识别", "feishu": "飞书", "dingtalk": "钉钉",
+                  "wecom": "企业微信", "serverchan": "Server酱",
+                  "bark": "Bark", GENERIC: "通用 JSON"}
 
 # 标签与 notify.CAT_LABEL 保持一致，但这里单独一份：模板模块不该反向依赖
 # 分发器（notify.py 要 import 本模块，反过来就成了循环）。
@@ -68,6 +79,41 @@ def platform_of(url):
             if host == h or host.endswith("." + h):
                 return name
     return GENERIC
+
+
+def norm_platform(v):
+    """配置里的平台值：认不出来的按 auto，绝不因为写错一个词就不发通知。"""
+    s = str(v or "").strip().lower()
+    return s if s in PLATFORMS else "auto"
+
+
+def effective_platform(url, platform=None):
+    """实际发出去的平台：显式指定优先，否则按 host 识别。
+
+    返回 (平台, 是否来自自动识别)。第二个值给状态接口用，界面才能说清
+    「这个平台是我认出来的，还是你手选的」——两者的排障方向完全不同。
+    """
+    p = norm_platform(platform)
+    if p != "auto":
+        return p, False
+    return platform_of(url), True
+
+
+def describe(url, tpl=None, platform=None):
+    """给设置页看的「这一条通知实际会怎么发」：平台来源 + 模板是否被回退。
+
+    不在这里做发送，也不读配置：调用方（notify.Notifier.status）把当前
+    notify 块递进来即可。界面上那句「实际平台：钉钉（手选）· 文案：自定义」
+    必须来自这里，不许前端自己再猜一遍。
+    """
+    pl, auto = effective_platform(url, platform)
+    _tpl, why = normalize_tpl(tpl)
+    return {"platform": pl, "label": PLATFORM_LABEL.get(pl, pl),
+            "auto": auto, "forced": norm_platform(platform),
+            "custom_template": bool(tpl) and not why,
+            "template_why": why, "vars": list(VARS),
+            "platforms": [{"v": v, "label": PLATFORM_LABEL.get(v, v)}
+                          for v in PLATFORMS]}
 
 
 def normalize_tpl(tpl):
@@ -107,10 +153,14 @@ def text_of(item, tpl=None):
     return out[:MAX_TEXT_LEN]
 
 
-def render(url, item, tpl=None):
-    """返回 (payload_dict, platform)。payload 一定是可直接 json.dumps 的 dict。"""
+def render(url, item, tpl=None, platform=None):
+    """返回 (payload_dict, platform)。payload 一定是可直接 json.dumps 的 dict。
+
+    platform 传了非 auto 的值就按它出 body：公司网关把机器人地址代理成
+    自家域名时，host 识别不出来，只能由人指定。
+    """
     text = text_of(item, tpl)
-    p = platform_of(url)
+    p, _auto = effective_platform(url, platform)
     if p == "feishu":
         body = {"msg_type": "text", "content": {"text": text}}
     elif p == "dingtalk":

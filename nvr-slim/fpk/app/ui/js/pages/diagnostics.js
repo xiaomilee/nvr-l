@@ -898,28 +898,67 @@ function bindSettings(body){
       saveCfgSoon();
     };
   });
+  /* 平台手选（0.9.124）：公司网关会改写机器人地址的 host，自动识别不出来。
+     保存后由 pushCfg 一起推，服务端按该平台出 body。 */
+  body.querySelectorAll("[data-ntplat]").forEach(el=>{
+    el.onclick = ()=>{
+      LK.ntPlatform = el.dataset.ntplat || "auto";
+      renderCamTabs(); saveCfgSoon();
+    };
+  });
+  body.querySelectorAll("#ntTemplate").forEach(inp=>{
+    inp.onchange = ()=>{
+      LK.ntTemplate = (inp.value || "").trim();
+      saveCfgSoon();
+    };
+  });
   const bNtSave = body.querySelector("#btnNtSave");
   if(bNtSave) bNtSave.onclick = ()=>{
     const inp = body.querySelector("#ntWebhook");
+    const tp = body.querySelector("#ntTemplate");
     LK.ntWebhook = ((inp && inp.value) || "").trim();
+    if(tp) LK.ntTemplate = (tp.value || "").trim();
     saveCfgSoon();
     const out = body.querySelector("#ntOut");
     if(out) out.textContent = LK.ntWebhook ? "已保存 · 记得点右下角「保存通用设置」" : "已清空（保存后不再发送）";
   };
+  /* 发送历史（0.9.124）：只在点按钮时读盘。列表存在 NT.hist 里，
+     因为卡片每次交互都会整块重渲染，直接写 DOM 会被下一次 render 冲掉。 */
+  const bNtHist = body.querySelector("#btnNtHist");
+  if(bNtHist) bNtHist.onclick = async ()=>{
+    NT.hist = { loading:true };
+    renderCamTabs();
+    try{
+      const d = await API.get("/api/notify/history?limit=20");
+      NT.hist = (d && d.items) ? { items:d.items }
+               : { err:(d && d.error) || "服务端没返回历史" };
+    }catch(e){
+      NT.hist = { err:"网络错误，读不到发送历史" };
+    }
+    renderCamTabs();
+  };
   const bNtTest = body.querySelector("#btnNtTest");
   if(bNtTest) bNtTest.onclick = async ()=>{
     const inp = body.querySelector("#ntWebhook");
+    const tp = body.querySelector("#ntTemplate");
     const out = body.querySelector("#ntOut");
     const url = ((inp && inp.value) || "").trim();
     if(!url){ if(out) out.textContent = "先填 Webhook 地址再测试"; return; }
+    /* 测试发的是「你现在填的这句」而不是磁盘上旧的：否则测试成功、
+       真实通知却被改坏的模板回退，问题查不出来。 */
+    const tpl = tp ? (tp.value || "").trim() : LK.ntTemplate;
+    LK.ntWebhook = url; LK.ntTemplate = tpl || "";
     if(out) out.textContent = "发送中…";
     try{
       /* 这处以前自己拼请求头，漏了 X-NVR-Request —— 服务端 _write_ok 直接 403，
          于是一个能用的 Webhook 地址永远只回"发送失败"。走请求层后由它统一带。
          要等对端 webhook 回应，20 秒是给慢端点的（默认 15 秒偏紧）。 */
-      const d = await API.post("/api/notify/test", { webhook: url }, { timeout: 20000 });
+      const d = await API.post("/api/notify/test",
+        { webhook: url, template: tpl || "", platform: LK.ntPlatform || "auto" },
+        { timeout: 20000 });
       if(out) out.textContent = d && d.ok
-        ? ("测试发送成功" + (d.ms ? "（" + d.ms + "ms）" : ""))
+        ? ("测试发送成功" + (d.ms ? "（" + d.ms + "ms）" : "")
+           + (d.platform ? "· 按 " + ntPlatformLabel(d.platform) + " 格式发出" : ""))
         : ("发送失败：" + ((d && d.error) || "未知原因"));
     }catch(e){
       if(out) out.textContent = "发送失败：网络错误";

@@ -55,6 +55,13 @@ try:
 except ImportError:
     _confirm = None
 
+try:
+    # 通知平台白名单（通知模块系列）。理由同上：缺了只影响 notify 的枚举强校，
+    # 检测本体不该因为一个模板模块不可用就起不来。
+    import notify_tpl as _notify_tpl
+except ImportError:
+    _notify_tpl = None
+
 # ---------------------------------------------------------------- 类别体系
 
 # COCO 80 类里本项目关心的 6 类 → 内部三分类。
@@ -94,12 +101,23 @@ NOTIFY_DEFAULTS = {
     "person": False,
     "vehicle": False,
     "cooldown": 60,
+    # 模板与平台（0.9.124 批次 6）：auto 表示按 webhook 的 host 自动识别，
+    # 其余值强制按该平台出 body。空模板 = 默认文案。
+    "platform": "auto",
+    "template": "",
 }
 
 DETECT_ENUMS = {
     "mode": ("snap", "live"),
     "device": ("auto", "cpu", "gpu"),
     "night": ("full", "throttle", "off"),
+}
+# 通知块的枚举单独一份：它属于 notify，不属于 detect，混进 DETECT_ENUMS
+# 会让 norm_detect 顺手把 notify 的键也按 detect 的口径校验。
+NOTIFY_ENUMS = {
+    "platform": (_notify_tpl.PLATFORMS if _notify_tpl else
+                 ("auto", "feishu", "dingtalk", "wecom", "serverchan",
+                  "bark", "generic")),
 }
 CAM_DETECT_MODES = ("follow", "on", "off")
 
@@ -240,12 +258,20 @@ def norm_detect(cfg):
 
 def norm_notify(cfg):
     src = cfg if isinstance(cfg, dict) else {}
+    plat = str(src.get("platform") or NOTIFY_DEFAULTS["platform"]).strip().lower()
+    if plat not in NOTIFY_ENUMS["platform"]:
+        plat = NOTIFY_DEFAULTS["platform"]      # 写错一个词不该让整条通知发不出去
+    # 模板原样留着：非法占位符由 notify_tpl 在渲染时回退，并把原因报到状态接口，
+    # 界面才能告诉用户「你写的这句没生效，因为 {xxx} 不认识」。在这里清空
+    # 反而会让用户看不到自己写的东西，也查不出为什么没生效。
     return {
         "webhook": str(src.get("webhook") or "").strip()[:500],
         "motion": _as_bool(src.get("motion"), NOTIFY_DEFAULTS["motion"]),
         "person": _as_bool(src.get("person"), NOTIFY_DEFAULTS["person"]),
         "vehicle": _as_bool(src.get("vehicle"), NOTIFY_DEFAULTS["vehicle"]),
         "cooldown": int(_clamp(src.get("cooldown"), 30, 600, NOTIFY_DEFAULTS["cooldown"])),
+        "platform": plat,
+        "template": str(src.get("template") or "").strip()[:500],
     }
 
 
