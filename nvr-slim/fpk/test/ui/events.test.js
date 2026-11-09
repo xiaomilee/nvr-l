@@ -298,5 +298,43 @@ ck("没有快照时也照常给三个动作按钮",
    run('EV.clipErr=""; EV.clip={ok:true,segment:"10-23-41.mp4",offset_sec:0};'
      + ' evOpenHtml(' + J(EV1) + ')').indexOf("data-evgo=\"0\"") > 0);
 
+/* ---- 放大与检测框（0.9.130） ----
+   缩略图太小，看不清"那是人还是影子"；叠框是为了回答"检测器当时框住了什么"。
+   框的位置**必须**由服务端给的归一化坐标换算，前端不猜、不重新跑推理。 */
+ck("缩略图可点（带 data-evzoom 与事件 id）",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')')
+     .indexOf('data-evzoom="' + EVS.id + '"') > 0);
+ck("缩略图提示「点开看大图」",
+   run('EV.open=""; evCardHtml(' + J(EVS) + ')').indexOf("点开看大图") > 0);
+ck("归一化框 → 百分比定位（左上角 = 中心 - 半个尺寸）",
+   run('evBoxHtml([{c:"person",s:0.9,b:[0.5,0.5,0.2,0.4]}])')
+     .indexOf('left:40.00%;top:30.00%;width:20.00%;height:40.00%') > 0);
+ck("框标签带类别与置信度",
+   run('evBoxHtml([{c:"person",s:0.9,b:[0.5,0.5,0.2,0.4]}])').indexOf("<b>人员 0.90</b>") > 0);
+ck("框的颜色跟类别走（车用 vehicle 类）",
+   run('evBoxHtml([{c:"vehicle",s:0.5,b:[0.5,0.5,0.1,0.1]}])').indexOf('class="evbox vehicle"') > 0);
+ck("越界的框夹回 0~100%（贴边的框很常见）",
+   run('evBoxHtml([{c:"person",s:0.5,b:[0.0,0.0,0.3,0.3]}])').indexOf('left:0.00%;top:0.00%') > 0);
+ck("没有框就不画框层", run('EV.box["x"]=[]; evBoxLayer("x")') === "");
+ck("读过但为空：浮层写「没有存检测框」",
+   run('EV.box["' + EVS.id + '"]=[]; EV.zoom="' + EVS.id + '";'
+     + ' EV.data={events:[' + J(EVS) + ']}; renderEvZoom();'
+     + ' document.getElementById("evZoomRoot").innerHTML')
+     .indexOf("这张没有存检测框") > 0);
+ck("还没读到时写「正在读检测框」",
+   run('delete EV.box["' + EVS.id + '"]; EV.data={events:[' + J(EVS) + ']};'
+     + ' evZoomHtml(' + J(EVS) + ')').indexOf("正在读检测框") > 0);
+ck("浮层有大图 + 打开回放 + 关闭三个出口",
+   run('EV.box["' + EVS.id + '"]=[]; EV.data={events:[' + J(EVS) + ']};'
+     + ' evZoomHtml(' + J(EVS) + ')').indexOf("evzoomimg") > 0
+   && run('evZoomHtml(' + J(EVS) + ')').indexOf('data-evzoomplay="' + EVS.id + '"') > 0
+   && run('evZoomHtml(' + J(EVS) + ')').indexOf("data-evzoomclose") > 0);
+ck("没有快照的事件点不开浮层",
+   run('EV.data={events:[' + J(EV1) + ']}; evZoomOpen("' + EV1.id + '")') === false);
+ck("点缩略图开浮层、Esc/关闭能退回",
+   run('EV.data={events:[' + J(EVS) + ']}; EV.box["' + EVS.id + '"]=[];'
+     + ' evZoomOpen("' + EVS.id + '"); EV.zoom') === EVS.id
+   && run('evZoomClose(); EV.zoom') === "");
+
 console.log((fail ? "FAIL" : "OK") + "  events  " + pass + " 通过 / " + fail + " 失败");
 process.exit(fail ? 1 : 0);

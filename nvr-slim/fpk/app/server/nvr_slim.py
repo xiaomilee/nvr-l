@@ -1605,6 +1605,63 @@ def _attach_shots(evs):
     return evs
 
 
+def shot_lookup(eid):
+    """事件 id → `(hit, start, error)`（0.9.129 起共用，0.9.130 抽成模块函数）。
+
+    图片路由与框接口都从这里出发：两处各自找一遍，迟早会出现"图找到了、框却没
+    找到"—— 同一张图两个答案，用户看到的是"有图没框"，排障时会以为是存框失败。
+
+    索引里查不到这条事件（刚写进台账、索引还没同步）时，用 60 秒兜底窗口：
+    快照本来就落在事件开始之后十几秒内，比"直接 404"更接近事实。
+    """
+    got = event.parse_id(eid)
+    if not got:
+        return None, None, "事件 id 无法识别"
+    a = got["start"]
+    b = a + 60.0
+    try:
+        conn = _ev_conn()
+        try:
+            ev = event_index.get(conn, eid)
+        finally:
+            conn.close()
+        if ev is not None:
+            b = float(ev.get("end") or b)
+    except Exception:
+        pass                           # 索引不可读就当查不到，走兜底窗口
+    return event_shot.find(STATE["var_dir"], got["cam"], got["date"], a, b), a, ""
+
+
+def event_shot_meta_payload(eid):
+    """事件 id → 快照的框元数据 `(body, err)`（0.9.130）。
+
+    为什么不把框塞进列表：200 条事件每条多读一份 json，就为了用户可能不会
+    点开的那几张。框只在**真要放大看**的时候读一次。
+
+    为什么图不在就报错（调用方回 404）：没有图时框毫无意义（框是画在那张图上
+    的），回一份空框清单会让前端以为"图在、只是没框"。
+    """
+    hit, start, err = shot_lookup(eid)
+    if err:
+        return None, err
+    if not hit:
+        return None, "这条事件没有快照"
+    mpath = event_shot.meta_path_of(STATE["var_dir"], hit["cam"], hit["date"],
+                                    hit["name"])
+    # 图已经由 find 确认存在；这里只确认 json 读不读得到 —— 读不到就是
+    # "这张没存框"（老图或框写盘失败），不是错误。
+    meta = event_shot.meta_of(STATE["var_dir"], hit, start)
+    body = {"ok": True, "at": meta["at"], "offset": meta["offset"],
+            "boxes": meta["boxes"], "count": meta["count"],
+            "has_boxes": meta["has_boxes"]}
+    if not body["has_boxes"]:
+        # 两种"没框"要分开说：文件压根不存在（0.9.130 之前存的图）vs 文件在但
+        # 读不出来（框写坏了）。前者是历史，后者是故障，用户看到的解释不该一样。
+        body["note"] = ("这张快照没有存检测框" if mpath and os.path.exists(mpath)
+                        else "这张快照没有存检测框（0.9.130 之前存下的图）")
+    return body, ""
+
+
 def events_payload(frm="", to="", cam="", cat="", limit=200,
                    min_dur="", motion=""):
     """事件列表：先同步涉及的日子，再查索引。
@@ -3340,6 +3397,10 @@ class Handler(BaseHTTPRequestHandler):
             if len(bits) > 1 and bits[1] == "shot":
                 # 图片走二进制（<img src> 直接用），没有就 404 + JSON 说明。
                 # 绝不退回「当前快照」充数 —— 那是几秒后的画面（见 event_shot）。
+                # ?meta=1 回来的是同一张图的检测框（JSON），放大时按需取一次。
+                q = parse_qs(urlparse(self.path).query)
+                if (q.get("meta") or [""])[0] in ("1", "true", "yes"):
+                    return self._event_shot_meta(eid)
                 return self._event_shot(eid)
             return self._send(200, event_payload(eid))
         if path == "/api/archive":
@@ -3577,6 +3638,25 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _shot_lookup(self, eid):
+        """事件 id → `(hit, start, error)`。图与框两条路共用这一处定位。
+
+        分开写两份就会分叉：图按 60 秒兜底窗口找到了，框却按索引里的 end 找，
+        结果同一张图上"有图没框"。定位口径只该有一份。
+        """
+        return shot_lookup(eid)
+
+    def _event_shot_meta(self, eid):
+        """快照的框元数据（0.9.130）：`?meta=1` 才走这条，回来的是 JSON 不是图。
+
+        逻辑在 `event_shot_meta_payload`（模块函数，可直接单测）；这里只管
+        200 还是 404。
+        """
+        body, err = event_shot_meta_payload(eid)
+        if err:
+            return self._send(404, {"ok": False, "error": err})
+        return self._send(200, body)
+
     def _event_shot(self, eid):
         """单张事件快照：200 走二进制 + ETag，没有就 404 + JSON（不是 500）。
 
@@ -3589,24 +3669,9 @@ class Handler(BaseHTTPRequestHandler):
         鉴权与 `/api/live/snapshot` 同一条：`<img>` 带不了 Authorization 头，
         只能靠登录签出的 HttpOnly cookie（见 `_authed`）。
         """
-        got = event.parse_id(eid)
-        if not got:
-            return self._send(404, {"ok": False, "error": "事件 id 无法识别"})
-        a = got["start"]
-        # 索引里查不到这条事件（刚写进台账、索引还没同步）时，用 60 秒兜底窗口：
-        # 快照本来就落在事件开始之后十几秒内，比"直接 404"更接近事实。
-        b = a + 60.0
-        try:
-            conn = _ev_conn()
-            try:
-                ev = event_index.get(conn, eid)
-            finally:
-                conn.close()
-            if ev is not None:
-                b = float(ev.get("end") or b)
-        except Exception:
-            pass                       # 索引不可读就当查不到，走兜底窗口
-        hit = event_shot.find(STATE["var_dir"], got["cam"], got["date"], a, b)
+        hit, _start, err = self._shot_lookup(eid)
+        if err:
+            return self._send(404, {"ok": False, "error": err})
         if not hit:
             return self._send(404, {"ok": False, "error": "这条事件没有快照"})
         full = event_shot.path_of(STATE["var_dir"], hit["cam"], hit["date"],

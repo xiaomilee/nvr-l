@@ -55,7 +55,7 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `ledger.py` | 活动台账：按分片落盘、合并窗口、可重建投影 | `merge` `avail_spans` |
 | `event.py` | 统一事件模型：id 只由「哪一路 + 何时开始」推出 | `summary_of` |
 | `event_index.py` | 可从台账整份重建的 SQLite 索引（WAL） | `ensure` `sync_day` `query` `stats` |
-| `event_shot.py` | 事件快照：确认那一帧落盘（`var/event_shots/<cam>/<日期>/`）、7 天过期、每路每天上限、窗口内取最早一张 | `ShotStore` `find` `shot_of` `pick` |
+| `event_shot.py` | 事件快照：确认那一帧落盘（`var/event_shots/<cam>/<日期>/`）、检测框旁挂同名 `.json`、7 天过期、每路每天上限、窗口内取最早一张 | `ShotStore` `find` `shot_of` `boxes_of` `meta_of` `read_meta` `pick` |
 | `condense.py` | 判定（只读包大小曲线，不解码）与导出（流复制切段 + concat） | `analyze` 导出函数 |
 | `export.py` | 按时间范围批量导出：挑分片、算边界多给、写 manifest / README、流式打 zip | `select` `totals` `manifest` `readme` `write_zip` `Chunked` |
 | `link.py` | 衔接调度：两种入队节奏共用同一套消费端 | `Link.status()` `reconfigure()` |
@@ -99,7 +99,7 @@ LAN IP / `.local` / `.lan` / `.fnos.net`）。服务**不处理 CORS 预检**，
 | GET | `/api/recordings` | 磁盘真实录像清单（3 秒缓存，`force=1`） | `recordings_payload()`（1747） |
 | GET | `/api/ledger` | 活动台账 | `ledger_payload()` |
 | GET | `/api/events` | 事件列表（`from/to/cam/cat/limit/min_dur/motion`；`cam`/`cat` 支持逗号多值，同维 OR、跨维 AND） | `events_payload()` → `event_index` |
-| GET | `/api/events/` | 单条事件 / 事件定位 / 事件快照（`<id>` / `<id>/clip` / `<id>/shot`；快照 200 走 `image/jpeg`+ETag，没有则 404 JSON） | `event_payload` / `event_clip_payload` / `_event_shot` |
+| GET | `/api/events/` | 单条事件 / 事件定位 / 事件快照（`<id>` / `<id>/clip` / `<id>/shot`；快照 200 走 `image/jpeg`+ETag，没有则 404 JSON；`/shot?meta=1` 回那张图的检测框 JSON） | `event_payload` / `event_clip_payload` / `_event_shot` / `_event_shot_meta` |
 | GET | `/api/export/plan` | 批量导出预演（`cam/from/to`；`detail=1` 带逐片明细），只算不清盘；失败也回 200 + `ok:false`（与 `/api/events` 同口径） | `export_plan_payload()`（1957） |
 | GET | `/api/export` | 按时间范围导出：已封口分片原样打包成 zip（chunked，边界多给的秒数写进包内 manifest） | `_export_download()`（3600） |
 | GET | `/api/archive` | 归档概览 | `archive_payload()` |
@@ -163,18 +163,24 @@ record_dir/<cam>/<日期>/HH-MM-SS.mp4    ← 分片默认 300 秒（60~900 可�
 取帧层 snapshots/<cam>.jpg（720p / q:v4，每 N 秒一张）
    │  detect 这一拍读的就是它 → 推理 → 区域 → 确认
    ▼  确认出窗口之后（台账已写）
-detect._shot()  读这张 jpg 的字节 + 取它自己的 mtime（"当时"）
+detect._shot()  读这张 jpg 的字节 + 取它自己的 mtime（"当时"）+ 这一拍的 dets
    │  ShotStore.offer()  仅 30 秒/路限流 + 每日上限 + 非阻塞入队
    ▼
 var/event_shots/<cam>/<日期>/<HHMMSS>_<mmm>.jpg   （独立单线程写，7 天过期）
+                             <HHMMSS>_<mmm>.json  （0.9.130 检测框，可缺）
    │
-   └──→ /api/events 每条补 shot{url,at,offset} → /api/events/<id>/shot
+   ├──→ /api/events 每条补 shot{url,at,offset} → /api/events/<id>/shot（JPEG）
+   └──→ 放大时一次 /api/events/<id>/shot?meta=1（框清单，几百字节）
 ```
 
 三条不能松的口径：**拍「当时」**（用源图 mtime，绝不拿当前快照充数）、
 **只加不改**（台账之后、独立线程、队列满就丢，`recorder.py` 一行不碰）、
 **可清理**（7 天过期、每路每天上限、**不进事件索引** —— 索引是台账投影，
 把图路径写进去，清理之后就出现指向空气的行）。
+
+框是**旁挂**的（0.9.130）：坐标用 `postprocess` 的归一化 `cx,cy,w,h`，绘制在
+浏览器里（几个绝对定位的 `<i>`），服务端不解码、不重编码。框写盘失败只丢框，
+单独计 `meta_failed` —— 与"图写失败"是两件事。
 
 **取流三层拆分**（`health.py:9`）——这是「进程在跑不等于录上了」的代码化：
 

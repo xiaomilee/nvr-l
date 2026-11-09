@@ -147,6 +147,17 @@ class Base(unittest.TestCase):
             f.write(b"\xff\xd8" + b"x" * 32 + b"\xff\xd9")
         return p
 
+    def put_boxes(self, sec, boxes, cam="c1", raw=None):
+        """给快照旁挂一份框清单（0.9.130）。raw 给了就原样写（造坏文件用）。"""
+        name = nvr_slim.event_shot.name_of(sec)
+        p = nvr_slim.event_shot.meta_path_of(self.var, cam, DATE, name)
+        self.assertIsNotNone(p)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(raw if raw is not None
+                    else json.dumps({"at": 0, "boxes": boxes}))
+        return p
+
 
 class TestList(Base):
     def test_events_from_ledger(self):
@@ -184,6 +195,61 @@ class TestList(Base):
             with self.subTest(id=ev["id"]):
                 self.assertIn("shot", ev)
                 self.assertIsNone(ev["shot"])
+
+    def test_shot_meta_carries_boxes(self):
+        """`?meta=1` 的答复：图的那张、那几个框、以及偏移（与列表同一算式）。
+
+        框只在放大看的时候读一份，所以它是独立接口而不是列表字段。
+        """
+        self.put_shot(hms(7, 30, 11))
+        self.put_boxes(hms(7, 30, 11), [
+            {"c": "person", "s": 0.87, "b": [0.5, 0.4, 0.2, 0.5]}])
+        eid = self.first_id()
+        body, err = nvr_slim.event_shot_meta_payload(eid)
+        self.assertEqual(err, "")
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["has_boxes"])
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["boxes"][0]["c"], "person")
+        self.assertEqual(body["at"], "07:30:11")
+        self.assertAlmostEqual(body["offset"], 6.0, delta=0.1)
+
+    def test_shot_meta_without_boxes_explains(self):
+        """图在、框没有（0.9.129 的老图）：不是错误，但要能说清是哪一种没有。"""
+        self.put_shot(hms(7, 30, 11))
+        body, err = nvr_slim.event_shot_meta_payload(self.first_id())
+        self.assertEqual(err, "")
+        self.assertEqual(body["boxes"], [])
+        self.assertFalse(body["has_boxes"])
+        self.assertIn("没有存检测框", body["note"])
+        self.assertIn("0.9.130", body["note"])
+
+    def test_shot_meta_broken_boxes_is_not_an_error(self):
+        """框文件坏了只丢框，不报错、不连累图 —— 框是附属物里的附属物。"""
+        self.put_shot(hms(7, 30, 11))
+        self.put_boxes(hms(7, 30, 11), None, raw="{oops")
+        body, err = nvr_slim.event_shot_meta_payload(self.first_id())
+        self.assertEqual(err, "")
+        self.assertFalse(body["has_boxes"])
+
+    def test_shot_meta_without_image_is_none(self):
+        """图不在就没有"框"可言：回原因让路由出 404，绝不给空框清单。"""
+        body, err = nvr_slim.event_shot_meta_payload(self.first_id())
+        self.assertIsNone(body)
+        self.assertEqual(err, "这条事件没有快照")
+
+    def test_shot_meta_bad_id(self):
+        body, err = nvr_slim.event_shot_meta_payload("not-an-id")
+        self.assertIsNone(body)
+        self.assertEqual(err, "事件 id 无法识别")
+
+    def test_shot_meta_offset_matches_list(self):
+        """列表里的 shot.offset 与 meta 的 offset 必须完全一致（两处不各算一遍）。"""
+        self.put_shot(hms(7, 30, 11))
+        ev = self.listing()["events"][0]
+        body, _err = nvr_slim.event_shot_meta_payload(ev["id"])
+        self.assertEqual(body["offset"], ev["shot"]["offset"])
+        self.assertEqual(body["at"], ev["shot"]["at"])
 
     def test_second_call_is_incremental(self):
         """指纹没变就不重算：页面每次刷新都全量重扫，5 路 × 30 天就是几十秒。"""

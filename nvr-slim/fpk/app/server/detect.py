@@ -1321,7 +1321,9 @@ class DetectWorker:
                 # 顺序是刻意的（0.9.129）：先落台账（事实），再存图（附属物），
                 # 最后通知。图存不下来不许影响前两步与通知 —— _shot 内部吞掉
                 # 一切异常，返回值也没人看。
-                self._shot(cam, src, now)
+                # 框跟着图走（0.9.130）：这一拍保留的 dets 就是这张图上"检测器
+                # 看到了什么"，交给快照层旁挂一份 —— 检测线程里不多做一次推理。
+                self._shot(cam, src, now, dets)
                 self._notify(cam, {k for _s, _e, c in wins for k in c})
         self._ok_stat(cid, dets)
 
@@ -1389,7 +1391,7 @@ class DetectWorker:
         ok, data, err = grab_ppm(self.ffmpeg, url, timeout=self.timeout)
         return ok, data, err, ""
 
-    def _shot(self, cam, src, now):
+    def _shot(self, cam, src, now, dets=None):
         """把"确认那一刻"的那一帧交给快照层（0.9.129）。
 
         三条自我约束，改的时候一条都别松：
@@ -1400,6 +1402,10 @@ class DetectWorker:
           那会被记成「检测任务异常」，一条通知与一条台账都可能跟着丢。
         - **拍当时**。时间取源图自己的 mtime（取帧层落盘的时刻），不是 now。
           检测节拍比取帧慢时，两者能差一个抽帧间隔；用 now 会把图说成比实际晚。
+
+        `dets`（0.9.130）是这一拍**过完区域过滤**的框。它和这张图是同一次推理的
+        产物，所以叠回去的位置天然是对的；换成"下次再跑一遍推理"就会因为画面
+        变了而框错人。
         """
         st = self.shot_store
         if st is None or not src:
@@ -1416,7 +1422,7 @@ class DetectWorker:
         if not data or len(data) > SHOT_MAX_BYTES:
             return
         try:
-            st.offer(cam.get("id"), data, at)
+            st.offer(cam.get("id"), data, at, dets)
         except Exception as e:
             self.log("事件快照入队异常（%s）：%r" % (cam.get("id"), e))
 

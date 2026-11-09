@@ -23,14 +23,18 @@
 存储布局
 --------
     var/event_shots/<cam>/<YYYY-MM-DD>/<HHMMSS>_<mmm>.jpg
+    var/event_shots/<cam>/<YYYY-MM-DD>/<HHMMSS>_<mmm>.json   （检测框，0.9.130）
 
 - 日期目录与文件名都取**图片时刻**，不取事件时刻：跨零点时图落在正确的那一天，
   查询跨天不会漏；事件被重判外推、被 merge 合并时文件名也不会跟着变。
 - 写入走 `.part` + `os.replace`（与 `frames.FrameTap._write` 同一套原子替换），
   读的人永远拿不到半张图。
+- 框是**旁挂**的：json 丢了只是"这张没框"，图还在；图不在时也绝不拿 json 去
+  编一张不存在的快照。两件事不互相牵连。
 
-本模块不 import detect / nvr_slim：它只认字节与时间，单测可以直接喂假数据。
+本模块不 import detect / nvr_slim：它只认字节、时间与框，单测可以直接喂假数据。
 """
+import json
 import os
 import queue
 import re
@@ -57,6 +61,11 @@ PICK_SLACK = 15.0
 MAX_SHOT_BYTES = 2 * 1024 * 1024
 # 列目录的缓存：一次列表请求可能问 200 条事件，同一天同一路只扫一次。
 CACHE_TTL = 5.0
+# 检测框旁挂文件的扩展名（0.9.130）。与 jpg 同名不同后缀，清理时一起随目录走。
+META_SUFFIX = ".json"
+# 一张图最多留 20 个框：真机上人/车同时出现也就几个；几十个框时用户看的是
+# "有没有目标"，不是逐框盘点，留太多只会让浮层上全是线。
+MAX_BOXES = 20
 
 DAY_SEC = 86400.0
 DIR_NAME = "event_shots"
@@ -136,6 +145,83 @@ def path_of(var_dir, cam, date, name):
     if d is None or parse_name(name) is None:
         return None
     return os.path.join(d, str(name))
+
+
+def meta_path_of(var_dir, cam, date, name):
+    """`HHMMSS_mmm.jpg` → 同名 `.json` 的绝对路径；参数不合法返回 None。
+
+    只换后缀、不拼新目录：jpg 能过 `path_of` 的校验，json 就一定也在同一个
+    合法目录里，穿目录的口子在 `path_of` 一处就够了。
+    """
+    p = path_of(var_dir, cam, date, name)
+    if p is None:
+        return None
+    return p[:-len(".jpg")] + META_SUFFIX
+
+
+# ---------------------------------------------------------------- 框（检测输出）
+
+def boxes_of(dets, limit=MAX_BOXES):
+    """检测结果 → 落盘用的框清单（归一化 `cx,cy,w,h`，0~1）。
+
+    为什么要存框：缩略图上"有没有人"是一回事，"检测器当时框住了什么"是另一回事。
+    框是**推理输出**，不是事后补画的；存下来放大时才能原样叠回去 —— 这也是
+    "数字必须有出处"在这一页的落点：用户看到框，就知道这条事件不是凭空来的。
+
+    为什么要夹：postprocess 已经归一化，但贴边的框可能略出 0~1（比如 cx=0.999
+    再加半个宽）。前端按百分比定位，超出去的框会跑到图外面。
+
+    为什么限数量：一张 720p 图上几十个框时，用户要判断的是"有人吗"，不是
+    逐框盘点；保留置信度最高的前 N 个。
+
+    认不出来的条目直接跳过，绝不抛 —— 这个函数在检测线程里被调用。
+    """
+    out = []
+    for d in dets or ():
+        if not isinstance(d, dict):
+            continue
+        try:
+            b = d.get("b") or ()
+            cx, cy, bw, bh = (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if not (bw > 0 and bh > 0):
+            continue                    # 退化框：宽高为 0 画出来就是一根线
+        try:
+            score = max(0.0, min(1.0, float(d.get("s") or 0.0)))
+        except (TypeError, ValueError):
+            score = 0.0
+        out.append({"c": str(d.get("c") or "")[:24], "s": round(score, 3),
+                    "b": [round(max(0.0, min(1.0, cx)), 4),
+                          round(max(0.0, min(1.0, cy)), 4),
+                          round(min(1.0, bw), 4), round(min(1.0, bh), 4)]})
+    out.sort(key=lambda x: (-x["s"], x["c"]))
+    return out[:max(0, int(limit))]
+
+
+def read_meta(var_dir, cam, date, name):
+    """读旁挂框清单 → `{boxes, at}`；没有 / 坏了都返回 None（不抛）。
+
+    坏 JSON 与前一张图的情况一样：**当作没存框**，不修、不重建、不报错。
+    框是附属物里的附属物，为它去猜一份"看起来对"的数据就是评审点名的假数据。
+    """
+    p = meta_path_of(var_dir, cam, date, name)
+    if p is None:
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    boxes = boxes_of(raw.get("boxes"))
+    at = raw.get("at")
+    try:
+        at = round(float(at), 3) if at is not None else None
+    except (TypeError, ValueError):
+        at = None
+    return {"boxes": boxes, "at": at}
 
 
 def _slack_date(date, days):
@@ -245,6 +331,8 @@ class ShotStore:
         self.failed = 0             # 写盘失败
         self.rate_limited = 0       # 30 秒限流挡掉
         self.capped = 0             # 日上限挡掉
+        self.meta = 0               # 带框的图（0.9.130）：有几张真的存下了框
+        self.meta_failed = 0        # 框写盘失败（图还在，只是没有框）
         self._q = queue.Queue(maxsize=self.queue_max)
         self._stop = threading.Event()
         self._th = None
@@ -277,12 +365,15 @@ class ShotStore:
         return bool(self._th and self._th.is_alive())
 
     # -------------------------------------------------------------- 收图
-    def offer(self, cam, data, at=None):
+    def offer(self, cam, data, at=None, dets=None):
         """检测线程调用：限流 → 判日上限 → 入队。返回是否收下。
 
         这里**只做**：一次时间比较、一次计数、一次 put_nowait。不做磁盘写、
         不做目录创建 —— 那些都在写线程里。检测线程多花的每一毫秒，都是从
         "8 路一轮 ≤ 1.8 × 单路"预算里扣的。
+
+        `dets` 是这一拍的保留框（`apply_regions` 之后的）。转换在这里做一次
+        （`boxes_of` 只是几个 float 转换，几十微秒量级），写盘仍然留给写线程。
         """
         cam = str(cam or "")
         if not _CAM_RE.match(cam) or not data:
@@ -290,6 +381,7 @@ class ShotStore:
         if len(data) > MAX_SHOT_BYTES:
             return False
         at = float(at or time.time())
+        boxes = boxes_of(dets)
         date = time.strftime("%Y-%m-%d", time.localtime(at))
         with self._lock:
             last = self._last.get(cam)
@@ -313,7 +405,7 @@ class ShotStore:
             name = name_at(at)
         d = dir_of(self.var_dir, cam, date)
         try:
-            self._q.put_nowait((d, cam, date, name, data))
+            self._q.put_nowait((d, cam, date, name, data, boxes, at))
         except queue.Full:
             with self._lock:
                 self.dropped += 1
@@ -329,7 +421,7 @@ class ShotStore:
                 continue
             if item is None:
                 continue
-            d, cam, date, name, data = item
+            d, cam, date, name, data, boxes, at = item
             try:
                 os.makedirs(d, exist_ok=True)
                 tmp = os.path.join(d, name + ".part")
@@ -342,6 +434,7 @@ class ShotStore:
                 # （同一请求里另外几路/几天的清单还能继续命中）。
                 with _CACHE_LOCK:
                     _CACHE.pop((str(self.var_dir), cam, date), None)
+                self._write_meta(d, name, boxes, at)
                 self._maybe_sweep()
             except OSError as e:
                 with self._lock:
@@ -350,6 +443,31 @@ class ShotStore:
                 if msg != self._write_err:      # 同一个错误只刷一次
                     self._write_err = msg
                     self.log(msg)
+
+    def _write_meta(self, d, name, boxes, at):
+        """框清单落盘（0.9.130）。**图已经写完了**，这里失败只丢框，不丢图。
+
+        单独 try：外层那个 except 会把失败记成"图写失败"，而这张图其实是好的。
+        用户看到的是"图在、没有框"，与"图都没了"必须分开计数。
+        """
+        if not boxes:
+            return
+        target = os.path.join(d, name[:-len(".jpg")] + META_SUFFIX)
+        try:
+            tmp = target + ".part"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"at": round(float(at or 0.0), 3), "boxes": boxes},
+                          f, ensure_ascii=False)
+            os.replace(tmp, target)
+            with self._lock:
+                self.meta += 1
+        except (OSError, ValueError, TypeError) as e:
+            with self._lock:
+                self.meta_failed += 1
+            msg = "事件快照框写盘失败：%s" % e
+            if msg != self._write_err:
+                self._write_err = msg
+                self.log(msg)
 
     def _maybe_sweep(self):
         """每天第一次写顺带清一次过期目录。
@@ -422,6 +540,7 @@ class ShotStore:
             snap = {"written": self.written, "dropped": self.dropped,
                     "failed": self.failed, "rate_limited": self.rate_limited,
                     "capped": self.capped, "queued": self._q.qsize(),
+                    "meta": self.meta, "meta_failed": self.meta_failed,
                     "running": self.alive(), "keep_days": self.keep_days,
                     "max_per_day": self.max_per_day,
                     "min_gap_sec": self.min_gap,
@@ -468,6 +587,25 @@ def shot_of(var_dir, ev, slack=PICK_SLACK):
     return {"url": "/api/events/" + str(ev["id"]) + "/shot",
             "at": _hhmmss(at),
             "offset": round(at - start, 1)}
+
+
+def meta_of(var_dir, hit, start):
+    """`find()` 的结果 → 框元数据（0.9.130）。
+
+    只在**已经确认图存在**之后调用（路由先开了图才回这份 JSON），所以这里
+    不再判断"有没有图"：图在、框可能不在（0.9.129 的老图，或框写盘失败）。
+    两种情况都回 `boxes: []` + `has_boxes: false`，前端据此说清是哪一种。
+
+    `offset` 与列表里的 `shot.offset` **同一个算式**：前端不重新减，
+    两处各算一次迟早会分叉。
+    """
+    boxes = []
+    raw = read_meta(var_dir, hit.get("cam"), hit.get("date"), hit.get("name"))
+    if raw:
+        boxes = raw["boxes"]
+    at = float(hit.get("sec") or 0.0)
+    return {"at": _hhmmss(at), "offset": round(at - float(start or 0.0), 1),
+            "boxes": boxes, "count": len(boxes), "has_boxes": bool(boxes)}
 
 
 def _hhmmss(sec):

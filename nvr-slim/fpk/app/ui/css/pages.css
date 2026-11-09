@@ -509,13 +509,43 @@ html[data-theme="dark"] .logbtn[disabled]{opacity:.3}
   text-overflow:ellipsis}
 .evtags{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
 /* 事件快照（0.9.129）：卡片右侧 76×43（16:9），展开时上面那张宽图。
-   缩略图不拦截点击：点卡片仍然进回放（放大留给下一版）。
+   0.9.130 起缩略图可点（看大图），所以它不能是 pointer-events:none。
    图是 720p 的，缩到 76 宽由浏览器做 —— 服务端不另生成小图（那要再解一次码）。 */
 .evthumb{width:76px;height:43px;object-fit:cover;border-radius:8px;
-  background:var(--fill);pointer-events:none}
+  background:var(--fill);cursor:zoom-in}
 .evshot{display:block;width:100%;max-height:210px;object-fit:cover;
   border-radius:10px;margin-top:8px;background:var(--fill)}
+/* 图 + 框的容器：框按百分比定位，所以必须有定位上下文，且 overflow 裁掉
+   跑出画面的那半条边（贴边的框常见）。line-height:0 去掉图片底部的行高缝。 */
+.evshotwrap{position:relative;margin-top:8px;line-height:0;border-radius:10px;
+  overflow:hidden;background:var(--fill)}
+.evshotwrap .evshot{margin-top:0;border-radius:0;max-height:210px}
 .evshotcap{margin-top:4px;font-size:11px;line-height:1.5;color:var(--faint)}
+/* 检测框（0.9.130）：颜色按类别与卡片色条同一套（人蓝 / 车绿 / 两轮车琥珀），
+   标签贴在框的上沿 —— 框很小的时候只有标签还认得出来。 */
+.evbox{position:absolute;box-sizing:border-box;border:1.5px solid var(--primary);
+  border-radius:3px;pointer-events:none}
+.evbox.vehicle{border-color:var(--ev-veh)}
+.evbox.two_wheeler,.evbox.motion{border-color:var(--warn)}
+.evbox b{position:absolute;left:-1.5px;top:-14px;padding:0 4px;border-radius:3px;
+  font-size:9px;line-height:14px;font-weight:500;white-space:nowrap;
+  background:var(--primary);color:#fff}
+.evbox.vehicle b{background:var(--ev-veh)}
+.evbox.two_wheeler b,.evbox.motion b{background:var(--warn)}
+/* 放大浮层：压住整页（比 toast 高、比凭证引导层低），点背景关闭。 */
+.evzoom{position:fixed;inset:0;z-index:80;display:flex;align-items:center;
+  justify-content:center;padding:14px;background:rgba(8,10,14,.74)}
+.evzoombox{max-width:min(96vw,1100px);width:100%;display:flex;flex-direction:column;
+  gap:8px}
+.evzoomwrap{position:relative;line-height:0;border-radius:10px;overflow:hidden;
+  background:#000}
+.evzoomimg{display:block;width:100%;max-height:78vh;object-fit:contain;background:#000}
+.evzoomcap{font-size:11.5px;line-height:1.5;color:#e7eaf0}
+.evzoomcap b{font-weight:600;color:#fff}
+.evzoombar{display:flex;gap:8px}
+.evzoombar .evbtn{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.22);
+  color:#fff;height:32px}
+.evzoombar .evbtn.main{background:var(--primary);border-color:var(--primary)}
 .evtag{font-size:10px;padding:1.5px 7px;border-radius:8px;background:var(--fill);color:var(--text2)}
 .evtag.person{background:var(--primary-soft);color:var(--primary)}
 .evtag.vehicle{background:var(--keep-soft);color:var(--keep)}

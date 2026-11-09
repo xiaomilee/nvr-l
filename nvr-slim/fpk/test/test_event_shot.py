@@ -14,6 +14,7 @@
 
 跑：python test/test_event_shot.py
 """
+import json
 import os
 import shutil
 import sys
@@ -27,6 +28,20 @@ import detect  # noqa: E402
 import event_shot as es  # noqa: E402
 
 JPEG = b"\xff\xd8\xff\xe0" + b"x" * 64 + b"\xff\xd9"
+
+
+def wait_for(pred, timeout=3.0):
+    """等一个"写线程先落盘"的条件成立。
+
+    写盘是异步的：固定 sleep 一个拍脑袋的秒数，猜短了随机红、猜长了一轮测试
+    白等。这里轮询到条件成立就返回，超时才判假。
+    """
+    end = time.time() + timeout
+    while time.time() < end:
+        if pred():
+            return True
+        time.sleep(0.02)
+    return False
 
 
 def day_str(at=None):
@@ -296,9 +311,11 @@ class FakeStore(object):
 
     def __init__(self):
         self.got = []
+        self.boxes = []
 
-    def offer(self, cam, data, at=None):
+    def offer(self, cam, data, at=None, dets=None):
         self.got.append((cam, data, at))
+        self.boxes.append(es.boxes_of(dets))       # 与真实 offer 同一套归一化
         return True
 
 
@@ -347,6 +364,133 @@ class TestDetectHook(Tmp):
         store = FakeStore()
         self.worker(store)._shot({"id": "cam-01"}, src, time.time())
         self.assertEqual(store.got, [])
+
+
+class TestBoxes(Tmp):
+    """检测框旁挂（0.9.130）：框跟着图走，但两件事互不牵连。
+
+    守四件事：
+      1. 坐标归一化并夹回 0~1（贴边的框会略出界，前端是按百分比定位的）；
+      2. 认不出来的条目跳过、绝不抛 —— 这个函数在检测线程里被调用；
+      3. 框写盘失败只丢框，图还在（计数分开，不能都算"写失败"）；
+      4. 没有框就不写 json：老图与新图要能被同一条读取路径区分开。
+    """
+
+    DETS = [{"c": "person", "s": 0.91, "b": [0.5, 0.5, 0.2, 0.4]},
+            {"c": "vehicle", "s": 0.42, "b": [0.2, 0.7, 0.3, 0.2]}]
+
+    def test_90_boxes_are_normalized_and_kept(self):
+        got = es.boxes_of(self.DETS)
+        self.assertEqual(len(got), 2)
+        self.assertEqual(got[0]["c"], "person")          # 置信度高的在前
+        self.assertEqual(got[0]["b"], [0.5, 0.5, 0.2, 0.4])
+        self.assertEqual(got[0]["s"], 0.91)
+
+    def test_91_boxes_are_clamped(self):
+        got = es.boxes_of([{"c": "person", "s": 1.4, "b": [-0.2, 1.8, 0.5, 0.5]}])
+        self.assertEqual(got[0]["b"][0], 0.0)
+        self.assertEqual(got[0]["b"][1], 1.0)
+        self.assertEqual(got[0]["s"], 1.0)
+
+    def test_92_bad_entries_are_skipped(self):
+        got = es.boxes_of([None, {}, {"c": "person", "b": [0.5, 0.5]},
+                           {"c": "person", "b": ["a", "b", "c", "d"]},
+                           {"c": "person", "s": "x", "b": [0.5, 0.5, 0.1, 0.1]}])
+        self.assertEqual(len(got), 1)                    # 只有最后一条能认
+        self.assertEqual(got[0]["s"], 0.0)               # 置信度认不出按 0，不编一个
+
+    def test_93_degenerate_box_is_skipped(self):
+        """宽或高为 0 的框画出来就是一根线，存它没有意义。"""
+        self.assertEqual(es.boxes_of([{"c": "person", "b": [0.5, 0.5, 0, 0.2]}]), [])
+
+    def test_94_cap_and_order(self):
+        dets = [{"c": "person", "s": i / 100.0, "b": [0.5, 0.5, 0.1, 0.1]}
+                for i in range(30)]
+        got = es.boxes_of(dets)
+        self.assertEqual(len(got), es.MAX_BOXES)
+        self.assertEqual(got[0]["s"], 0.29)              # 置信度最高的留下
+
+    def test_95_meta_path_follows_jpg(self):
+        p = es.meta_path_of(self.var, "cam-01", "2026-11-09", "102341_123.jpg")
+        self.assertTrue(p.endswith("102341_123.json"))
+        self.assertEqual(os.path.dirname(p),
+                         os.path.dirname(es.path_of(self.var, "cam-01",
+                                                    "2026-11-09", "102341_123.jpg")))
+        self.assertIsNone(es.meta_path_of(self.var, "../x", "2026-11-09",
+                                          "102341_123.jpg"))
+
+    def test_96_store_writes_sidecar(self):
+        """offer(dets=...) → 图与框都落盘，read_meta 读得回来。"""
+        store = es.ShotStore(self.var)
+        store.start()
+        try:
+            at = time.time()
+            self.assertTrue(store.offer("cam-01", JPEG, at, self.DETS))
+            self.assertEqual(wait_for(lambda: store.status()["written"] >= 1), True)
+            self.assertEqual(wait_for(lambda: store.status()["meta"] >= 1), True)
+        finally:
+            store.stop()
+        date = day_str(at)
+        got = es.read_meta(self.var, "cam-01", date, es.name_at(at))
+        self.assertEqual(len(got["boxes"]), 2)
+        self.assertAlmostEqual(got["at"], at, delta=0.01)
+
+    def test_97_store_without_boxes_writes_no_sidecar(self):
+        store = es.ShotStore(self.var)
+        store.start()
+        try:
+            at = time.time()
+            store.offer("cam-01", JPEG, at)                # 没框（或没传）
+            self.assertTrue(wait_for(lambda: store.status()["written"] >= 1))
+        finally:
+            store.stop()
+        date = day_str(at)
+        self.assertIsNone(es.read_meta(self.var, "cam-01", date, es.name_at(at)))
+        self.assertEqual(store.status()["meta"], 0)
+
+    def test_98_bad_json_reads_as_missing(self):
+        """坏 json 当作"没存框"：不修、不重建、不抛。"""
+        name = es.name_of(3723.0)
+        p = es.meta_path_of(self.var, "cam-01", "2026-11-09", name)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("{not json")
+        self.assertIsNone(es.read_meta(self.var, "cam-01", "2026-11-09", name))
+
+    def test_99_meta_of_contract(self):
+        """meta_of：图在、框没有也要能给出一份能解释的答复。"""
+        hit = {"name": es.name_of(37421.0), "cam": "cam-01",
+               "date": "2026-11-09", "sec": 37421.0}
+        got = es.meta_of(self.var, hit, 37421.0)
+        self.assertEqual(got["boxes"], [])
+        self.assertFalse(got["has_boxes"])
+        self.assertEqual(got["at"], "10:23:41")
+        self.assertEqual(got["offset"], 0.0)
+
+        p = es.meta_path_of(self.var, "cam-01", "2026-11-09", hit["name"])
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"at": 37421.0, "boxes": self.DETS}, f)
+        got = es.meta_of(self.var, hit, 37415.0)
+        self.assertTrue(got["has_boxes"])
+        self.assertEqual(got["count"], 2)
+        self.assertAlmostEqual(got["offset"], 6.0, delta=0.1)
+
+
+class TestBoxesHook(Tmp):
+    """检测侧的框交付：交出去的就是这一拍过完区域过滤的框。"""
+
+    def test_a0_dets_reach_store(self):
+        src = os.path.join(self.var, "cam-01.jpg")
+        with open(src, "wb") as f:
+            f.write(JPEG)
+        store = FakeStore()
+        w = detect.DetectWorker(None, "ffmpeg", self.var, lambda: self.var,
+                                lambda: [], lambda: ({}, []), shot_store=store)
+        dets = [{"c": "person", "s": 0.8, "b": [0.5, 0.5, 0.2, 0.4]}]
+        w._shot({"id": "cam-01"}, src, time.time(), dets)
+        self.assertEqual(store.boxes, [[{"c": "person", "s": 0.8,
+                                         "b": [0.5, 0.5, 0.2, 0.4]}]])
 
 
 class TestGrabReturnsSource(Tmp):

@@ -23,7 +23,8 @@
    3. 筛选全部交给服务端：拉全量再在前端过滤，会把"前 200 条里的全部"当成全部。 */
 const EV = {day: jsToday(), cams: [], cats: [], from: "", to: "", minDur: "",
             more: false, data: null, key: "", at: 0, err: "",
-            loading: false, open: "", focus: "", clip: null, clipErr: ""};
+            loading: false, open: "", focus: "", clip: null, clipErr: "",
+            box: {}, zoom: ""};
 
 /* 筛选状态一律是数组 + 字符串，且**只在发请求时拼成参数**：
    界面上"选中"只是数组里有这一项，服务端只认拼好的查询串。中间不留第二份
@@ -130,20 +131,63 @@ const EV_IMG_ONERR = "this.style.display='none'";
      前端不重新减（两处算早晚会不一致）；
    - 没有图就如实说原因，并且明确"这不是播放失败" —— 老事件本来就没存，
      不该让用户以为坏了。 */
+function evShotWhen(sh){
+  const off = (sh && typeof sh.offset === "number") ? sh.offset : null;
+  let when = "快照 " + esc((sh && sh.at) || "");
+  if(off !== null){
+    const n = Math.round(Math.abs(off));
+    when += off >= 0 ? " · 事件开始后 " + n + " 秒" : " · 事件开始前 " + n + " 秒";
+  }
+  return when;
+}
+
+/* 检测框叠层（0.9.130）：服务端给的是归一化 cx,cy,w,h，这里换成百分比定位。
+
+   为什么要叠框：缩略图只看得见"有人"，看不出"检测器框住的是不是人"。框来自
+   那次推理本身（与这张图同一拍），不是事后补画的 —— 所以位置天然是对的。
+
+   为什么在前端画：服务端画框要解码 + 重编码一张 720p 图，只为几条线；浏览器
+   用几个绝对定位的 <i> 就能画，还能随图缩放（缩略图浮层与展开区共用一份数据）。 */
+function evBoxPct(v){ return Math.max(0, Math.min(100, (+v) * 100)).toFixed(2) + "%"; }
+function evBoxHtml(boxes){
+  return (boxes || []).map(b=>{
+    const p = (b && b.b) || [];
+    const w = +p[2] || 0, h = +p[3] || 0;
+    const label = evCatText(b && b.c)
+      + (b && typeof b.s === "number" ? " " + b.s.toFixed(2) : "");
+    return '<i class="evbox ' + evCatCls(b && b.c) + '" style="left:' + evBoxPct((+p[0] || 0) - w / 2)
+      + ';top:' + evBoxPct((+p[1] || 0) - h / 2)
+      + ';width:' + evBoxPct(w) + ';height:' + evBoxPct(h) + '">'
+      + '<b>' + esc(label) + '</b></i>';
+  }).join("");
+}
+/* 框层：只在这一条真的读到框时渲染（读过但为空 = 没框，什么都不画）。 */
+function evBoxLayer(id){
+  const boxes = EV.box[id];
+  return (boxes && boxes.length) ? evBoxHtml(boxes) : "";
+}
+
 function evShotHtml(ev){
   const sh = (ev && ev.shot) || null;
   if(!sh || !sh.url)
     return '<div class="evshotcap">这条没有留快照（0.9.129 之前的事件不存图，'
       + '或检测当时还没确认）。</div>';
-  const off = (typeof sh.offset === "number") ? sh.offset : null;
-  let when = "快照 " + esc(sh.at);
-  if(off !== null){
-    const n = Math.round(Math.abs(off));
-    when += off >= 0 ? " · 事件开始后 " + n + " 秒" : " · 事件开始前 " + n + " 秒";
-  }
-  return '<img class="evshot" src="' + esc(sh.url) + '" alt="" loading="lazy"'
+  return '<div class="evshotwrap">'
+    + '<img class="evshot" src="' + esc(sh.url) + '" alt="" loading="lazy"'
     + ' decoding="async" onerror="' + EV_IMG_ONERR + '">'
-    + '<div class="evshotcap">' + when + '</div>';
+    + evBoxLayer(ev.id)
+    + '</div>'
+    + '<div class="evshotcap">' + evShotWhen(sh) + '</div>';
+}
+
+/* 卡片右侧那张 76×43（0.9.130 起可点）：点它先看大的，再决定要不要点开回放。
+   以前它 pointer-events:none、点了就跳回放 —— 用户只是想看清"那是人还是影子"
+   的时候，代价是一部录像的 seek 与解码。 */
+function evThumbHtml(ev){
+  if(!ev || !ev.shot || !ev.shot.url) return "";
+  return '<img class="evthumb" src="' + esc(ev.shot.url) + '" alt="" loading="lazy"'
+    + ' decoding="async" data-evzoom="' + esc(ev.id) + '" title="点开看大图"'
+    + ' onerror="' + EV_IMG_ONERR + '">';
 }
 
 /* 打开一条事件后展开的操作区。播不了时把服务端的中文原因摆出来 ——
@@ -183,13 +227,94 @@ function evCardHtml(ev){
     + '<div class="evtags">'
       /* 缩略图只在真有图时出现：没有就不占位 —— 一屏 200 条里大多数是
          0.9.129 之前的老事件，塞满灰块等于把列表变成一片占位符。 */
-      + (ev.shot && ev.shot.url
-          ? '<img class="evthumb" src="' + esc(ev.shot.url) + '" alt=""'
-            + ' loading="lazy" decoding="async" onerror="' + EV_IMG_ONERR + '">'
-          : "")
+      + evThumbHtml(ev)
       + cats.map(k =>
         '<span class="evtag ' + evCatCls(k) + '">' + esc(evCatText(k)) + '</span>').join("")
     + '</div></div>';
+}
+
+/* ---------------- 放大看（0.9.130） ----------------
+   浮层只做三件事：把图放到尽可能大、把检测框叠回去、给一个"打开回放"的出口。
+   刻意不做手势缩放 / 拖动 / 分享：这一版的目的是"看清那一眼"，不是做看图器；
+   页面上已经有回放页承接"要看完整过程"的需求。 */
+function evCamName(ev){
+  return ((CAMERAS.find(c => c.id === ev.cam) || {}).name) || ev.cam || "—";
+}
+function evZoomHtml(ev){
+  const sh = ev.shot || {};
+  const boxes = EV.box[ev.id];
+  const boxNote = (boxes === undefined || boxes === null)
+    ? " · 正在读检测框…"
+    : (boxes.length ? " · 框出 " + boxes.length + " 个目标" : " · 这张没有存检测框");
+  return '<div class="evzoombox">'
+    + '<div class="evzoomwrap">'
+      + '<img class="evzoomimg" src="' + esc(sh.url) + '" alt=""'
+      + ' onerror="' + EV_IMG_ONERR + '">'
+      + evBoxLayer(ev.id)
+    + '</div>'
+    + '<div class="evzoomcap"><b>' + esc(evCamName(ev)) + ' · '
+      + gfmtClock(ev.start) + '</b> · ' + evShotWhen(sh) + boxNote + '</div>'
+    + '<div class="evzoombar">'
+      + '<button class="evbtn main" data-evzoomplay="' + esc(ev.id) + '">▶ 打开回放</button>'
+      + '<button class="evbtn" data-evzoomclose="1">关闭</button>'
+    + '</div></div>';
+}
+/* 浮层根节点建一次就复用：每次点图都新建 DOM 会让 document 上堆一串死节点。 */
+function evZoomRoot(){
+  let el = document.getElementById("evZoomRoot");
+  if(el) return el;
+  el = document.createElement("div");
+  el.id = "evZoomRoot";
+  el.onclick = e=>{
+    const t = e.target;
+    const play = (t && t.closest) ? t.closest("[data-evzoomplay]") : null;
+    if(play){
+      const id = play.getAttribute("data-evzoomplay");
+      evZoomClose();
+      evOpen(id);                    /* 关浮层再走原来那条"展开 + 定位"的路 */
+      return;
+    }
+    /* 点图本身不关（用户可能正对着框看）；点背景、点"关闭"才关。 */
+    if((t && t.closest && t.closest("[data-evzoomclose]")) || t === el) evZoomClose();
+  };
+  document.body.appendChild(el);
+  return el;
+}
+function renderEvZoom(){
+  const root = evZoomRoot();
+  const ev = EV.zoom ? evFind(EV.zoom) : null;
+  root.className = ev ? "evzoom" : "";
+  root.innerHTML = ev ? evZoomHtml(ev) : "";
+}
+/* 框按需读一次（?meta=1），结果按事件 id 缓存：
+   同一张图来回看几遍不该反复问服务端；`undefined` = 还没问过，
+   `null` = 正在问，`[]` = 真没有框（三种状态不能混成一个）。 */
+function evLoadBoxes(id){
+  if(EV.box[id] !== undefined) return Promise.resolve(EV.box[id]);
+  const ev = evFind(id);
+  if(!ev || !ev.shot) return Promise.resolve(null);
+  EV.box[id] = null;
+  return API.get(ev.shot.url + "?meta=1").then(d=>{
+    EV.box[id] = (d && d.ok && Array.isArray(d.boxes)) ? d.boxes : [];
+  }).catch(()=>{ EV.box[id] = []; }).then(()=>{
+    if(EV.zoom === id) renderEvZoom();
+    if(EV.open === id) renderEvList();
+    return EV.box[id];
+  });
+}
+function evZoomOpen(id){
+  const ev = evFind(id);
+  if(!ev || !ev.shot) return false;
+  EV.zoom = id;
+  renderEvZoom();                    /* 先出图：图有浏览器缓存，不等框 */
+  evLoadBoxes(id);
+  return true;
+}
+function evZoomClose(){
+  if(!EV.zoom) return false;
+  EV.zoom = "";
+  renderEvZoom();
+  return true;
 }
 
 function renderEvList(){
@@ -241,6 +366,7 @@ function renderEvHead(){
 function evReload(){
   EV.open = ""; EV.focus = ""; EV.clip = null; EV.clipErr = "";
   EV.data = null;                     /* 换了条件：旧列表不许冒充新结果 */
+  evZoomClose();                      /* 换了条件，浮层里那张图也过期了 */
   renderEvChips(); renderEvHead(); loadEvents(true);
 }
 
@@ -417,6 +543,8 @@ function evOpen(id){
   }
   EV.open = id; EV.focus = id; EV.clip = null; EV.clipErr = "";
   renderEvList();
+  /* 展开区的宽图也叠框：与浮层共用同一份缓存，先问过的就不再问。 */
+  evLoadBoxes(id);
   return API.get("/api/events/" + encodeURIComponent(id) + "/clip").then(d=>{
     if(EV.open !== id) return null;         /* 用户已经点了别的 */
     if(!d || !d.ok){
@@ -454,11 +582,19 @@ function evGo(delta){
   const list = document.getElementById("evList");
   if(list) list.onclick = e=>{
     const t = e.target;
+    /* 缩略图先接管：点图 = 看大图（不跳页）。放在 data-evgo 与卡片之前判断，
+       否则同一个点击会先被卡片接走，用户还是会被弹去回放。 */
+    const z = (t && t.closest) ? t.closest("[data-evzoom]") : null;
+    if(z){ e.stopPropagation(); evZoomOpen(z.getAttribute("data-evzoom")); return; }
     const g = (t && t.closest) ? t.closest("[data-evgo]") : null;
     if(g){ e.stopPropagation(); evGo(+g.getAttribute("data-evgo")); return; }
     const c = (t && t.closest) ? t.closest("[data-ev]") : null;
     if(c) evOpen(c.getAttribute("data-ev"));
   };
+  /* Esc 关浮层：手机上没键盘，但桌面端按 Esc 是最省事的"退出去"。 */
+  document.addEventListener("keydown", e=>{
+    if((e.key === "Escape" || e.keyCode === 27) && EV.zoom) evZoomClose();
+  });
   const rf = document.getElementById("btnEvRefresh");
   if(rf) rf.onclick = ()=>{ loadEvents(true); };
   /* 「更多筛选」的两个时间框与最短时长：用 change（失焦/回车）而不是 input，
