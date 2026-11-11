@@ -158,6 +158,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 41 | 11-10 03:10 | **批次 19 · 0.9.138 事件卡片尺寸重排**（按用户「小图应该拉满高度，大图应该拉满宽度，保证画面比例不变」）：① 列表缩略图不再写死 76×43，外层新增 `.evthumbbox`（`aspect-ratio:16/9` 定比例 + `align-self:stretch` 拉满卡片内容高、宽度自动跟随，图绝对定位铺满容器避免 720p 固有高度进布局）；② 类别标签从缩略图下方移到左列机位行下横排，右列只剩缩略图、卡片高度不再被标签撑出富余；③ 展开详情从左列挪出成 `.evopen`（`flex:1 1 100%` 独占第二行），大图 `width:100% + height:auto` 按原比例铺满整卡宽，去掉 `max-height:210 + object-fit:cover` 裁切，展开间距由卡片 gap 兼管、段落 margin 归零防双重间距；④ 缩略图 onerror 改藏整个容器（否则留灰块）、加载骨架灰块同步约 116×66、窄屏断点不再覆写缩略图尺寸；events UI 测试 +2（evthumbbox 容器 / evopen 整卡宽）；`recorder.py` 一行未改 | b7c3d61 | **出包** `dist/nvr-0.9.138_x86.fpk` **101235740 字节** md5 `28c100e22b9b90a30fbdede9e03f0ae0`；闸门 validate 全绿、前端 events **125**（+2）/ 其余套件 0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.138.json`），0.9.137→0.9.138 上线 **0.1s**、端口 18085；机上 `curl ui/` 确认 `evthumbbox`/`evopen`/`aspect-ratio` 共 **17** 处进编译产物、旧 `width:76px;height:43px` **0** 残留；`/vol1` 余 19G（65%）；两路取流 `hstate=recording`（日志 warn=0 err=0）；真机观感（缩略图变大、大图整卡宽、比例不裁切）待用户手机确认；**批次 19 标 done**，生产机 2.6 未碰 |
 | 42 | 11-10 04:10 | **批次 20 · 0.9.139 事件列表全部大图**（按用户「需要展开才能看到大图？不妥。或者全部大图，或者保留小图，展开才能看到大图」）：0.9.138 的中间态（中等缩略图 + 展开才出大图）被否，取用户列的第一方案「全部大图」——有快照的事件卡片直接画整卡宽大图（`.evshotwrap` 独占一行、`width:100% + height:auto` 原比例不裁切），**不用展开就能看清**；小缩略图整个下线（`.evthumb`/`.evthumbbox`/`EV_IMG_ONERR` 删除，大图模式下同一张图不必画两遍）；点大图仍直接弹放大浮层（data-evzoom 代理顺序不变），点卡片展开的 `.evopen` 只剩动作区（打开录像/±30 秒/播不了的原因/没有快照说明），不再重复出图；快照时刻说明随大图常驻；检测框仍只在展开/放大时取一次（不为叠框发 200 个请求），加载失败仍 `bad` 类明说；骨架跟随新卡片形状（文字灰条 + 16:9 大图灰块）；events UI 测试改 6 条删 2 条净 123 项；`recorder.py` 一行未改 | 5e8c860 | **出包** `dist/nvr-0.9.139_x86.fpk` **101234891 字节** md5 `0ddaa1b74b1176bad4a5d8a4261d62a5`；闸门 validate 81 项、前端 events **123**（-2）/ 其余全绿 0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.139.json`），0.9.138→0.9.139 上线 **0.1s**、端口 18085；机上 `curl ui/`：新标记 13 处、`evthumb*`/`EV_IMG_ONERR` **0** 残留、版本 0.9.139；`/vol1` 余 19G（66%）；日志 warn=0 err=0；真机观感（列表直接大图、比例不裁、点图弹浮层）待用户确认；**批次 20 标 done**，生产机 2.6 未碰 |
 | 43 | 11-11 03:50 | **批次 21 · 0.9.140 修复「应用中心停用不生效」**（用户报：飞牛应用中心显示 NVR-L 已停用，但录像仍在写；要求核实停用到底能不能生效）：核实结论是 `cmd/main` 生命周期脚本自身三个缺陷——① start 的 `&` 挂在整条 `cd && nohup python` 列表上，PID 文件存的是 bash 壳（壳前台等待 python 永不退出）；② stop 只杀壳，python 成孤儿继续录像、报停用成功；③ status 用 `kill -0` 判活，跨用户执行 EPERM 必误报「未运行」且顺手删 PID 文件。修法：`&` 只作用于 nohup python（PID 文件存 python 本尊）；stop 无论 PID 文件对错都按命令行全扫兜底（TERM→限时等待→KILL）；status 三级判活（PID 文件→进程扫描→TCP 端口探测）并自愈 PID 文件；start 幂等加进程扫描。真机验证又抓两处当场补上：进程扫描只认 python 打头的命令行（纯字符串匹配被调用方复合命令自匹配骗过，status 曾对尸体报 0）；start 裸调无 TRIM_* env 时回退 target 符号链接找程序目录。另把 152 的 config `service_port` 18085→18080 与 manifest 对齐（消除应用中心按声明端口探测的误报源） | ad22ff5 | **出包** `dist/nvr-0.9.140_x86.fpk` **101236449 字节** md5 `f91c4dea12633225fd3bc01478108121`；闸门 validate 全绿、doc 套件 14 项（补 ARCHITECTURE/USER_GUIDE 版本提及后 OK）、版本守卫同步；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.140.json`），端口 18080；上机实测：start 后无壳驻留、PID 文件=python 本尊、root stop 后进程=0/端口释放/死亡态 status=3、admin 跨用户 status=0、nvr 裸调 start 恢复 2 路录制 + ffmpeg 6 进程；journal 取证确认飞牛从未成功执行过 `main stop`（进程 11-10 04:08 起未被杀过）；/vol1 余 53G（用户 02:54 手动删过录像目录）；**批次 21 标 done**，生产机 2.6 未碰 |
+| 44 | 11-11 14:50 | **批次 22 · 0.9.141 缓存集中到存储路径**（用户先问「配置目录应该是一处吧？程序用到的文件应该集中两处：一个存储目录、一个配置目录，可行吗」，确认后说「都挪进存储目录一起管」）：把程序自攒的可再生文件（事件截图 / 首页快照 / 播放重封装 / 抽帧临时文件）从 `@appdata/nvr` 收进 `<record_dir>/_cache/{shots,snapshots,remux,tmp}`，判据是「丢了会不会让程序起不来」而不是大小。新增 `cache.py` 一处收口落点：**绝不创建 record_dir 本体**（外接盘拔掉后挂载点仍在，makedirs 会把 `_cache` 建到根分区，问题从「报错」变成「悄悄写错地方」）、**每 20 秒真写一字节探测**（`isdir` 对只读挂载 / ACL 改坏 / 配额打满全返回 True）、不可用时回退 `var/_cache` 并留声、盘插回自动搬回；remux 首次有上限（5GB / 7 天 LRU，10 分钟内动过的跳过=正在播）；抽帧 `mkstemp(dir=)` 改落存储盘；旧目录后台一次性迁移（图与快照搬、remux/tmp 直接删，迁移期旧图仍可读，写 `.cache-migrated`）。附带：日志 20MB 轮转（`_emit` 整段持锁，避免关句柄与写入打架丢行）、配置备份最多留 2 份、空间预警把缓存从「其它占用」摘出来单独算、`/api/status` 与 `/api/storage/usage` 新增 cache 字段、诊断页显示占用与回退警示 | e177810 | **出包** `dist/nvr-0.9.141_x86.fpk` **101248684 字节** md5 `bf47d34294cf107c0b02dc4b6fd3fc84`；闸门 validate 全绿、后端 30 个测试文件全 OK（含新增 `test_cache.py` 23 项）、doc 套件 14 项；`deploy_test.py` 部署 152 九项全 OK（`test-reports/deploy-0.9.141.json`）；上机实测：迁移 2404 张事件图 / 222.2MB → `_cache/shots`、remux 与 tmp 直接删、`.cache-migrated` 落盘；`chmod 500 _cache` 模拟盘不可写 → 26 秒后 `on_store=false` + 日志 ERR 警告 + 回退 `var/_cache`，`chmod 755` → 26 秒后恢复并搬回；remux 超期清理实测 `removed=1`；事件图 HTTP 200 / 632KB；录制 `.part` 持续增长；var 从 611M 降到 108M（backup 清 7 份 / 602MB）；**批次 22 标 done**，生产机 2.6 未碰（待手动升级） |
 ## 测试平台（可以随便折腾，与生产隔离）
 
 | 项 | 值 |
@@ -2150,3 +2151,71 @@ start 裸调无 `TRIM_*` 环境变量时报「程序文件缺失」——回退 
   但服务端目前不输出任何进程命令行。加接口会扩大对外接口面，且要改 `recorder.py`
   的进程登记（录制链路只加不改），留到确认真机采集确实需要时单独评估；
   在此之前这些行一律判 `partial`，不假装验过。
+
+## 批次 22 · 0.9.141 缓存集中到存储路径（第 44 轮）
+
+**为什么现在做**：用户先问「配置目录应该是一处吧？程序除了配置目录还要用到其他
+目录吗？我的意思是，程序用到的文件应该集中两处放置，一个存储目录，一个配置目录，
+可行吗」，看到清单后说「都挪进存储目录一起管」。
+
+**核实结论（0.9.140 的落点现状）**：
+
+| 位置 | 放什么 | 量级 |
+|---|---|---|
+| 安装目录 `/var/apps/nvr/target` | 代码 / 前端 / vendor（ffmpeg 等） | 102MB，升级整体替换，不可搬 |
+| 配置目录 `@appdata/nvr` | config / secret / port / ort / log / **event_shots / snapshots / remux / tmp** | 152 上 611MB，生产机 15GB |
+| 存储目录 `record_dir` | 录像 / 归档 / 台账 / 索引 | 随盘 |
+| 系统 `/tmp` | 抽帧临时文件 | 分钟级，但**满的是系统盘** |
+
+**病根不是「缓存大」，是「缓存没有归处」**：remux 从来没有删除逻辑，移动端每播
+一次多一份副本（5 分钟 720p ≈ 60MB），生产机攒到 14GB；整块 `/vol1` 涨到 100%
+之后 ffmpeg 报 ENOSPC、录制停摆、页面白屏。空间预警也看不见它 —— `used_b` 只统计
+录像，14GB 缓存被算成「别的应用占的」，用户看到告急却不知道该删什么。
+
+**判据**：不是文件大小，而是「丢了会不会让程序起不来」。配置丢了起不来（而且它
+自己记着 `record_dir`，配置放进存储目录就成了「盘不在就找不到盘」的悖论）；
+缓存丢了下一分钟自动重建 → 一律放 `<record_dir>/_cache`。
+
+**四条配套（缺一条就会在真机上出事）**：
+
+1. **绝不创建 `record_dir` 本体**。外接盘拔出后挂载点目录仍在，`makedirs` 会把
+   `_cache` 建到根分区 —— 于是「盘掉线」变成「悄悄写进系统盘」，比直接失败更糟。
+2. **真写探测，不看 `isdir`**。只读重挂、ACL 改坏、配额打满，`isdir` 全返回 True。
+   每 20 秒写一个字节才算数；失败回退 `var/_cache`，日志与诊断页都要看得见。
+3. **迁移要能被打断**。后台线程搬（453MB 跨卷几十秒，不能卡启动），读路径
+   同时认新旧两个根（`roots_of`），否则升级瞬间事件页「一张图都没有」。
+   remux/tmp 直接删而不是搬 —— 跨卷搬 14GB 换不来任何东西。
+4. **正在播的不能删**。remux LRU 跳过 10 分钟内动过的文件：Linux 上删掉打开的
+   文件不会报错，但会让这次播放白播一遍，下次还得再转。
+
+**152 真机验证又抓出四处，当场补上**：
+
+- `_merge_tree` 用 `os.walk(topdown=False)` 给的 `dirs` 判空 —— 那是遍历开始时的
+  快照，子目录刚删掉父目录仍「看着」有子目录，结果 `event_shots/cam-test01`
+  空壳永久残留。改用 `os.listdir` 判真实空，并在标记已写后也收一次空壳。
+- `_merge_back` 只 rmdir 顶层：`shots/` 子目录还在，`listdir(src)` 非空 ——
+  回退 26 秒后恢复，图搬走了但 `var/_cache/shots` 空壳一直留着。
+- `cache.root` 的缓存只按时间判（20 秒 TTL），不认 `var_dir`：同一进程里换数据
+  目录会把上一份根返回给下一份配置（单测里表现成「上一个测试的图出现在下一个
+  测试里」）。缓存键补上 `abspath(var_dir)`。
+- `prune_backup` 起初 `ignore_errors=True` 静默失败：152 上 root 属主的 `cmd-*`
+  备份删不掉，日志却像「清理完了」。现在报 failed 并说明需要 root；同时给
+  `deploy_test.py` 补上 `cmd-*` 的清理（工具造成的垃圾自己收）。
+
+### 验收（152 真机）
+
+- `build.sh --check` 全绿；新增 `test_cache.py` 23 项（覆盖挂载点保护、只读回退、
+  LRU 保护窗口、迁移幂等、空壳清理、回退搬回）。
+- 出包 `dist/nvr-0.9.141_x86.fpk` 101248684 字节 md5 `bf47d34294cf107c0b02dc4b6fd3fc84`；
+  152 部署九项全 OK。
+- 迁移：`缓存迁移到存储路径：remux=dropped, shots=2404 个/222.2 MB,
+  snapshots=8 个/0.8 MB, tmp=dropped`；`_cache/shots` 237M、snapshots 852K。
+- 降级：`chmod 500 _cache` → 26 秒后 `{"on_store": false, "root":
+  "/vol1/@appdata/nvr/_cache", "why": "存储路径不可写…"}`，日志 `[ERR] 警告：缓存
+  落点回退…`；`chmod 755` → 26 秒后 `on_store` 恢复 true 且搬回。
+- remux：请求带 `remux=1` 生成 `_cache/remux/5b07…mp4`（19MB）；造一个 8 天前的
+  假文件，`prune_remux` 返回 `removed=1` 并删掉。
+- 事件图 HTTP 200 / 632975 字节（迁移后仍可读）；录制 `.part` 持续增长。
+- var 从 611M → 108M（backup 清 7 份 / 602MB；ort 104M 是模型，留着）。
+- `recorder.py` 一行未改；生产机 2.6 未碰（14GB remux 待升级后由迁移删，
+  或手工 `rm -rf /vol1/@appdata/nvr/remux`）。
