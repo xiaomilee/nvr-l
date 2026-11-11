@@ -189,7 +189,11 @@ class TestLiveSnapshots(unittest.TestCase):
         import nvr_slim
 
         var = tempfile.mkdtemp(prefix="nvrlive")
-        snaps = os.path.join(var, "snapshots")
+        # 0.9.141：快照落 `_cache/snapshots`（单测没有绑定存储路径，走 var 回退）。
+        # 用 snapshot_path() 取真路径，别写死目录 —— 落点由 cache 决定。
+        import cache
+        cache.reset()
+        snaps = os.path.join(var, "_cache", "snapshots")
         os.makedirs(snaps)
         p = os.path.join(snaps, "cam-01.jpg")
         with open(p, "wb") as f:

@@ -97,9 +97,12 @@ class TestNaming(Tmp):
 
 class TestPaths(Tmp):
     def test_10_layout(self):
+        # 0.9.141：图落 `<record>/_cache/shots`（单测没有绑定存储路径，走 var 回退）。
+        # 断言用 root_of 而不是写死目录：落点由 cache 决定，契约是"root/cam/date/名"。
         p = es.path_of(self.var, "cam-01", "2026-11-09", "102341_123.jpg")
-        self.assertEqual(p, os.path.join(self.var, "event_shots", "cam-01",
+        self.assertEqual(p, os.path.join(es.root_of(self.var), "cam-01",
                                          "2026-11-09", "102341_123.jpg"))
+        self.assertIn(os.path.join("_cache", "shots"), p)
 
     def test_11_traversal_is_refused(self):
         """`..`、绝对段、子目录一律在这里挡掉 —— 这是唯一一处拼路径的地方。"""
@@ -116,6 +119,38 @@ class TestPaths(Tmp):
     def test_12_dir_of_refuses_bad_date(self):
         self.assertIsNone(es.dir_of(self.var, "cam-01", "2026-11"))
         self.assertIsNone(es.dir_of(self.var, "cam 01", "2026-11-09"))
+
+    def test_13_legacy_root_still_read(self):
+        """0.9.141 升级瞬间：旧目录还没搬完，读图必须还能读到。
+
+        迁移是后台线程跑的（453MB 跨卷要几十秒）。这期间如果只认新落点，
+        用户看到的是"升级之后事件页一张图都没有" —— 而图其实还在。
+        """
+        legacy = os.path.join(self.var, "event_shots", "cam-01", "2026-11-09",
+                              "102341_123.jpg")
+        os.makedirs(os.path.dirname(legacy), exist_ok=True)
+        with open(legacy, "wb") as f:
+            f.write(JPEG)
+        es.cache_clear()
+        self.assertIn("102341_123.jpg",
+                      es.list_for(self.var, "cam-01", "2026-11-09"))
+        got = es.path_of(self.var, "cam-01", "2026-11-09", "102341_123.jpg",
+                         existing=True)
+        self.assertEqual(os.path.abspath(got), os.path.abspath(legacy))
+
+    def test_14_new_root_wins_over_legacy(self):
+        """两边都有同一张时取新落点：旧副本不该盖住迁移后的文件。"""
+        old = os.path.join(self.var, "event_shots", "cam-01", "2026-11-09",
+                           "102341_123.jpg")
+        os.makedirs(os.path.dirname(old), exist_ok=True)
+        with open(old, "wb") as f:
+            f.write(b"old")
+        new = self.put("cam-01", "2026-11-09", es.parse_name("102341_123.jpg"))
+        es.cache_clear()
+        got = es.path_of(self.var, "cam-01", "2026-11-09", "102341_123.jpg",
+                         existing=True)
+        self.assertEqual(os.path.abspath(got), os.path.abspath(new))
+        self.assertNotEqual(os.path.abspath(got), os.path.abspath(old))
 
 
 class TestPick(Tmp):
@@ -325,7 +360,7 @@ class TestStore(Tmp):
             self.put("cam-01", d, 100.0)
         removed = es.ShotStore(self.var).sweep(now)
         self.assertEqual(removed, 1)
-        left = sorted(os.listdir(os.path.join(self.var, "event_shots", "cam-01")))
+        left = sorted(os.listdir(os.path.join(es.root_of(self.var), "cam-01")))
         self.assertEqual(left, [edge, day_str(now)])
 
     def test_68_sweep_ignores_foreign_dirs(self):

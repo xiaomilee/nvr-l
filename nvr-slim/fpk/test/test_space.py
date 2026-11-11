@@ -158,6 +158,26 @@ class TestEvaluate(unittest.TestCase):
         self.assertEqual(p["keep_text"], "全时 3 天")            # 归档没产出，不写它
         self.assertEqual(p["suggest_days"], 3)                   # (55−12.1)/12
 
+    def test_缓存要从其它占用里摘出来(self):
+        """0.9.141：`_cache` 与录像同盘，但它不是录像。
+
+        不摘出来的话，生产机 14GB 的播放缓存会被算进"别的应用占的" ——
+        用户看到空间告急，却完全不知道该删什么（他只会去删录像）。
+        """
+        p = self.base(cache_b=5 * GB)
+        self.assertEqual(p["cache_gb"], 5.0)
+        self.assertAlmostEqual(p["other_gb"], 7.1, places=1)   # 55 − 7.6 − 35.3 − 5
+
+    def test_空间紧张时点名缓存(self):
+        codes = [r["code"] for r in self.base(cache_b=5 * GB)["reasons"]]
+        self.assertIn("cache", codes)
+
+    def test_缓存不大就不啰嗦(self):
+        # 200MB 的缓存占不了一行的地方，提它只会稀释真正的告警
+        codes = [r["code"] for r in
+                 self.base(cache_b=int(0.2 * GB))["reasons"]]
+        self.assertNotIn("cache", codes)
+
     def test_建议里要有最多能留几天(self):
         p = self.base()
         self.assertIn("最多留 3 天", p["advice"])

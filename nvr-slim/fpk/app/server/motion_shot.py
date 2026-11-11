@@ -153,9 +153,13 @@ class MotionShotService(object):
     """
 
     def __init__(self, ffmpeg, var_dir, record_root, cam_dirs_fn, shot_store,
-                 log=None, queue_max=QUEUE_MAX, detect_ref=None):
+                 log=None, queue_max=QUEUE_MAX, detect_ref=None, tmp_dir=None):
         self.ffmpeg = ffmpeg or ""
         self.var_dir = var_dir
+        # 抽帧临时文件的落点（0.9.141）：默认 None = 系统 /tmp。系统盘满的时候
+        # 抽帧会先失败，而存储盘还有几十 GB —— 明明只是缺一个可写目录。
+        # 由 nvr_slim 传 `_cache/tmp`（在存储路径下），盘不可用时返回 None 退回 /tmp。
+        self.tmp_dir = tmp_dir
         self.record_root = record_root
         self.cam_dirs_fn = cam_dirs_fn
         self.shot_store = shot_store
@@ -328,18 +332,34 @@ class MotionShotService(object):
 
     _PPM_CAP = 16 * 1024 * 1024   # 1080p P6 ≈ 6MB，留一倍余量防呆
 
+    def _tmpdir(self):
+        """临时文件目录：存储路径下的 `_cache/tmp`，不可用就返回 None（=系统 /tmp）。
+
+        每次现查 + 现建：用户可能刚清空存储目录，也可能刚把外接盘拔掉。
+        `mkstemp(dir=None)` 走 `tempfile.gettempdir()`，永远是能写的地方。
+        """
+        d = self.tmp_dir
+        if not d:
+            return None
+        try:
+            os.makedirs(d, exist_ok=True)
+            return d
+        except OSError:
+            return None
+
     def _run_both(self, offset, path):
         """一次 ffmpeg 运行出 jpg + ppm → (jpg, ppm)。jpg 为 None 时 ppm 也不可信。
 
         临时文件**必须用真扩展名**（.jpg / .ppm，不用 .part）：ffmpeg 8 靠
         扩展名猜输出格式，怪后缀会拒开输出（退出码 234），即使显式给了
         -f image2 也可能把第二个输出的编码器弄成 mjpeg（0.9.137 真机实测，
-        产物头是 FF D8 而不是 P6）。这些是 /tmp 里前缀唯一的私有临时文件，
-        写完即读即删，不需要 .part 那种原子性。
+        产物头是 FF D8 而不是 P6）。这些是前缀唯一的私有临时文件，写完即读即删，
+        不需要 .part 那种原子性。落点见 `_tmpdir()`（0.9.141 起优先存储路径）。
         """
-        fd, jp = tempfile.mkstemp(suffix=".jpg", prefix="mshot-")
+        td = self._tmpdir()
+        fd, jp = tempfile.mkstemp(suffix=".jpg", prefix="mshot-", dir=td)
         os.close(fd)
-        fd2, pp = tempfile.mkstemp(suffix=".ppm", prefix="mshot-")
+        fd2, pp = tempfile.mkstemp(suffix=".ppm", prefix="mshot-", dir=td)
         os.close(fd2)
         cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error",
                "-ss", "%.3f" % max(0.0, offset), "-i", path,
@@ -385,7 +405,8 @@ class MotionShotService(object):
 
     def _run_ffmpeg(self, cmd):
         """跑一次 ffmpeg，产出字节或 None（失败原因写 _last_err）。"""
-        fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="mshot-")
+        fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="mshot-",
+                                   dir=self._tmpdir())
         os.close(fd)
         try:
             proc = subprocess.run(cmd + ["-y", tmp], timeout=20,

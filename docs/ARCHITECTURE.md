@@ -21,8 +21,13 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 领域模块  recorder / ingest / frames / detect / ledger / archive / notify …
         │  （各自持有运行中的对象与状态，暴露 status() 给上层读）
         ▼
-盘上数据  <var>/config.json · <record_dir>/日期/*.mp4 · var/event_index.db · _ledger
+盘上数据  配置：<var>/config.json · secret · port.txt · log · backup · ort
+         数据：<record_dir>/<机位>/<日期>/*.mp4 · _archive · _ledger · _cache/{shots,snapshots,remux,tmp}
 ```
+
+**落点的划分标准是「丢了会不会让程序起不来」，不是大小**（0.9.141）。
+配置丢了起不来（而且它自己记着 `record_dir`，放进存储目录就成了"盘不在就找不到盘"的悖论）；缓存丢了下一分钟就重新生成，所以一律放 `<record_dir>/_cache`。
+落点解析、写探测、盘掉线回退、旧目录迁移、remux LRU 全在 `cache.py` 一处，其它模块只调 `cache.sub(var, kind)`，不自己拼路径。
 
 三条红线来自 [`REVIEW_BASELINE.md`](REVIEW_BASELINE.md) 与 ROADMAP 总原则：
 
@@ -68,6 +73,7 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `notify_tpl.py` | 通知模板：按 webhook host 出各平台最小 body、变量插值、坏模板回退 | `render()` `platform_of()` |
 | `notify_history.py` | 通知发送历史落盘：jsonl 追加、脱敏、裁剪、过滤查询 | `append()` `query()` `stats()` |
 | `sysinfo.py` | 系统信息（CPU / 内存 / 磁盘） | 状态快照 |
+| `cache.py` | 可写缓存的落点：`<record_dir>/_cache/{shots,snapshots,remux,tmp}` 优先、盘不可用回退 `var/_cache`（绝不创建 `record_dir` 本体）、旧版 var 目录一次性迁移、remux LRU（5GB / 7 天）、占用统计 | `root` `sub` `mode` `stats` `prune_remux` `migrate_once` `start_maintenance` |
 <!-- /table:modules -->
 
 守卫按第一列的 `.py` 文件名与 `app/server/` 实际文件集合比对，

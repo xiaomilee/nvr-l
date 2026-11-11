@@ -84,11 +84,14 @@ def item_key(src, root, cam_id, profile, ignore=None, style="join"):
 
 class Link:
     def __init__(self, ffmpeg, ffprobe, root, var_dir, cameras, cfg,
-                 log=None, on_done=None, notifier=None):
+                 log=None, on_done=None, notifier=None, tmp_dir=None):
         self.ffmpeg = ffmpeg
         self.ffprobe = ffprobe
         self.root = root
         self.var_dir = var_dir
+        # 浓缩/切片的中间产物落点（0.9.141）：由 nvr_slim 传 `_cache/tmp`。
+        # 不传就还是 var/tmp —— 单测与外部调用不需要知道缓存那一层。
+        self.tmp_dir = tmp_dir or os.path.join(var_dir, "tmp")
         self.cams = list(cameras or [])
         self.cfg = cfg
         self.log = log or (lambda m: None)
@@ -562,7 +565,7 @@ class Link:
             # 活动切片：每个区间独立成片（帧级切点，QSV 失败自动回落软编/流复制）
             w = condense.write_split(self.ffmpeg, src, out[:-4],
                                      windows,
-                                     os.path.join(self.var_dir, "tmp", it["key"]),
+                                     os.path.join(self.tmp_dir, it["key"]),
                                      hw="qsv",
                                      speed=self.clip_speed_of(it["cam"]))
             if not w["ok"]:
@@ -578,7 +581,7 @@ class Link:
                     "bytes_out": size_out, "out": out, "detail": res,
                     "parts": w.get("parts", 0)}
         w = condense.write_one(self.ffmpeg, src, out, windows,
-                               os.path.join(self.var_dir, "tmp", it["key"]),
+                               os.path.join(self.tmp_dir, it["key"]),
                                speed=self.clip_speed_of(it["cam"]))
         if not w["ok"]:
             return {"ok": False, "reason": "export", "error": w.get("error"), "detail": res}

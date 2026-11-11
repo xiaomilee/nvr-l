@@ -1,4 +1,4 @@
-# 配置项参考（0.9.140）
+# 配置项参考（0.9.141）
 
 这份文档回答一个设置项被改完之后**到底谁会重新读它**。它属于批次 5 的文档重构，
 方向上是 P0「可信、能无人值守」：前几轮在按钮验收表上连续抓到三个「接口回 ok、
@@ -77,6 +77,10 @@
 | `low_priority` | bool | `true` | — | `前端常量` | `runtime.py:564` | 同上只进 localStorage；`limits.prefix` 只是按配置拼出的字符串，ffmpeg 的 `Popen` 没加这个前缀 |
 | `snapshot_interval` | int | `10` | `1~10` | `每轮读盘` | `nvr_slim.py:3570` | 取帧 worker 每轮用 `interval_fn` 现读配置；没有「运行中对象」字段可看，验收表按 `partial` |
 | `record_dir` | str | `/vol1/@appshare/nvr-output` | 绝对路径，非系统目录 | `需重启` | `runtime.py:233` | `valid_record_dir()` 挡相对路径与系统目录；保存会触发录像重启，且 `restart_hint` 明确提示需重启才全量生效 |
+
+> **0.9.141 起，`record_dir` 下面多了一个 `_cache/` 目录**：事件截图（`shots`）、首页快照（`snapshots`）、
+> 播放重封装（`remux`）、临时文件（`tmp`）都落在这里，不再是配置目录。清一次 `record_dir` 就等于把这些
+> 全部回收（录像会真丢，`_cache` 下一分钟自己重建）。配置目录因此收敛到约 130MB 且不再随使用增长。
 | `cleanup_at` | str | `03:00` | `HH:MM` | `夜间任务` | `nvr_slim.py:2336` | 归档与清理的固定顺序是先归档后清理；`parse_hhmm()` 解析，服务端没有「下次几点跑」的接口 |
 | `space_warn_gb` | int | `20` | `0~2000`（0 = 关闭） | `每轮读盘` | `space.py:66` | 空间预警阈值：剩余低于它（或总量 10%）就提醒。预警线程每 10 分钟用 `runtime.load_config` 现读，改完无需重启；`0` 关闭全部空间预警 |
 | `archive_enable` | bool | `true` | — | `夜间任务` | `nvr_slim.py:2000` | 夜间任务才读；关掉后只录全时、不做归档裁剪 |

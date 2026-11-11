@@ -120,6 +120,19 @@ function spaceStrip(sp){
     + '</div>';
 }
 
+function cacheLine(d){
+  /* 0.9.141：播放缓存 / 事件图 / 临时文件都落在 <录像目录>/_cache 下。
+     用户在这里能看见两件事：它占了多少（可以直接删）、以及它是不是没写在盘上
+     （外接盘拔掉时会回退到配置目录，那是系统盘，必须显眼）。 */
+  const b = +d.cache || 0;
+  const bad = d.cache_on_store === false;
+  if(!b && !bad) return "";
+  const hint = bad
+    ? '<span style="color:var(--danger)">存储盘不可用，暂时写在配置目录</span>'
+    : '可随时清理，remux 自动压到 5 GB 以内';
+  return '<div class="dline">播放缓存 / 事件图 <b>' + fmtBytes(b) + '</b>（' + hint + '）</div>';
+}
+
 function cardStorage(){
   const d = STORAGE.data;
   let body;
@@ -164,6 +177,7 @@ function cardStorage(){
       + '</div>'
       + '<div class="dline" style="margin-top:9px">活动台账 <b>' + fmtBytes(ledger)
         + '</b>（永久保留 · 几乎不占空间）</div>'
+      + cacheLine(d)
       + (clip > 1048576 ? '<div class="dline">缩时残留 <b>' + fmtBytes(clip)
         + '</b>（功能已下线，可手动删除 <code class="mono" style="font-size:10.5px">_clip</code> 目录回收）</div>' : '')
       + '<div style="margin-top:11px;padding-top:10px;border-top:1px solid var(--line2)">'

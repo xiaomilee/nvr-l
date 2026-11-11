@@ -13,6 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 import ffmpeg_cmd  # noqa: F401  （保留导出，脚本内自检与外部调用方依赖）
+import cache
 
 
 class SnapshotWorker:
@@ -44,7 +45,11 @@ class SnapshotWorker:
         return dict(self._ok)
 
     def snap_dir(self):
-        d = os.path.join(self.var_dir, "snapshots")
+        """快照落 `_cache/snapshots`（0.9.141）：每路一张、原地覆盖写，
+        天生有界，但也没必要占着配置目录 —— 清存储路径时它跟着一起清掉，
+        下一轮抓帧就回来了。"""
+        d = cache.sub(self.var_dir, "snapshots") or os.path.join(
+            self.var_dir, "snapshots")
         try:
             os.makedirs(d, exist_ok=True)
         except OSError:

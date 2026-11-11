@@ -75,6 +75,7 @@ import event  # noqa: E402
 import event_index  # noqa: E402
 import export  # noqa: E402
 import space  # noqa: E402
+import cache  # noqa: E402
 
 # /api/record/file 的文件名白名单。活动切片（0.9.38 起）产物名是
 # 01-15-00.c02.mp4 —— .cNN 是同源分片里的第 N 个活动区间；旧白名单
@@ -130,8 +131,38 @@ _ACCESS_LOCK = threading.RLock()
 _AUTH_FAIL = {"t": 0.0}
 
 
+_LOG_WRITE = {"n": 0}
+# 日志上限 20MB，超了滚成 nvr.log.1（只留一份）。以前**完全不管**：生产机
+# 两年攒到 22MB 还算好的，但一台开着调试日志的机器一个月就能上 GB ——
+# 而那正是系统盘最不该被吃掉的部分。留一份就够定位"昨晚发生了什么"。
+LOG_MAX_BYTES = 20 * 1024 * 1024
+LOG_CHECK_EVERY = 500        # 每 500 行查一次大小，别每行都 stat
+
+
 def _log_path():
     return os.path.join(STATE["var_dir"], "log", "nvr.log")
+
+
+def _rotate_log(p):
+    """超上限就把当前文件滚成 `.1`（覆盖上一份）。返回 True 表示滚过。"""
+    global _LOG_FH, _LOG_FH_PATH
+    try:
+        if os.path.getsize(p) < LOG_MAX_BYTES:
+            return False
+    except OSError:
+        return False
+    try:
+        if _LOG_FH is not None:
+            _LOG_FH.close()
+    except (OSError, ValueError):
+        pass
+    _LOG_FH = None
+    _LOG_FH_PATH = None
+    try:
+        os.replace(p, p + ".1")
+    except OSError:
+        return False
+    return True
 
 
 # 凭证统一走 redact.mask_text（RTSP/HTTP 的 user:pass、URL 里的 token 参数、
@@ -219,36 +250,48 @@ def level_counts():
 
 
 def _emit(line):
-    """落盘 + stdout。内存缓冲放哪个环由调用方决定（业务 / 访问分开，见上）。"""
+    """落盘 + stdout。内存缓冲放哪个环由调用方决定（业务 / 访问分开，见上）。
+
+    整段持 `_LOG_LOCK`：轮转要「关句柄 → 改名 → 下次重开」，而写日志是
+    多线程的（每个请求一个线程 + 录制/检测/快照 worker）。分开加锁的话，
+    一个线程正把句柄关掉、另一个线程刚好 write，就会 ValueError 丢一行 ——
+    丢的恰好可能是崩溃前最后那句。锁的粒度只包住一次写，代价可以忽略。
+    """
     print(line, flush=True)
     # 常驻句柄：高频日志（请求行、快照失败）每行 open/close 一次，
     # 在 NAS 的机械盘上就是实打实的多余 I/O。
     # 但句柄必须跟着 var_dir 走（测试与切目录场景会改 STATE），路径变了就重开。
     global _LOG_FH, _LOG_FH_PATH
     p = _log_path()
-    try:
-        if _LOG_FH is None or _LOG_FH_PATH != p:
+    with _LOG_LOCK:
+        try:
+            if _LOG_FH is None or _LOG_FH_PATH != p:
+                try:
+                    if _LOG_FH is not None:
+                        _LOG_FH.close()
+                except (OSError, ValueError):
+                    pass
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                _LOG_FH = open(p, "a", encoding="utf-8", buffering=1)
+                _LOG_FH_PATH = p
+            _LOG_FH.write(line + "\n")
+            _LOG_WRITE["n"] += 1
+            if _LOG_WRITE["n"] >= LOG_CHECK_EVERY:
+                _LOG_WRITE["n"] = 0
+                _rotate_log(p)
+        except (OSError, ValueError):
             try:
                 if _LOG_FH is not None:
                     _LOG_FH.close()
             except (OSError, ValueError):
                 pass
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            _LOG_FH = open(p, "a", encoding="utf-8", buffering=1)
-            _LOG_FH_PATH = p
-        _LOG_FH.write(line + "\n")
-    except (OSError, ValueError):
-        try:
-            if _LOG_FH is not None:
-                _LOG_FH.close()
-        except (OSError, ValueError):
-            pass
-        _LOG_FH = None
-        _LOG_FH_PATH = None
+            _LOG_FH = None
+            _LOG_FH_PATH = None
 
 
 _LOG_FH = None
 _LOG_FH_PATH = None
+_LOG_LOCK = threading.RLock()
 
 
 def _record(line, lvl=None):
@@ -356,19 +399,18 @@ def log_clear():
         _ACCESS_TOTAL[0] = 0
         _ACCESS_AGG.update({"path": None, "n": 0, "shown": 0})
     try:
-        if _LOG_FH is not None:
-            _LOG_FH.close()
+        with _LOG_LOCK:
+            if _LOG_FH is not None:
+                _LOG_FH.close()
+            _LOG_FH = None
+            _LOG_FH_PATH = None
+            p = _log_path()
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("")
     except (OSError, ValueError):
-        pass
-    _LOG_FH = None
-    _LOG_FH_PATH = None
-    try:
-        p = _log_path()
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "w", encoding="utf-8") as f:
-            f.write("")
-    except OSError:
-        pass
+        _LOG_FH = None
+        _LOG_FH_PATH = None
 
 
 # --------------------------------------------------------- 历史日志（文件尾读）
@@ -890,7 +932,10 @@ def cam_dirs_for(cam_id):
 
 
 def snapshot_path(cam_id):
-    return os.path.join(STATE["var_dir"], "snapshots", cam_id + ".jpg")
+    """首页快照落 `_cache/snapshots`（0.9.141，以前在 var 下）。"""
+    d = cache.sub(STATE["var_dir"], "snapshots") or os.path.join(
+        STATE["var_dir"], "snapshots")
+    return os.path.join(d, cam_id + ".jpg")
 
 
 # AI 最快多久消费一张取帧图（秒）。取帧间隔由「快照刷新」决定（1~10 秒可调），
@@ -1665,7 +1710,7 @@ def event_shot_meta_payload(eid):
     if not hit:
         return None, "这条事件没有快照"
     mpath = event_shot.meta_path_of(STATE["var_dir"], hit["cam"], hit["date"],
-                                    hit["name"])
+                                    hit["name"], existing=True)
     # 图已经由 find 确认存在；这里只确认 json 读不读得到 —— 读不到就是
     # "这张没存框"（老图或框写盘失败），不是错误。
     meta = event_shot.meta_of(STATE["var_dir"], hit, start)
@@ -2300,17 +2345,19 @@ def storage_usage(force=False):
     不会因为"多了个预警"把盘扫热。
     """
     now = time.time()
-    cache = None
+    # 变量名别叫 cache：0.9.141 起 `cache` 是模块（缓存落点），局部名撞上就
+    # 会在同一个函数里把模块对象遮住，后面想用 cache.stats() 直接 AttributeError。
+    raw = None
     try:
         with open(storage_cache_path(), "r", encoding="utf-8") as f:
-            cache = json.load(f)
+            raw = json.load(f)
     except (OSError, ValueError):
-        cache = None
-    fresh = (isinstance(cache, dict)
-             and cache.get("v") == STORAGE_CACHE_V
-             and now - float(cache.get("at") or 0) < STORAGE_TTL)
-    if cache and fresh and not force:
-        return _storage_payload(cache, cached=True)
+        raw = None
+    fresh = (isinstance(raw, dict)
+             and raw.get("v") == STORAGE_CACHE_V
+             and now - float(raw.get("at") or 0) < STORAGE_TTL)
+    if raw and fresh and not force:
+        return _storage_payload(raw, cached=True)
     root = record_dir()
     per = {}
     for c in cameras():
@@ -2386,6 +2433,16 @@ def _storage_payload(data, cached):
     # 分层的每日字节：预警必须分层的速率（归档只装活动片段，体积远小于全时）
     kind_days = dict((kind, _merge_kind_days(cams, kind))
                      for kind in ("full", "archive", "clip"))
+    # 缓存占用（0.9.141）：这里现算而不是跟着 30 分钟的存储缓存走 ——
+    # cache.stats() 自己带 60 秒缓存，成本只是几次 stat，换来的数字是新的。
+    cache_b = 0
+    cache_on = True
+    try:
+        _cs = cache.mode(STATE["var_dir"]) or {}
+        cache_b = int(cache.stats(STATE["var_dir"]).get("total") or 0)
+        cache_on = bool(_cs.get("on_store"))
+    except Exception:
+        cache_b = 0
     body = {
         "ok": True,
         "cached": bool(cached),
@@ -2397,6 +2454,9 @@ def _storage_payload(data, cached):
         "archive": arch,
         "clip": clip,
         "ledger": ledger,
+        "cache": cache_b,
+        "cache_root": (cache.mode(STATE["var_dir"]) or {}).get("root"),
+        "cache_on_store": cache_on,
         "disk_free_gb": free,
         "disk_total_gb": total,
         "days": _recent_days(days),
@@ -2411,7 +2471,8 @@ def _storage_payload(data, cached):
     # 预警是这份统计的"结论"：数据已经在这儿了，再扫一遍盘没有意义。
     # 算不出来也不许把整个存储接口拖垮 —— 统计数字是对的，预警是附属结论。
     try:
-        body["space"] = space_eval(free_b, total_b, full + arch + clip, kind_days)
+        body["space"] = space_eval(free_b, total_b, full + arch + clip,
+                                   kind_days, cache_b)
     except Exception as e:
         _record("空间预警计算失败（存储统计不受影响）：%r" % e)
         body["space"] = {"level": "unknown", "reasons": [], "advice": "",
@@ -2484,14 +2545,15 @@ def _cleanup_overdue_h(cfg):
         return None
 
 
-def space_eval(free_b, total_b, used_b, kind_days):
+def space_eval(free_b, total_b, used_b, kind_days, cache_b=0):
     """把"容量 + 分层每日字节"交给 space.evaluate，配置与清理状态在这里补齐。"""
     cfg = runtime.load_config(STATE["var_dir"]) or {}
     return space.evaluate(
         free_b, total_b, used_b, kind_days, space_keep(cfg),
         warn_gb=space.clamp_warn_gb(cfg.get("space_warn_gb")),
         cleanup_overdue_h=_cleanup_overdue_h(cfg),
-        cleanup_at=cfg.get("cleanup_at") or "03:00")
+        cleanup_at=cfg.get("cleanup_at") or "03:00",
+        cache_b=cache_b)
 
 
 def space_tick(force=False):
@@ -3253,6 +3315,20 @@ def health_gaps_payload(date="", force=False):
     return data
 
 
+def _cache_status():
+    """缓存落点状态（0.9.141）。`on_store=False` 意味着盘不可用、正在写配置目录 ——
+    这是唯一能让用户看见"东西没写在盘上"的地方，诊断页与设置页都读它。"""
+    try:
+        m = cache.mode(STATE["var_dir"])
+        st = cache.stats(STATE["var_dir"]) or {}
+        m["bytes"] = st.get("total") or 0
+        m["kinds"] = st.get("kinds") or {}
+        return m
+    except Exception as e:
+        return {"on_store": False, "root": "", "why": "状态读取失败：%r" % e,
+                "bytes": 0, "kinds": {}}
+
+
 def status_payload():
     cfg = runtime.load_config(STATE["var_dir"])
     g = gpu()
@@ -3324,6 +3400,8 @@ def status_payload():
         "notify": (STATE["notifier"].status() if STATE.get("notifier")
                    else {"recent": [], "pending": 0}),
         "scan_label": runtime.SCAN_LABEL.get(cfg.get("scan_mode"), "?"),
+        # 缓存落点（0.9.141）：正常应在 <record_dir>/_cache；回退时 on_store=False。
+        "cache": _cache_status(),
         "dirs": {"var": STATE["var_dir"], "ui": STATE["ui_dir"], "app": STATE["app_dir"]},
     }
 
@@ -3980,7 +4058,7 @@ class Handler(BaseHTTPRequestHandler):
         if not hit:
             return self._send(404, {"ok": False, "error": "这条事件没有快照"})
         full = event_shot.path_of(STATE["var_dir"], hit["cam"], hit["date"],
-                                  hit["name"])
+                                  hit["name"], existing=True)
         try:
             if not full:
                 raise OSError("bad path")
@@ -4205,10 +4283,13 @@ class Handler(BaseHTTPRequestHandler):
         if _remux and not _dl and kind == "full":
             _ff = STATE.get("ffmpeg_bin")
             if _ff:
-                _cache = os.path.join(STATE.get("var_dir") or ".", "remux")
+                # 0.9.141：缓存落存储路径（`_cache/remux`）。以前在 var 下且
+                # **没有任何删除逻辑** —— 生产机攒到 14GB，把系统盘写满。
+                _cache = cache.sub(STATE.get("var_dir"), "remux")
                 _rp = _remux_to_faststart(full, _ff, _cache)
                 if _rp:
                     serve_path = _rp
+                _maybe_prune_remux()
         size = os.path.getsize(serve_path)
         start, end, code = 0, size - 1, 200
         rng = self.headers.get("Range")
@@ -4575,12 +4656,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        cache = self._static_cache
-        if cache["etag"] != etag:
+        # 局部名不叫 cache：会和 0.9.141 新增的 cache 模块撞名，读代码时容易误判
+        sc = self._static_cache
+        if sc["etag"] != etag:
             with open(full, "rb") as f:
-                cache["data"] = f.read()
-            cache["etag"] = etag
-        data = cache["data"]
+                sc["data"] = f.read()
+            sc["etag"] = etag
+        data = sc["data"]
         # index 直接 no-store：部分 NAS 内嵌 webview 对 no-cache 协商不可靠，
         # 升级后仍拿旧页面（实测反馈「活动标记仍未显示」的一个来源）；图标类资源放心缓存一天
         cc = "no-store" if rel.endswith(".html") or rel == "index.html" else "public, max-age=86400"
@@ -4598,6 +4680,27 @@ class Handler(BaseHTTPRequestHandler):
 
 
 _REMUX_LOCK = threading.Lock()
+
+# 清理节流：重封装是"每点开一次就多一份"的操作，不等于每次都要扫目录。
+# 20 次或 10 分钟压一次，够跟上增长速度，也不会让播放请求等一次全目录 stat。
+_REMUX_PRUNE = {"at": 0.0, "n": 0}
+_REMUX_PRUNE_EVERY = 20
+_REMUX_PRUNE_GAP = 600.0
+
+
+def _maybe_prune_remux():
+    """把 remux 缓存压回上限（5GB / 7 天）。见 cache.prune_remux 的取舍说明。"""
+    _REMUX_PRUNE["n"] += 1
+    now = time.time()
+    if _REMUX_PRUNE["n"] < _REMUX_PRUNE_EVERY and now - _REMUX_PRUNE["at"] < _REMUX_PRUNE_GAP:
+        return
+    _REMUX_PRUNE["n"] = 0
+    _REMUX_PRUNE["at"] = now
+    try:
+        cache.prune_remux(STATE["var_dir"], log=log_line)
+    except Exception as e:
+        log_line("清理播放缓存异常：%r" % e, "warn")
+
 
 def _remux_to_faststart(src, ff, cache_dir):
     """把 fMP4（碎片化、moov 空）重封装为 moov 前置的进度式 MP4，移动端 <video> 才能播。
@@ -4677,6 +4780,11 @@ def main():
     # 端口由 cmd/main 解析（配置 > TRIM_SERVICE_PORT > 18081）后传进来，这里只认参数
     want = runtime.clamp_port(a.port)
 
+    # 0.9.141：可写缓存统一落 `<record_dir>/_cache`（见 cache.py）。必须在这里
+    # bind —— 事件图写入线程、快照 worker 一旦起来就会解析落点，晚了它们会先
+    # 在配置目录里建一套目录，之后又要搬，白折腾一次。
+    cache.bind(store_fn=record_dir, log=log_line)
+
     STATE["pool"] = runtime.SlotPool(os.path.join(a.var, "slots"), cfg["concurrency"])
 
     httpd = None
@@ -4727,6 +4835,18 @@ def main():
     g = gpu()
     log_line("v%s pid=%d listen=%s:%d gpu=%s (%s)"
              % (runtime.VERSION, os.getpid(), a.host, a.port, g["state"], g["reason"]))
+    # 缓存落点（0.9.141）：主动解析一次再打印，日志里要能一眼看出"东西写在哪"。
+    # 后台维护线程随后做两件事：把旧版摊在 var 下的缓存搬去存储路径、
+    # 每小时压一次 remux 上限。都不阻塞启动 —— 迁移 453MB 跨卷要几十秒，
+    # 卡在启动路径上会让页面白屏到超时。
+    cache.root(a.var)
+    _mode = cache.mode(a.var)
+    if _mode["on_store"]:
+        log_line("缓存落点：%s（事件图 / 快照 / 播放缓存 / 临时文件）" % _mode["root"])
+    else:
+        log_line("警告：缓存落点回退到 %s —— %s。盘恢复后自动搬回"
+                 % (_mode["root"], _mode["why"] or "存储路径不可用"), "warn")
+    cache.start_maintenance(a.var, log=log_line)
     try:
         import gc
         gc.freeze()      # 启动后把常驻对象移出可回收代，长跑时 GC 次数和停顿都更少
@@ -4775,7 +4895,8 @@ def main():
                             enabled=bool(cfg.get("record_enable", True)),
                             var_dir=a.var,
                             frag=bool(cfg.get("record_frag", True)))
-    lk = link_mod.Link(ff, fp, rec_root, a.var, cameras(), cfg, log=_log_line)
+    lk = link_mod.Link(ff, fp, rec_root, a.var, cameras(), cfg, log=_log_line,
+                       tmp_dir=cache.sub(a.var, "tmp"))
     STATE["recorder"] = rec
     STATE["link"] = lk
     # 通知分发器（AI 检测 / 移动侦测 → Webhook）：独立线程 + 队列 + cooldown
@@ -4841,7 +4962,10 @@ def main():
             STATE.get("ffmpeg_bin"), a.var, record_dir(),
             cam_dirs_fn=cam_dirs_for,
             shot_store=STATE.get("shots"), log=_log_line,
-            detect_ref=_motion_detect_ref)
+            detect_ref=_motion_detect_ref,
+            # 抽帧临时文件落存储路径（0.9.141）。系统盘满时存储盘往往还有富余，
+            # 让它因为 /tmp 写不进去而失败最不值。
+            tmp_dir=cache.sub(a.var, "tmp"))
         _mshot.start()
         STATE["motion_shot"] = _mshot
     except Exception as e:

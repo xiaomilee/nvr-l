@@ -56,6 +56,7 @@ HEADROOM_RATIO = 0.05         # 稳态余量不足总量 5% 提醒
 HEADROOM_MIN = 5 * GB         # 但至少给 5 GB 余量，小盘不能只按比例
 CLEANUP_LATE_H = 2.0          # 清理过了时刻 2 小时还没跑 → 提醒
 CLEANUP_VERY_LATE_H = 24.0    # 超过一天没跑 → 告急
+CACHE_HINT_MIN = 1 * GB       # 缓存超过 1 GB 才在预警里点名（小缓存不值得占一行）
 
 KINDS = ("full", "archive", "clip")
 KIND_LABEL = {"full": "全时", "archive": "归档", "clip": "缩时"}
@@ -164,27 +165,34 @@ def _reason(code, level, text):
 
 
 def evaluate(free_b, total_b, used_b, days_by_kind, keep_days, warn_gb=None,
-             cleanup_overdue_h=None, cleanup_at="03:00", today=None, now=None):
+             cleanup_overdue_h=None, cleanup_at="03:00", today=None, now=None,
+             cache_b=0):
     """算一份预警结论。返回值就是接口契约，字段名不许随手改。
 
     参数里的 `cleanup_overdue_h` 由调用方算（它才知道 cleanup-state 与时刻）：
     传 None = 不知道/还没到点；传数字 = 已经晚了这么多小时。
+
+    `cache_b`（0.9.141）：`<record_dir>/_cache` 的占用。它和录像在同一块盘上，
+    但不属于"录像"，必须从"其它数据"里摘出来单独算 —— 否则 14GB 的播放缓存
+    会被当成"别的应用占的"，用户看到空间告急却不知道该删什么。
     """
     now = float(now if now is not None else time.time())
     warn_gb = clamp_warn_gb(warn_gb if warn_gb is not None else DEFAULT_WARN_GB)
     free_b, total_b, used_b = _num(free_b), _num(total_b), _num(used_b)
+    cache_b = max(0.0, _num(cache_b))
     rates, basis, basis_label = rates_of(days_by_kind, today=today, now=now)
     keep = keep_map(keep_days)
     rate = sum(rates.values())
     # 各层分开乘：归档只装活动片段，用全时的速率乘归档天数会放大好几倍
     need = sum(rates[k] * keep[k] for k in KINDS)
-    # 非录像占用：总容量里既不是剩余、也不是我们能统计到的录像，那就是别的东西
+    # 非录像占用：总容量里既不是剩余、也不是我们能统计到的录像/缓存，那就是别的东西
     # （系统、桌面、别的应用）。算不出总体（statvfs 失败）时留 None，不瞎减。
-    other = max(0.0, total_b - free_b - used_b) if total_b > 0 else None
+    other = max(0.0, total_b - free_b - used_b - cache_b) if total_b > 0 else None
     headroom = (total_b - other - need) if other is not None else None
     out = {
         "level": "ok",
         "free_gb": gb(free_b), "total_gb": gb(total_b), "used_gb": gb(used_b),
+        "cache_gb": gb(cache_b),
         "other_gb": gb(other) if other is not None else None,
         "rate_gb": gb(rate), "rate_basis": basis, "rate_label": basis_label,
         "rates_gb": dict((k, gb(rates[k])) for k in KINDS),
@@ -258,6 +266,16 @@ def evaluate(free_b, total_b, used_b, days_by_kind, keep_days, warn_gb=None,
             "cleanup_stale", lvl,
             "每天 %s 的清理已经晚了 %.1f 小时还没跑（空间不会自己回来）"
             % (retention.parse_hhmm(cleanup_at), late)))
+
+    # ④ 缓存占了多少（0.9.141）。它和录像在同一块盘上，但属于**可立刻回收**的
+    # 那部分：清存储目录就没了，下一分钟自动重建。只在空间已经紧张时提 ——
+    # 平时说"你有 200MB 缓存"是纯噪音，用户既不会更安心，也不会去做任何事。
+    if cache_b >= CACHE_HINT_MIN and (
+            free_b < warn_line or (headroom is not None and headroom < 0)):
+        reasons.append(_reason(
+            "cache", "warn",
+            "播放缓存占 %.1f GB（_cache/remux，会自动压到 5 GB 以内；"
+            "清一次存储目录可立刻回收）" % (cache_b / GB)))
 
     if not reasons:
         if rate <= 0:

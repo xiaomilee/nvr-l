@@ -434,8 +434,12 @@ def deploy(args):
                 print("      " + ln[:160])
 
         box.run("rm -rf %s" % stage)
-        # 只留最近 5 个备份，不然测试机磁盘会被自己撑爆
+        # 只留最近 5 个备份，不然测试机磁盘会被自己撑爆。
+        # cmd-* 也要清：那是覆盖生命周期脚本前拷的，属主是 root，应用自己删不掉
+        # （cache.prune_backup 只能清自己拥有的），不清就会攒一地空目录。
         box.run("ls -1dt %s/backup/app-* 2>/dev/null | tail -n +6 | xargs -r rm -rf"
+                % var_dir, sudo=True)
+        box.run("ls -1dt %s/backup/cmd-* 2>/dev/null | tail -n +6 | xargs -r rm -rf"
                 % var_dir, sudo=True)
 
         if args.report:

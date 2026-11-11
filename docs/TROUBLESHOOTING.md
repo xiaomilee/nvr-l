@@ -413,6 +413,44 @@ ps aux | grep nvr_slim.py | grep -v grep            # python 本尊是否还在
 不设 `TRIM_APPDEST` / `TRIM_PKGVAR` 也可以——0.9.140 起脚本会回退到 target / var
 符号链接找程序与数据目录。
 
+## 6.0.9 应用数据目录（`@appdata/nvr`）越来越大 / 缓存到底写在哪（0.9.141）
+
+**现象**：`/vol1/@appdata/nvr` 占十几 GB，而存储盘（`record_dir`）上明明也有一份。
+
+**原因**：0.9.140 及以前，程序自己攒的可再生文件全在配置目录里：`event_shots/`
+（事件截图，几百 MB）、`remux/`（移动端播放的 faststart 重封装副本）、
+`snapshots/`、`tmp/`。其中 `remux` 最要命——**它没有任何删除逻辑**，
+每播一次多一份副本（5 分钟 720p ≈ 60MB），生产机攒到 14GB，把系统盘写满之后
+ffmpeg 报 ENOSPC、录制停摆、页面白屏。
+
+**0.9.141 之后**：
+
+| 位置 | 放什么 | 量级 |
+|---|---|---|
+| `<record_dir>/_cache/shots` | 事件截图与检测框 json | 随保留期（7 天） |
+| `<record_dir>/_cache/snapshots` | 首页快照（每路一张，覆盖写） | 有界 |
+| `<record_dir>/_cache/remux` | 播放重封装副本 | **上限 5GB / 7 天**（LRU） |
+| `<record_dir>/_cache/tmp` | 抽帧 / 浓缩 / 导出临时文件 | 用完即删 |
+| `<var>/config.json` `secret` `port.txt` `log` `backup` `ort` | 配置、密钥、日志、备份、模型 | ≈130MB，不随使用增长 |
+
+**升级时的迁移**：后台线程一次跑完，事件图与快照搬走（不丢），
+`remux` 与 `tmp` 直接删（跨卷搬 14GB 换不来任何东西，下次播放自己重建）。
+迁移期间旧目录里的图**仍可读**，事件页不会一升级就全空。搬完在 var 下留一个
+`.cache-migrated` 标记，之后不再重试。
+
+**想立刻回收空间**：清一次 `<record_dir>`（录像会真丢，`_cache` 下一分钟自己重建）。
+注意只清存储目录**清不掉旧版留在 `@appdata/nvr` 的 `remux`**——那部分要升级后由
+迁移逻辑删，或者手工 `rm -rf /vol1/@appdata/nvr/remux`。
+
+**外接盘掉线会怎样**：`cache` 每 20 秒真写一个字节探测（`isdir` 对只读挂载、
+ACL 改坏、配额打满全都返回 True，靠它判断不可靠）。不可用时回退到
+`var/_cache`，日志里记一条"缓存落点回退"，诊断页用红字标出"存储盘不可用"，
+盘插回来自动把回退期攒的文件搬回去。**绝不会在挂载点上创建目录**——
+那等于把 `_cache` 建到根分区，问题是"悄悄写错地方"而不是"报错"。
+
+**看当前落点**：`curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18080/api/status | python3 -m json.tool | grep -A6 '"cache"'`，
+或诊断页「存储」卡片里「播放缓存 / 事件图」那一行。
+
 ## 6.1 导出时间段：包下不来 / 解不开 / 少了几段
 
 导出是「先计划、再打包」两步，出问题先分清是哪一步（0.9.127）。

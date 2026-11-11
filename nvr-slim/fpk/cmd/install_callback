@@ -87,8 +87,9 @@ done
 # 先建顶层再修正属主，然后建子目录：顺序反了会在子目录上留下 root 属主
 mkdir -p "$VAR_DIR" 2>/dev/null
 fix_perm "$VAR_DIR"
-mkdir -p "$LOG_DIR" "$VAR_DIR/slots" "$VAR_DIR/thumbs" "$VAR_DIR/tmp" \
-  "$VAR_DIR/rec" 2>/dev/null \
+# 0.9.141 起 tmp / thumbs 不再在这里建：抽帧与浓缩的临时文件、首页快照都
+# 挪到 <录像目录>/_cache 下（见 cache.py），配置目录只留配置、日志、备份。
+mkdir -p "$LOG_DIR" "$VAR_DIR/slots" "$VAR_DIR/rec" 2>/dev/null \
   || fail "无法创建数据目录：$VAR_DIR（运行用户 $APP_USER，请检查该目录属主与 ACL）"
 fix_perm "$VAR_DIR"
 

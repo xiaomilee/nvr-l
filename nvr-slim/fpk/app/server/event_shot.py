@@ -22,8 +22,12 @@
 
 存储布局
 --------
-    var/event_shots/<cam>/<YYYY-MM-DD>/<HHMMSS>_<mmm>.jpg
-    var/event_shots/<cam>/<YYYY-MM-DD>/<HHMMSS>_<mmm>.json   （检测框，0.9.130）
+    <record_dir>/_cache/shots/<cam>/<YYYY-MM-DD>/<HHMMSS>_<mmm>.jpg
+    <record_dir>/_cache/shots/<cam>/<YYYY-MM-DD>/<HHMMSS>_<mmm>.json  （检测框）
+
+0.9.141 起落在存储路径下的 `_cache/shots`（以前是 `var/event_shots`）：图是
+"每天几百张 × 每路"的量级，攒在配置目录里迟早把系统盘吃掉。旧目录在迁移完成
+之前仍会被读取（`roots_of`），所以升级瞬间不会出现"事件页全没图"。
 
 - 日期目录与文件名都取**图片时刻**，不取事件时刻：跨零点时图落在正确的那一天，
   查询跨天不会漏；事件被重判外推、被 merge 合并时文件名也不会跟着变。
@@ -41,6 +45,8 @@ import re
 import shutil
 import threading
 import time
+
+import cache
 
 # 保留 7 天：与录像保留期的默认值同量级。图是"那一眼"，不是档案。
 KEEP_DAYS = 7
@@ -126,36 +132,77 @@ def name_at(at):
 
 
 def root_of(var_dir):
+    """事件图的主根：`<record_dir>/_cache/shots`（盘不可用时回退 `var/_cache/shots`）。"""
+    return cache.sub(var_dir, "shots") or os.path.join(var_dir, DIR_NAME)
+
+
+def legacy_root_of(var_dir):
+    """0.9.140 及以前的位置。迁移没做完（或跨卷搬失败）时还要能读到。"""
     return os.path.join(var_dir, DIR_NAME)
 
 
-def dir_of(var_dir, cam, date):
-    """`var/event_shots/<cam>/<date>`；cam / date 不合法返回 None。"""
+def roots_of(var_dir):
+    """读图时的候选根：主根在前，旧目录（若还在）在后。
+
+    为什么读要兼容两处、写只认一处：迁移是后台跑的，升级后头几十秒旧目录里
+    还躺着几百张图。写入必须只有一个落点（否则新图继续往旧目录灌，永远搬不完），
+    读取多查一处的代价只是一次 listdir。
+    """
+    main = root_of(var_dir)
+    out = [main] if main else []
+    legacy = legacy_root_of(var_dir)
+    if os.path.isdir(legacy):
+        a = os.path.abspath(legacy)
+        if all(os.path.abspath(x) != a for x in out):
+            out.append(legacy)
+    return out
+
+
+def dir_of(var_dir, cam, date, root=None):
+    """`<root>/<cam>/<date>`；cam / date 不合法返回 None。"""
     cam, date = str(cam or ""), str(date or "")
     if not _CAM_RE.match(cam) or not _DATE_RE.match(date):
         return None
-    return os.path.join(root_of(var_dir), cam, date)
+    return os.path.join(root or root_of(var_dir), cam, date)
 
 
-def path_of(var_dir, cam, date, name):
+def path_of(var_dir, cam, date, name, existing=False):
     """文件名 → 绝对路径；cam / date / name 任一不合法返回 None。
 
     这一层是防穿目录的唯一入口：`..`、绝对路径、子目录名在这里就被正则挡住，
     调用方不需要（也不该）再自己拼一遍路径。
+
+    `existing=True` 用于**读**：主根没有就按 `roots_of` 往后找，返回真正存在的
+    那个路径；都找不到时仍返回主根路径（让调用方自己 404，语义与以前一致）。
     """
-    d = dir_of(var_dir, cam, date)
-    if d is None or parse_name(name) is None:
+    if parse_name(name) is None:
         return None
-    return os.path.join(d, str(name))
+    if not existing:
+        d = dir_of(var_dir, cam, date)
+        return os.path.join(d, str(name)) if d else None
+    main = None
+    for r in roots_of(var_dir):
+        d = dir_of(var_dir, cam, date, root=r)
+        if d is None:
+            return None
+        p = os.path.join(d, str(name))
+        if main is None:
+            main = p
+        if os.path.isfile(p):
+            return p
+    return main
 
 
-def meta_path_of(var_dir, cam, date, name):
+def meta_path_of(var_dir, cam, date, name, existing=False):
     """`HHMMSS_mmm.jpg` → 同名 `.json` 的绝对路径；参数不合法返回 None。
 
     只换后缀、不拼新目录：jpg 能过 `path_of` 的校验，json 就一定也在同一个
     合法目录里，穿目录的口子在 `path_of` 一处就够了。
+
+    `existing=True` 时先按"图实际在哪"定位：迁移过程中图可能在旧目录，
+    框必须跟着图走，不能一张在盘上一张在配置目录。
     """
-    p = path_of(var_dir, cam, date, name)
+    p = path_of(var_dir, cam, date, name, existing=existing)
     if p is None:
         return None
     return p[:-len(".jpg")] + META_SUFFIX
@@ -207,7 +254,7 @@ def read_meta(var_dir, cam, date, name):
     坏 JSON 与前一张图的情况一样：**当作没存框**，不修、不重建、不报错。
     框是附属物里的附属物，为它去猜一份"看起来对"的数据就是评审点名的假数据。
     """
-    p = meta_path_of(var_dir, cam, date, name)
+    p = meta_path_of(var_dir, cam, date, name, existing=True)
     if p is None:
         return None
     try:
@@ -251,14 +298,18 @@ def list_for(var_dir, cam, date):
         got = _CACHE.get(key)
         if got is not None and now - got[0] < CACHE_TTL:
             return got[1]
-    d = dir_of(var_dir, cam, date)
+    d_list = []
+    for r in roots_of(var_dir):
+        d = dir_of(var_dir, cam, date, root=r)
+        if d is not None:
+            d_list.append(d)
     names = []
-    if d is not None:
+    for d in d_list:
         try:
-            names = [n for n in os.listdir(d) if parse_name(n) is not None]
+            names.extend(n for n in os.listdir(d) if parse_name(n) is not None)
         except OSError:
-            names = []          # 目录不存在 / 没权限：就是"没有图"，不是错误
-    names.sort()
+            pass                # 目录不存在 / 没权限：就是"没有图"，不是错误
+    names = sorted(set(names))
     with _CACHE_LOCK:
         _CACHE[key] = (now, names)
     return names
@@ -518,29 +569,32 @@ class ShotStore:
         cutoff = time.strftime("%Y-%m-%d", time.localtime(
             now - (self.keep_days - 1) * DAY_SEC))
         removed = 0
-        try:
-            cams = os.listdir(self.root)
-        except OSError:
-            return 0
-        for cam in cams:
-            if not _CAM_RE.match(cam):
-                continue
-            cdir = os.path.join(self.root, cam)
+        # 落点可能已经从回退态切回存储路径（盘插回来了），每次清理重新解析；
+        # 两个根都扫 —— 旧目录里的图同样要按保留期过期，不能因为搬了一半就留着。
+        for base in roots_of(self.var_dir):
             try:
-                days = os.listdir(cdir)
+                cams = os.listdir(base)
             except OSError:
                 continue
-            for day in days:
-                if not _DATE_RE.match(day) or day >= cutoff:
+            for cam in cams:
+                if not _CAM_RE.match(cam):
                     continue
-                target = os.path.join(cdir, day)
-                if not os.path.isdir(target):
-                    continue
+                cdir = os.path.join(base, cam)
                 try:
-                    shutil.rmtree(target)
-                    removed += 1
-                except OSError as e:
-                    self.log("清不掉旧事件快照 %s：%r" % (target, e))
+                    days = os.listdir(cdir)
+                except OSError:
+                    continue
+                for day in days:
+                    if not _DATE_RE.match(day) or day >= cutoff:
+                        continue
+                    target = os.path.join(cdir, day)
+                    if not os.path.isdir(target):
+                        continue
+                    try:
+                        shutil.rmtree(target)
+                        removed += 1
+                    except OSError as e:
+                        self.log("清不掉旧事件快照 %s：%r" % (target, e))
         if removed:
             with _CACHE_LOCK:
                 _CACHE.clear()
@@ -565,9 +619,9 @@ class ShotStore:
                     "running": self.alive(), "keep_days": self.keep_days,
                     "max_per_day": self.max_per_day,
                     "min_gap_sec": self.min_gap,
-                    "dir": self.root, "error": self._write_err}
+                    "dir": root_of(self.var_dir), "error": self._write_err}
         if need:
-            size = _du(self.root)
+            size = sum(_du(r) for r in roots_of(self.var_dir))
             with self._lock:
                 self._du = (now, size)
         snap["bytes"] = size

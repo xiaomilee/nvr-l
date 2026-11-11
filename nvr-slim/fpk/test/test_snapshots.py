@@ -49,7 +49,7 @@ class SnapshotWorkerTest(unittest.TestCase):
                                fake_run_factory(written)):
             ok = self.w._grab("cam-01", "rtsp://a")
         self.assertTrue(ok)
-        final = os.path.join(self.var, "snapshots", "cam-01.jpg")
+        final = os.path.join(self.w.snap_dir(), "cam-01.jpg")
         self.assertTrue(os.path.isfile(final))
         self.assertGreater(os.path.getsize(final), 1024)
         self.assertFalse(os.path.isfile(final + ".part"))   # 没有残留半成品
@@ -60,7 +60,7 @@ class SnapshotWorkerTest(unittest.TestCase):
                                fake_run_factory([], size=256)):
             ok = self.w._grab("cam-01", "rtsp://a")
         self.assertFalse(ok)
-        final = os.path.join(self.var, "snapshots", "cam-01.jpg")
+        final = os.path.join(self.w.snap_dir(), "cam-01.jpg")
         self.assertFalse(os.path.isfile(final))
         self.assertFalse(os.path.isfile(final + ".part"))   # 废图连同 .part 一起清掉
 
