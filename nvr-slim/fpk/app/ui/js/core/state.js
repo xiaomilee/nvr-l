@@ -416,6 +416,11 @@ const LK = {
   ntCooldown:60,
   ntPlatform:"auto",
   ntTemplate:"",
+  /* 公众号（0.9.142）：platform="wechat" 时才用。secret 永远是空串 ——
+     服务端 GET /api/config 时就把它抹掉了，页面拿不到原文；用户重新填一份
+     才会改，留空＝沿用服务端那份。secret_set 只用于界面显示「已保存」，
+     不推给服务端（norm 会丢掉未知键）。 */
+  ntWechat:{appid:"", secret:"", openid:"", template_id:"", key:"content", url:""},
   pending:0,          // 待处理数 —— 以 /api/link 返回为准，不再本地编数
   done:0,
   silent:0,

@@ -1,4 +1,4 @@
-# 配置项参考（0.9.141）
+# 配置项参考（0.9.142）
 
 这份文档回答一个设置项被改完之后**到底谁会重新读它**。它属于批次 5 的文档重构，
 方向上是 P0「可信、能无人值守」：前几轮在按钮验收表上连续抓到三个「接口回 ok、
@@ -152,16 +152,29 @@
 
 默认来自 `detect.NOTIFY_DEFAULTS`（`detect.py:98`）：
 `webhook=""`、`motion/person/vehicle=false`、`cooldown=60`、
-`platform="auto"`、`template=""`。
+`platform="auto"`、`template=""`、`wechat={appid:"",secret:"",openid:"",
+template_id:"",key:"content",url:""}`。
 `norm_notify()` 把 `webhook` / `template` 各截到 500 字符、`cooldown` 夹到
 `30~600`、`platform` 按 `notify_tpl.PLATFORMS` 白名单强校（写错一个词回落
 `auto`，不会让整条通知发不出去）。
 分发器 `Notifier` 用 `cfg_fn` 每轮读盘，所以改冷却时间不需要重启。
 
 - `platform`：`auto` 表示按 webhook 的 host 自动识别（飞书 / 钉钉 / 企业微信 /
-  Server酱 / Bark，认不出来回退通用胖 JSON）；其余值强制按该平台出 body。
+  Server酱（含 Server酱³ 的 `xxx.push.ft07.com`）/ Bark，认不出来回退通用胖 JSON）；
+  其余值强制按该平台出 body。`wechat` 是唯一一个**没有 webhook 地址**的平台，
+  `platform_of()` 永远认不出它，只能由人显式选——判「这条通知走哪条通道」用
+  `notify.channel_of()`，不要自己看 `webhook` 是否为空。
   存在的理由是公司网关常把机器人地址代理成自家域名，host 已经不是官方域名，
   **自动识别永远认不出来，只能由人指定**。
+- `wechat`（0.9.142）：`platform="wechat"` 时使用的公众号凭据。走**两步接口**
+  ——`cgi-bin/token` 换 `access_token`（内存缓存 7000 秒，提前 200 秒续），再用
+  `cgi-bin/message/template/send` 发模板消息。`openid` 必须是**已关注该公众号**的
+  那个人（测试号在「用户列表」里看）；`template_id` 是模板列表里那一长串；`key`
+  是模板变量的**键名**，默认 `content`——因为模板写的是 `{{content.DATA}}`，
+  `.DATA` 是微信的固定后缀，填成 `DATA` 会直接 40037。`url` 可空（点消息跳转的
+  地址）。**`secret` 只进不出**：`GET /api/config` 经 `runtime.redact_cfg()` 抹成
+  空串 + `secret_set: true`，页面拿不到原文；保存时留空即沿用磁盘那份，整个
+  `wechat` 块没带（旧前端/旧缓存）也保留——否则一次「保存通用设置」就能把凭据清空。
 - `template`：自定义文案，占位符只认 `{cam} {cat} {label} {time} {date}`。
   写了未知占位符、或超过 500 字，不会丢通知，只在渲染时回退默认文案，
   并把原因报到 `/api/status` 的 `notify.render.template_why`——界面上那句

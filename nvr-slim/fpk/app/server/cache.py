@@ -129,15 +129,20 @@ def _store_root():
 # ------------------------------------------------------------------ 落点
 
 def _probe(d):
-    """真写一个字节再删掉。目录不存在/只读/配额满都会在这里失败。"""
+    """真写一个字节再删掉。目录不存在/只读/配额满都会在这里失败。
+
+    返回 (ok, 原因)。**原因要带出来**：0.9.142 在 152 上遇到过一次部署瞬间的
+    回退，日志里只有「存储路径不可写」，没人知道是 EACCES 还是 ENOSPC ——
+    前者是该查属主，后者是该清盘，处置完全相反。
+    """
     p = os.path.join(d, PROBE_FILE)
     try:
         with open(p, "w", encoding="utf-8") as f:
             f.write("1")
         os.unlink(p)
-        return True
-    except OSError:
-        return False
+        return True, ""
+    except OSError as e:
+        return False, "%s %s" % (type(e).__name__, getattr(e, "strerror", "") or "")
 
 
 def _var_root(var_dir):
@@ -172,15 +177,17 @@ def root(var_dir):
         why = "存储路径不可用（%s）" % st
     else:
         d = os.path.join(st, ROOT_NAME)
+        perr = ""
         try:
             os.makedirs(d, exist_ok=True)
-            ok = _probe(d)
-        except OSError:
+            ok, perr = _probe(d)
+        except OSError as e:
             ok = False
+            perr = "%s %s" % (type(e).__name__, getattr(e, "strerror", "") or "")
         if ok:
             cand = d
         else:
-            why = "存储路径不可写（%s）" % d
+            why = ("存储路径不可写（%s）：%s" % (d, perr.strip() or "未知原因"))
 
     fallback = _var_root(var_dir)
     if cand is None:

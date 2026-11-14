@@ -62,6 +62,14 @@ try:
 except ImportError:
     _notify_tpl = None
 
+try:
+    # 公众号配置块的字段校验（0.9.142）。同目录模块；缺了就把 wechat 块
+    # 原样留着（不清空），绝不能让「一个模块导入失败」变成「把用户填的
+    # appid/secret 抹掉」——那种事故用户根本查不出来。
+    import wechat_push as _wechat_push
+except ImportError:
+    _wechat_push = None
+
 # ---------------------------------------------------------------- 类别体系
 
 # COCO 80 类里本项目关心的 6 类 → 内部三分类。
@@ -105,6 +113,11 @@ NOTIFY_DEFAULTS = {
     # 其余值强制按该平台出 body。空模板 = 默认文案。
     "platform": "auto",
     "template": "",
+    # 公众号（0.9.142）：只在 platform="wechat" 时使用。字段全空表示没配，
+    # 一旦填了就必须原样保住 —— 它是整块覆盖保存的，少一个键就等于把用户
+    # 在另一台设备上填的 appsecret 抹掉。
+    "wechat": {"appid": "", "secret": "", "openid": "",
+               "template_id": "", "key": "content", "url": ""},
 }
 
 DETECT_ENUMS = {
@@ -366,6 +379,11 @@ def norm_notify(cfg):
         "cooldown": int(_clamp(src.get("cooldown"), 30, 600, NOTIFY_DEFAULTS["cooldown"])),
         "platform": plat,
         "template": str(src.get("template") or "").strip()[:500],
+        # 公众号配置块：走 wechat_push.norm 统一裁剪（同一份规则，避免前端推上来的
+        # 和本地补的字段不一致）。模块缺失时**原样保留**而不是清空 —— 见导入处的注释。
+        "wechat": (_wechat_push.norm(src.get("wechat")) if _wechat_push
+                   else (src.get("wechat") if isinstance(src.get("wechat"), dict)
+                         else dict(NOTIFY_DEFAULTS["wechat"]))),
     }
 
 

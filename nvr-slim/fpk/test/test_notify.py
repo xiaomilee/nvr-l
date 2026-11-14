@@ -210,5 +210,51 @@ class TestSyncTest(NotifierTestBase):
         self.assertTrue(err)
 
 
+class TestTestSendWechat(unittest.TestCase):
+    """公众号的「测试发送」（0.9.142）。
+
+    真机抓到过一个假象：页面拿不到 appsecret 原文（GET /api/config 抹空了），
+    测试发送传上来的 secret 永远是空串 → 服务端报「缺 appsecret」，
+    可保存之后真实事件却发得出去。同一个配置，一个按钮说没配好、
+    实际却在发，这是最费解的那种故障。
+    """
+
+    def setUp(self):
+        self.sent = []
+        self._orig = notify.wechat_push.send
+        notify.wechat_push.send = self._fake
+        self.wx = {"appid": "wxid", "secret": "s" * 32, "openid": "oid",
+                   "template_id": "tid", "key": "content", "url": ""}
+
+    def tearDown(self):
+        notify.wechat_push.send = self._orig
+
+    def _fake(self, wx, text, timeout=8):
+        self.sent.append((dict(wx), text))
+        return True, 12, "", True
+
+    def _notifier(self, wx):
+        return notify.Notifier(lambda: {"notify": {"platform": "wechat",
+                                                   "wechat": wx,
+                                                   "person": True}})
+
+    def test_empty_secret_falls_back_to_disk(self):
+        n = self._notifier(self.wx)
+        ok, _ms, err, plat = n.test("", platform="wechat",
+                                    wx=dict(self.wx, secret=""))
+        self.assertTrue(ok, err)
+        self.assertEqual(plat, "wechat")
+        self.assertEqual(self.sent[0][0]["secret"], "s" * 32,
+                         "空 secret 必须沿用服务端那份")
+
+    def test_missing_fields_still_reported(self):
+        n = self._notifier({"appid": "", "secret": "", "openid": "",
+                            "template_id": ""})
+        ok, _ms, err, _plat = n.test("", platform="wechat", wx={})
+        self.assertFalse(ok)
+        self.assertIn("未配置完整", err)
+        self.assertEqual(self.sent, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

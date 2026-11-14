@@ -175,8 +175,29 @@ class Wiring(unittest.TestCase):
 
     def test_100_server_test_endpoint_forwards_override(self):
         src = read(os.path.join(ROOT, "app", "server", "nvr_slim.py"))
-        self.assertIn("nt.test(url, tpl=tpl, platform=plat)", src,
-                      "测试发送必须把界面上刚填的模板/平台带上")
+        self.assertIn("nt.test(url, tpl=tpl, platform=plat, wx=wx)", src,
+                      "测试发送必须把界面上刚填的模板/平台/公众号凭据带上")
+        # 公众号没有地址：不能再用「Webhook 地址为空」把它拦在门外（0.9.142）
+        self.assertIn("notify_tpl.norm_platform(plat) != \"wechat\"", src,
+                      "公众号的测试发送不该要求 webhook 地址")
+
+    def test_101_push_cfg_includes_wechat(self):
+        """公众号配置块整块推：漏推就等于把用户填的 appsecret 抹掉。"""
+        self.assertIn("wechat: LK.ntWechat || {}", self.live)
+
+    def test_102_state_has_wechat(self):
+        self.assertIn("ntWechat", self.state)
+
+    def test_103_wechat_fields_are_bound_by_data_attr(self):
+        """五个输入框靠 data-ntwx 绑定；换成按 id 拼名字，改个字段就要改两处。"""
+        self.assertIn('data-ntwx="', self.cards)
+        self.assertIn('[data-ntwx]', self.wiring)
+
+    def test_104_secret_never_round_trips(self):
+        """页面拿不到 secret 原文：读回时强制成空串，只留 secret_set 标记。"""
+        self.assertIn("secret: \"\"", self.live)
+        self.assertIn("secret_set", self.live)
+        self.assertIn("secret_set", self.cards)
 
 
 if __name__ == "__main__":

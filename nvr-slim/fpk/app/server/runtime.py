@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.141"
+VERSION = "0.9.142"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -103,6 +103,10 @@ DEFAULTS = {
         # 会被整块覆盖打回默认（第 21 轮 detect.confirm 踩过同一个坑）。
         "platform": "auto",
         "template": "",
+        # 公众号（0.9.142）：platform="wechat" 时用它换 access_token 发模板消息。
+        # 六个键必须一起进 pushCfg —— 整块覆盖，少推一个就等于把已填的抹掉。
+        "wechat": {"appid": "", "secret": "", "openid": "",
+                   "template_id": "", "key": "content", "url": ""},
     },
     "updated_at": None,
 }
@@ -211,6 +215,19 @@ def redact_cfg(cfg):
     d = dict(cfg or {})
     if isinstance(d.get("cameras"), list):
         d["cameras"] = redact_cams(d["cameras"])
+    # 公众号 appsecret（0.9.142）：它等于这个公众号的账号密码，浏览器不该拿到
+    # 原文。抹成空串 + secret_set 标记，界面据此显示「已保存 · 留空表示不修改」；
+    # 保存时留空即沿用磁盘那份（逻辑在 /api/config 的入口处）。
+    nt = d.get("notify")
+    if isinstance(nt, dict):
+        wx = nt.get("wechat")
+        if isinstance(wx, dict) and wx.get("secret"):
+            nt = dict(nt)
+            wx = dict(wx)
+            wx["secret"] = ""
+            wx["secret_set"] = True
+            nt["wechat"] = wx
+            d["notify"] = nt
     return d
 
 

@@ -67,6 +67,7 @@ import detect  # noqa: E402
 import event_shot  # noqa: E402
 import motion_shot  # noqa: E402
 import notify  # noqa: E402
+import notify_tpl  # noqa: E402  （/api/notify/test 判「公众号没有地址」用）
 import archive  # noqa: E402
 import health  # noqa: E402
 import auth  # noqa: E402
@@ -348,6 +349,33 @@ def _access_snapshot():
         return _ACCESS_TOTAL[0], lines
 
 
+_HTTP_METHOD = re.compile(r"^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH)\s")
+_ACCESS_TS = re.compile(r"^\d{2}:\d{2}:\d{2}\s")
+
+
+def access_line(line):
+    """访问日志一行 → 可以落盘的样子。两件事都在这里做，不能指望调用方：
+
+    * **畸形请求的「请求行」可以是任意内容**。0.9.142 实测：`curl` 参数写错时
+      整个 JSON body 被当成请求行送进来，而里面正带着公众号的 appsecret ——
+      于是密钥原样进了 nvr.log。`redact` 帮不上：它按「参数名像密钥」匹配，
+      而这段是一坨 JSON。所以判据换成「这行是不是一个正常的请求行」，
+      不是就压成一句摘要（保留长度，能看出「有人发了很大的东西」）。
+    * **长度封顶**：body 上限是 4MB，访问环只有 120 条，一行就能把环整个顶掉。
+
+    时间戳前缀由调用方加，这里剥掉再判、判完拼回去 —— 否则每一行都以
+    `13:09:00` 开头，方法判断永远不成立，正常的请求行也会被压成摘要。
+    """
+    line = str(line or "")
+    ts = ""
+    m = _ACCESS_TS.match(line)
+    if m:
+        ts, line = m.group(0), line[m.end():]
+    if not _HTTP_METHOD.match(line.lstrip('"')):
+        return ts + "[非 HTTP 请求行，%d 字符已省略]" % len(line)
+    return ts + redact.mask_text(line)[:300]
+
+
 def _record_access(line):
     """HTTP 访问行：进独立的 120 条小环，**不碰业务缓冲**。
 
@@ -356,7 +384,7 @@ def _record_access(line):
     次数在 _access_tail_locked() 里补一行。总量 _ACCESS_TOTAL 照常累加，
     诊断页仍能看出「这次到底发生了多少请求」。
     """
-    line = redact.mask_text(line)
+    line = access_line(line)
     with _ACCESS_LOCK:
         _ACCESS_TOTAL[0] += 1
         path = _access_path(line)
@@ -3596,6 +3624,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if any(q in line for q in self.QUIET):
             return
+        # 压缩 / 脱敏 / 截断都在 _record_access → access_line 里做（0.9.142）：
+        # 畸形请求的「请求行」可能就是整个 JSON body，里面可能正带着密钥。
         # 访问行只进独立小环（0.9.73）：回放一次能刷几百条，绝不能挤业务日志
         _record_access("%s %s" % (time.strftime("%H:%M:%S"), line))
 
@@ -4420,6 +4450,20 @@ class Handler(BaseHTTPRequestHandler):
                 _old = (cfg.get("detect") or {}).get("confirm")
                 if isinstance(_old, dict):
                     _det["confirm"] = _old
+            # 公众号 appsecret（0.9.142）只进不出：GET /api/config 用 redact_cfg
+            # 把它抹成空串，前端手里本来就没有原文。推回来时为空表示「没改」，
+            # 沿用磁盘那份；整个 wechat 块没带（旧缓存 / 旧前端）也一样保留，
+            # 否则一次「保存通用设置」就能把用户填了半天的凭据清空。
+            _nt = body.get("notify")
+            if isinstance(_nt, dict):
+                _old_wx = ((cfg.get("notify") or {}).get("wechat")
+                           if isinstance(cfg.get("notify"), dict) else None)
+                _wx = _nt.get("wechat")
+                if not isinstance(_wx, dict):
+                    if isinstance(_old_wx, dict) and _old_wx:
+                        _nt["wechat"] = dict(_old_wx)
+                elif not str(_wx.get("secret") or "").strip() and _old_wx:
+                    _wx["secret"] = str(_old_wx.get("secret") or "")
             for k in runtime.DEFAULTS:
                 if k not in body:
                     continue
@@ -4497,17 +4541,20 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/notify/test":
             # 设置页「测试发送」：同步发一条到指定 webhook，如实反馈成败与耗时。
-            # template / platform 允许临时带上：界面上刚改还没保存时，
-            # 测的应当是屏幕上那句话，不是磁盘上的旧值。
+            # template / platform / wechat 允许临时带上：界面上刚改还没保存时，
+            # 测的应当是屏幕上那句话（和那套凭据），不是磁盘上的旧值。
             url = str(body.get("webhook") or "").strip()
-            if not url:
+            plat = body.get("platform") if body.get("platform") is not None else None
+            # 公众号没有地址：只要平台选了 wechat，地址为空是正常的，
+            # 不能再按「Webhook 地址为空」拦下 —— 否则这个通道永远测不了。
+            if not url and notify_tpl.norm_platform(plat) != "wechat":
                 return self._send(200, {"ok": False, "error": "Webhook 地址为空"})
             nt = STATE.get("notifier")
             if nt is None:
                 return self._send(200, {"ok": False, "error": "通知服务未就绪"})
             tpl = body.get("template") if body.get("template") is not None else None
-            plat = body.get("platform") if body.get("platform") is not None else None
-            ok, ms, err, platform = nt.test(url, tpl=tpl, platform=plat)
+            wx = body.get("wechat") if isinstance(body.get("wechat"), dict) else None
+            ok, ms, err, platform = nt.test(url, tpl=tpl, platform=plat, wx=wx)
             return self._send(200, {"ok": ok, "ms": ms, "error": err,
                                     "platform": platform})
 

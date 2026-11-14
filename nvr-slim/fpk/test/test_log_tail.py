@@ -112,6 +112,44 @@ class TailReadTest(unittest.TestCase):
         self.assertNotIn("\ufffd", "".join(got))
 
 
+class AccessLineTest(unittest.TestCase):
+    """访问行的压缩与脱敏（0.9.142）。
+
+    真机事故：`curl` 参数写错时，整个 JSON body 被当成「请求行」送进来，
+    而里面正带着公众号的 appsecret —— `log_request` 原样记下，密钥就进了
+    nvr.log（grep 到 3 处明文）。`redact` 挡不住这类，它按参数名匹配，
+    不认识一坨 JSON。所以判据换成「这行像不像一个正常的请求行」。
+    """
+
+    def test_normal_line_untouched(self):
+        self.assertEqual(
+            nvr_slim.access_line('10:00:00 "GET /api/status HTTP/1.1" 200 -'),
+            '10:00:00 "GET /api/status HTTP/1.1" 200 -')
+
+    def test_token_in_query_masked(self):
+        out = nvr_slim.access_line(
+            '10:00:00 "POST /api/config?token=abcdef123456 HTTP/1.1" 200 -')
+        self.assertNotIn("abcdef123456", out)
+        self.assertIn("token=***", out)
+
+    def test_json_body_as_request_line_collapsed(self):
+        """不带时间戳时也要判得出来（_record_access 的另一个潜在调用方）。"""
+        raw = '{"notify": {"wechat": {"secret": "3f173e7bf28efe67d03657e41d4435ad"}}}'
+        out = nvr_slim.access_line(raw)
+        self.assertNotIn("3f173e7bf28efe67d03657e41d4435ad", out)
+        self.assertIn("非 HTTP 请求行", out)
+        self.assertIn(str(len(raw)), out, "要能看出「有人发了很大的东西」")
+
+    def test_long_line_capped(self):
+        out = nvr_slim.access_line('10:00:00 "GET /' + "x" * 5000 + ' HTTP/1.1" 200 -')
+        self.assertLessEqual(len(out), 320)
+
+    def test_timestamp_is_preserved(self):
+        """时间戳被吃掉的话，日志里就分不清「什么时候」了。"""
+        out = nvr_slim.access_line('23:59:59 "GET / HTTP/1.1" 200 -')
+        self.assertTrue(out.startswith("23:59:59 "))
+
+
 class PayloadTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="nvr-log-p-")

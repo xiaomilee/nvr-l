@@ -87,7 +87,11 @@ function pushCfg(){
                               服务端 notify 块是整块覆盖的，少推一个键就等于
                               把用户在另一台设备上的选择抹回默认。 */
                            platform: LK.ntPlatform || "auto",
-                           template: LK.ntTemplate || "" },
+                           template: LK.ntTemplate || "",
+                           /* 公众号（0.9.142）同样必须整块推：服务端按块覆盖，
+                              少推一个键就等于把用户填的 appsecret 抹掉（GET 时
+                              它被脱敏成空串，前端手里本来就只有空值）。 */
+                           wechat: LK.ntWechat || {} },
                  /* 必须是枚举值：以前推的是 !!GS.gpu 布尔，后端把 "auto" 顶成了
                     true，于是"核显不可用 → 强制单路"的降级保护静默失效 */
                  gpu: (GS.gpu === false ? "off" : "auto") };
@@ -156,6 +160,20 @@ function applyServerCfg(c){
        不能因为旧服务端没这两个键就把它清成默认。 */
     if(typeof n.platform === "string" && n.platform) LK.ntPlatform = n.platform;
     if(typeof n.template === "string") LK.ntTemplate = n.template;
+    /* 公众号（0.9.142）：secret 在这里永远是空串（服务端脱敏过），
+       secret_set 才是「服务端有没有存过」的真相。整块替换而不是逐键合并：
+       用户清空一个字段时，残留的旧值会让人以为没保存成功。 */
+    if(n.wechat && typeof n.wechat === "object"){
+      LK.ntWechat = {
+        appid: String(n.wechat.appid || ""),
+        secret: "",
+        openid: String(n.wechat.openid || ""),
+        template_id: String(n.wechat.template_id || ""),
+        key: String(n.wechat.key || "content"),
+        url: String(n.wechat.url || ""),
+        secret_set: !!n.wechat.secret_set
+      };
+    }
   }
   if(c.link_interval_h){
     const h = +c.link_interval_h;

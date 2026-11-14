@@ -196,9 +196,30 @@ class TestPlatformOverride(unittest.TestCase):
         self.assertEqual(p, "generic")
 
     def test_invalid_platform_falls_back_to_auto(self):
-        self.assertEqual(tpl.norm_platform("wechat"), "auto")
+        # 0.9.142 之前这里用 "wechat" 当反例，它现在成了正经平台；
+        # 换成真正不存在的值，测的还是「写错一个词不该让整条通知发不出去」。
+        self.assertEqual(tpl.norm_platform("wework"), "auto")
         self.assertEqual(tpl.norm_platform(""), "auto")
         self.assertEqual(tpl.norm_platform(None), "auto")
+
+    def test_wechat_is_explicit_only(self):
+        """公众号没有 webhook 地址，靠 host 永远识别不出来，只能手选。"""
+        self.assertEqual(tpl.platform_of("https://api.weixin.qq.com/x"),
+                         "generic")
+        self.assertEqual(tpl.effective_platform("", "wechat"), ("wechat", False))
+        self.assertIn("wechat", tpl.URL_LESS)
+        body, p = tpl.render("", ITEM, None, "wechat")
+        self.assertEqual(p, "wechat")
+        self.assertEqual(set(body), {"data"})
+        self.assertIn("院子", body["data"]["content"]["value"])
+        # 预览体不该带 openid：它不是「可直接发出的请求」
+        self.assertNotIn("touser", body)
+
+    def test_serverchan_v3_host(self):
+        """Server酱³（sctp 开头的 key）走 xxx.push.ft07.com，别再判成通用 JSON。"""
+        self.assertEqual(
+            tpl.platform_of("https://123.push.ft07.com/send/sctpX.send"),
+            "serverchan")
 
     def test_norm_platform_case_and_space(self):
         self.assertEqual(tpl.norm_platform("  BARK "), "bark")

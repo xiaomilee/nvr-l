@@ -451,6 +451,50 @@ ACL 改坏、配额打满全都返回 True，靠它判断不可靠）。不可�
 **看当前落点**：`curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18080/api/status | python3 -m json.tool | grep -A6 '"cache"'`，
 或诊断页「存储」卡片里「播放缓存 / 事件图」那一行。
 
+## 6.0.10 通知发不到微信：先看它到底走了哪条通道（0.9.142）
+
+**现象**：设置页三个「通知」开关都打开了，手机一条也没收到。
+
+**第一步永远是看 `实际平台` 那一行**（设置页通知通道底部）。它来自
+`/api/status` 的 `notify.render`，是「这条通知实际会怎么发」的唯一出处：
+
+```
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:18080/api/status \
+  | python3 -c "import json,sys;d=json.load(sys.stdin)['notify'];print(json.dumps({'channel':d['channel'],'render':d['render'],'alarm':d['alarm']},ensure_ascii=False,indent=1))"
+```
+
+| `channel` | 含义 |
+|---|---|
+| `wechat` | 走公众号（平台手选「微信公众号」） |
+| `url` | 走 Webhook（地址非空且平台不是 wechat） |
+| `none` | 两条都没配好 —— 开关开着也不会发，且**不会报错** |
+
+公众号（`wechat`）能不能发，看 `render.wx`：
+
+- `ready=false` + `missing`：四个字段没填全。`appsecret` 只显示「已保存/未保存」，
+  页面拿不到原文（`redact_cfg` 抹掉了），所以「看着是空的」不代表没存。
+- `ready=true` 但收不到 → 按下面这张表对 errcode。设置页「测试发送」会直接
+  把中文原因显示出来，比翻日志快。
+
+| 症状 / 错误 | 原因 | 怎么办 |
+|---|---|---|
+| `这个 openid 还没关注该公众号`（43004） | 接收人没关注，或 openid 属于另一个公众号 | 让本人扫码关注；openid 换「用户列表」里那一行 |
+| `模板 ID 不存在，或模板变量名与「数据键名」不一致`（40037） | 模板 ID 抄错，或模板写的是 `{{first.DATA}}` 而键名仍是 `content` | 键名改成模板里那个词：`{{content.DATA}}` → `content`，`{{first.DATA}}` → `first` |
+| `appsecret 不对（是否在公众平台重置过？）`（40125） | 重置过 secret，配置里还是旧的 | 重新填一次（留空＝不修改，所以必须粘贴新值） |
+| `appID 不对`（40013） | 抄错，或用了别的公众号的 appID | 测试号页面上那串 `wx…` |
+| `今天的接口调用额度已用尽`（45009） | 测试号模板消息 10 万条/天，正常用不到 | 看是不是有循环在刷；冷却别调成 30 秒以下 |
+| `该公众号没有模板消息权限`（48001） | 用的是未认证订阅号 | 用测试号，或认证服务号 |
+| `access_token 失效（已自动重取一次仍失败）`（40001） | 同 appID 有另一个进程在取 token，互相顶掉 | 只留一个实例；实在要多实例就各自用不同公众号 |
+
+**连续失败 3 条起**：设置页「实际平台」下方和诊断页「通知队列」会挂红字，日志里
+有一条 `[ERR] 通知连续失败 N 条…`。以前这类失败只写在 `<var>/notify-history.jsonl`
+里，界面永远是绿的——额度用尽、openid 没关注可以安静地持续几个月。
+
+**Server酱 相关**：旧版 `sc.ftqq.com` 2021 年已停止服务；Turbo 版
+（`sctapi.ftqq.com`，key 以 `SCT` 开头）仍在运营但免费只有 **5 条/天**；
+Server酱³ 的 key 以 `sctp` 开头，地址是 `https://{uid}.push.ft07.com/send/{key}.send`
+（0.9.142 起能正确识别为 Server酱，之前会显示「通用 JSON」）。
+
 ## 6.1 导出时间段：包下不来 / 解不开 / 少了几段
 
 导出是「先计划、再打包」两步，出问题先分清是哪一步（0.9.127）。

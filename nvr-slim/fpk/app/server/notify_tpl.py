@@ -37,17 +37,28 @@ PLATFORM_HOSTS = (
     ("feishu", ("open.feishu.cn", "open.larksuite.com")),
     ("dingtalk", ("oapi.dingtalk.com",)),
     ("wecom", ("qyapi.weixin.qq.com",)),
-    ("serverchan", ("sctapi.ftqq.com", "sc.ftqq.com")),
+    # push.ft07.com 是 Server酱³（SendKey 以 sctp 开头）。0.9.142 之前只认
+    # 前两代域名，于是新 key 会被判成 generic —— 靠兜底 JSON 里的 title/desp
+    # 还能发出去，但界面显示「通用 JSON」，排障时会把人往错方向带。
+    ("serverchan", ("sctapi.ftqq.com", "sc.ftqq.com", "push.ft07.com")),
     ("bark", ("api.day.app",)),
 )
 GENERIC = "generic"
 # 平台可选值：auto 之外都是「强制按这套 body 发」。顺序即设置页下拉顺序，
 # 前端不另抄一份 —— 服务端把这张表原样放进 /api/status，界面照它渲染。
+#
+# wechat 是个例外：它不是 URL 通道，而是两步接口（换 token → 发模板消息），
+# `platform_of()` 永远不会认出它，必须由人在设置页显式指定。放在最后而不是
+# 挨着 wecom，就是为了提醒读代码的人「这个和上面那些不是一回事」。
 PLATFORMS = ("auto", "feishu", "dingtalk", "wecom", "serverchan", "bark",
-             GENERIC)
+             "wechat", GENERIC)
 PLATFORM_LABEL = {"auto": "自动识别", "feishu": "飞书", "dingtalk": "钉钉",
                   "wecom": "企业微信", "serverchan": "Server酱",
-                  "bark": "Bark", GENERIC: "通用 JSON"}
+                  "bark": "Bark", "wechat": "微信公众号",
+                  GENERIC: "通用 JSON"}
+# 走两步接口、没有 webhook 地址的平台。别处要用「有没有地址」判断能不能发时，
+# 必须先问它一句，否则公众号会被当成「没配」直接静默丢掉。
+URL_LESS = ("wechat",)
 
 # 标签与 notify.CAT_LABEL 保持一致，但这里单独一份：模板模块不该反向依赖
 # 分发器（notify.py 要 import 本模块，反过来就成了循环）。
@@ -99,21 +110,28 @@ def effective_platform(url, platform=None):
     return platform_of(url), True
 
 
-def describe(url, tpl=None, platform=None):
+def describe(url, tpl=None, platform=None, wx_state=None):
     """给设置页看的「这一条通知实际会怎么发」：平台来源 + 模板是否被回退。
 
     不在这里做发送，也不读配置：调用方（notify.Notifier.status）把当前
     notify 块递进来即可。界面上那句「实际平台：钉钉（手选）· 文案：自定义」
     必须来自这里，不许前端自己再猜一遍。
+
+    `wx_state` 是 wechat_push.state() 的摘要（缺字段、token 有没有缓存），
+    由调用方算好传进来 —— 本模块保持纯计算，不碰网络也不碰时钟。
     """
     pl, auto = effective_platform(url, platform)
     _tpl, why = normalize_tpl(tpl)
-    return {"platform": pl, "label": PLATFORM_LABEL.get(pl, pl),
-            "auto": auto, "forced": norm_platform(platform),
-            "custom_template": bool(tpl) and not why,
-            "template_why": why, "vars": list(VARS),
-            "platforms": [{"v": v, "label": PLATFORM_LABEL.get(v, v)}
-                          for v in PLATFORMS]}
+    out = {"platform": pl, "label": PLATFORM_LABEL.get(pl, pl),
+           "auto": auto, "forced": norm_platform(platform),
+           "url_less": pl in URL_LESS,
+           "custom_template": bool(tpl) and not why,
+           "template_why": why, "vars": list(VARS),
+           "platforms": [{"v": v, "label": PLATFORM_LABEL.get(v, v)}
+                         for v in PLATFORMS]}
+    if wx_state is not None:
+        out["wx"] = wx_state
+    return out
 
 
 def normalize_tpl(tpl):
@@ -153,11 +171,16 @@ def text_of(item, tpl=None):
     return out[:MAX_TEXT_LEN]
 
 
-def render(url, item, tpl=None, platform=None):
+def render(url, item, tpl=None, platform=None, wx=None):
     """返回 (payload_dict, platform)。payload 一定是可直接 json.dumps 的 dict。
 
     platform 传了非 auto 的值就按它出 body：公司网关把机器人地址代理成
     自家域名时，host 识别不出来，只能由人指定。
+
+    公众号（platform="wechat"）是个例外：它不是「一个 POST 到 URL」，这里
+    只产出 data 段给设置页预览与单测断言，真正发出去要换 token —— 那两步在
+    `wechat_push.send()`。所以这个 payload 里**不含 openid**，免得有人拿它
+    当完整请求体直接发。
     """
     text = text_of(item, tpl)
     p, _auto = effective_platform(url, platform)
@@ -173,6 +196,12 @@ def render(url, item, tpl=None, platform=None):
         body = {"title": TITLE, "desp": text}
     elif p == "bark":
         body = {"title": TITLE, "body": text, "group": "NVR"}
+    elif p == "wechat":
+        # 键名跟着配置走（默认 content）。写成 DATA 会直接 40037，见 wechat_push。
+        key = "content"
+        if isinstance(wx, dict) and str(wx.get("key") or "").strip():
+            key = str(wx.get("key")).strip()[:200]
+        body = {"data": {key: {"value": text}}}
     else:
         # 兼容底线：认不出来的目标仍收到原来那份四套键齐全的胖 JSON。
         body = {"msg_type": "text", "content": {"text": text},
@@ -187,7 +216,10 @@ if __name__ == "__main__":
               "https://oapi.dingtalk.com/robot/send?access_token=SECRET",
               "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=SECRET",
               "https://sctapi.ftqq.com/SECRET.send",
+              "https://123.push.ft07.com/send/sctpSECRET.send",
               "https://api.day.app/SECRET",
               "http://127.0.0.1:8080/hook"):
         body, p = render(u, it)
         print("%-12s %s" % (p, body))
+    body, p = render("", it, platform="wechat")
+    print("%-12s %s" % (p, body))

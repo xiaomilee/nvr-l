@@ -72,12 +72,33 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `notify.py` | Webhook 通知分发：入队 / cooldown / 三次指数退避 / 内存 recent | `Notifier.status()` `offer()` |
 | `notify_tpl.py` | 通知模板：按 webhook host 出各平台最小 body、变量插值、坏模板回退 | `render()` `platform_of()` |
 | `notify_history.py` | 通知发送历史落盘：jsonl 追加、脱敏、裁剪、过滤查询 | `append()` `query()` `stats()` |
+| `wechat_push.py` | 微信公众号模板消息：access_token 缓存（7000 秒 / 提前续 / 40001 重取一次）、模板消息两步发送、errcode → 中文与「值不值得重试」、secret 与 token 不入错误信息 | `send()` `get_token()` `build_body()` `ready()` `state()` |
 | `sysinfo.py` | 系统信息（CPU / 内存 / 磁盘） | 状态快照 |
 | `cache.py` | 可写缓存的落点：`<record_dir>/_cache/{shots,snapshots,remux,tmp}` 优先、盘不可用回退 `var/_cache`（绝不创建 `record_dir` 本体）、旧版 var 目录一次性迁移、remux LRU（5GB / 7 天）、占用统计 | `root` `sub` `mode` `stats` `prune_remux` `migrate_once` `start_maintenance` |
 <!-- /table:modules -->
 
 守卫按第一列的 `.py` 文件名与 `app/server/` 实际文件集合比对，
 多一个、少一个、拼错一个都会红；表外的说明性文字不参与解析。
+
+### 通知通道：判据是「有没有地址」，公众号是唯一的例外（0.9.142）
+
+三个模块各管一段，边界不能糊：
+
+| 模块 | 管什么 | 不管什么 |
+|---|---|---|
+| `notify.py` | 入队 / 冷却 / 重试 / 落历史 / **哪条通道** | 不拼消息体，不知道平台长什么样 |
+| `notify_tpl.py` | 纯计算：一句话、一份 body | 不联网、不读配置、不看时钟 |
+| `wechat_push.py` | 公众号两步接口 + token 缓存 | 不关心事件、冷却、历史 |
+
+**通道判定只有一处**：`notify.channel_of(nt)` → `wechat` / `url` / `none`。
+不要自己去判 `webhook` 是否为空——公众号没有地址，那样判会把它当成「没配」
+静默丢掉。同理，`platform="wechat"` 只能由人显式选：`platform_of()` 是按 host
+认平台的，而公众号根本没有 URL 可认。
+
+**「不可重试」是一等公民**：`_send_once()` 返回的第五个值就是它。公众号的
+43004 / 45009 / 40037 重试没有意义（还会烧额度），网络类失败才值得那 6 秒。
+`wechat_push.send()` 内部对 40001 已经重取过 token，所以上层拿到的失败是真的失败，
+不是「token 刚好过期」这种自己就能好的事。
 
 ## 3. HTTP 路由
 

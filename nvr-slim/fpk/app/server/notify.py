@@ -19,9 +19,30 @@ import urllib.request
 
 import notify_history
 import notify_tpl
+import wechat_push
 
 CAT_LABEL = {"person": "人员", "two_wheeler": "两轮车", "vehicle": "车辆",
              "motion": "移动侦测"}
+
+# 连续失败多少条要把话说到明面上。取 3：一条可能是网络抖动，两条可能是
+# 对端重启，三条就是「你配的东西不对了」——再沉默就等于让人以为家里没事。
+FAIL_ALARM = 3
+
+
+def channel_of(nt):
+    """这条通知走哪条通道：'wechat'（公众号）/ 'url'（Webhook）/ ''（没配）。
+
+    公众号只在**显式选了平台**时才走：它有 appid/secret 这些「填了就想留着」
+    的字段，若按「填全了就发」来判断，用户临时清空 Webhook 换通道时会被
+    意外地改成发微信，而且他自己不知道。
+    """
+    if not isinstance(nt, dict):
+        return ""
+    if notify_tpl.norm_platform(nt.get("platform")) == "wechat":
+        return "wechat"
+    if str(nt.get("webhook") or "").strip():
+        return "url"
+    return ""
 
 
 class Notifier:
@@ -34,6 +55,9 @@ class Notifier:
         self.thread = None
         self._last_sent = {}            # (cam, cat) -> ts
         self._fail_streak = {}          # (cam, cat) -> 连续失败次数
+        # 全局连续失败计数：单路失败可能是这路没配好，全局连续失败意味着
+        # 通道本身断了（token 失效 / 额度用尽 / 对端挂了）。这个才是要喊出来的。
+        self._fails = {"n": 0, "err": "", "at": 0.0, "platform": ""}
         self.recent = []                # 最近 20 条 [{cam,cat,ok,at,ms}]
         self._lock = threading.Lock()
         # 最近一次已知的 notify 块。status() 要回答「这条通知会按哪个平台、
@@ -89,9 +113,16 @@ class Notifier:
             return False
 
     def _enabled(self, nt, category):
-        if not nt or not str(nt.get("webhook") or "").strip():
+        """这一类要不要发。判据是「有没有一条能走通的通道」，不是「有没有 webhook」：
+        公众号没有地址，按老写法会被判成没配，静默不发。"""
+        if category not in ("motion", "person", "vehicle"):
             return False
-        return bool(nt.get(category)) if category in ("motion", "person", "vehicle") else False
+        if not nt or not nt.get(category):
+            return False
+        ch = channel_of(nt)
+        if ch == "wechat":
+            return wechat_push.ready(nt.get("wechat"))[0]
+        return ch == "url"
 
     def _notify_cfg(self):
         cfg = self.cfg_fn() if self.cfg_fn else {}
@@ -119,33 +150,79 @@ class Notifier:
 
     def _dispatch(self, item):
         nt = self._notify_cfg()
-        url = str(nt.get("webhook") or "").strip()
-        if not url:
+        ch = channel_of(nt)
+        if not ch:
             return
-        # 模板按目标平台选；template / platform 缺省时走默认文案与自动识别。
-        msg, platform = notify_tpl.render(url, item, nt.get("template"),
-                                          nt.get("platform"))
         key = (item["cam"], item["cat"])
         delay = 2.0
+        err, platform, tries = "", ch, 0
         for attempt in range(3):
             if self.stop_event.is_set():
                 return
-            ok, ms, err = self._post(url, msg)
+            tries = attempt + 1
+            ok, ms, err, platform, can_retry = self._send_once(nt, item)
             if ok:
                 with self._lock:
                     self._fail_streak[key] = 0
                     self._record(item, True, ms)
-                self._persist(item, True, ms, "", attempt + 1, platform)
+                self._note_ok()
+                self._persist(item, True, ms, "", tries, platform)
                 return
+            if not can_retry:
+                # 未关注 / 额度用尽 / 模板写错：这几种再等 6 秒也不会变好，
+                # 而且公众号是按调用次数扣额度的，重试只会把额度烧得更快。
+                break
             if attempt < 2:
                 time.sleep(delay)      # 最后一次失败不再空等，直接落日志
                 delay *= 2
         with self._lock:
             self._fail_streak[key] = self._fail_streak.get(key, 0) + 1
             self._record(item, False, 0, err)
-        self._persist(item, False, 0, err, 3, platform)
-        self.log("通知发送失败（已重试 3 次）：%s %s · %s"
-                 % (item["cam"], CAT_LABEL.get(item["cat"], item["cat"]), err))
+        self._note_fail(err, platform)
+        self._persist(item, False, 0, err, tries, platform)
+        self.log("通知发送失败（试 %d 次）：%s %s · %s"
+                 % (tries, item["cam"], CAT_LABEL.get(item["cat"], item["cat"]), err))
+
+    def _send_once(self, nt, item):
+        """发一次。返回 (ok, ms, err, platform, 可重试)。
+
+        公众号走两步接口（换 token → 发模板），其余通道走一次 POST。合流在
+        这里，派发循环就不必知道通道差别 —— 否则重试/冷却/落盘三处都要
+        写一遍 "if 公众号"。
+        """
+        tpl = nt.get("template")
+        if channel_of(nt) == "wechat":
+            text = notify_tpl.text_of(item, tpl)
+            ok, ms, err, can = wechat_push.send(nt.get("wechat"), text,
+                                                timeout=max(self.timeout, 10))
+            return ok, ms, err, "wechat", can
+        url = str(nt.get("webhook") or "").strip()
+        msg, platform = notify_tpl.render(url, item, tpl, nt.get("platform"))
+        ok, ms, err = self._post(url, msg)
+        return ok, ms, err, platform, True
+
+    def _note_ok(self):
+        """成功一次就把连续失败计数清零，并在「刚恢复」时说一声。
+
+        只在跨过阈值那一刻说：一个填错的 openid 会按分钟失败，逐条记日志
+        等于用同一句话把磁盘刷满，反而盖掉真正有用的上下文。
+        """
+        with self._lock:
+            n = int(self._fails.get("n") or 0)
+            self._fails = {"n": 0, "err": "", "at": 0.0, "platform": ""}
+        if n >= FAIL_ALARM:
+            self.log("通知发送已恢复（此前连续失败 %d 条）" % n)
+
+    def _note_fail(self, err, platform):
+        with self._lock:
+            self._fails["n"] = int(self._fails.get("n") or 0) + 1
+            self._fails["err"] = str(err or "")[:160]
+            self._fails["at"] = time.time()
+            self._fails["platform"] = platform
+            n = self._fails["n"]
+        if n == FAIL_ALARM:
+            self.log("[ERR] 通知连续失败 %d 条，最近一次：%s —— 去设置页看「实际平台」"
+                     "与发送历史，通知现在是断的" % (n, err))
 
     @staticmethod
     def _message(item):
@@ -188,23 +265,46 @@ class Notifier:
             return False, int((time.time() - t0) * 1000), str(e)[:120]
 
     # ------------------------------------------------------------ 测试发送
-    def test(self, url, tpl=None, platform=None):
+    def test(self, url, tpl=None, platform=None, wx=None):
         """设置页「测试发送」：同步发一条，返回 (ok, ms, err, platform)。
 
-        测试发送也按目标平台出 body，否则「测试成功、真实通知却被拒收」
-        会变成一个查不出来的假象。测试同样记一笔历史，方便事后对账。
-        模板 / 平台可由调用方临时指定：界面上刚改还没保存时，测的就该是
-        屏幕上那句文案，而不是磁盘上的旧值。
+        测试发送也按目标平台出 body / 走同一条通道，否则「测试成功、真实通知
+        却被拒收」会变成一个查不出来的假象。测试同样记一笔历史，方便事后对账。
+        模板 / 平台 / 公众号凭据可由调用方临时指定：界面上刚改还没保存时，
+        测的就该是屏幕上那套值，而不是磁盘上的旧值。
         """
         url = str(url or "").strip()
-        if not url:
-            return False, 0, "Webhook 地址为空", ""
         item = {"cam": "测试", "cat": "person", "t": time.time()}
         nt = self._notify_cfg()
         if tpl is None:
             tpl = nt.get("template")
         if platform is None:
             platform = nt.get("platform")
+        if wx is None:
+            wx = nt.get("wechat")
+
+        if notify_tpl.norm_platform(platform) == "wechat":
+            # 页面拿不到 secret 原文（redact_cfg 抹空了），所以「测试发送」传上来的
+            # 永远是空串。不在这里补一次，就会变成「保存后真事件发得出去、点测试
+            # 却说缺 appsecret」——这个假象比报错更难查（0.9.142 真机抓到）。
+            wx = dict(wx) if isinstance(wx, dict) else {}
+            if not str(wx.get("secret") or "").strip():
+                _old = (nt.get("wechat") or {}).get("secret")
+                if _old:
+                    wx["secret"] = _old
+            okw, missing = wechat_push.ready(wx)
+            if not okw:
+                return (False, 0, "公众号未配置完整：缺 " + "、".join(missing),
+                        "wechat")
+            # 测试走真发：只有真拿到 token 再真发一条，「配好了」才算数。
+            ok, ms, err, _can = wechat_push.send(
+                wx, notify_tpl.text_of(item, tpl),
+                timeout=max(self.timeout, 10))
+            self._persist(item, ok, ms, err, 1, "wechat")
+            return ok, ms, err, "wechat"
+
+        if not url:
+            return False, 0, "Webhook 地址为空", ""
         msg, plat = notify_tpl.render(url, item, tpl, platform)
         ok, ms, err = self._post(url, msg)
         self._persist(item, ok, ms, err, 1, plat)
@@ -221,14 +321,25 @@ class Notifier:
         # render 段是「这条通知实际会怎么发」的唯一出处：平台是识别来的还是
         # 人选的、文案有没有因为占位符写错被回退。设置页照抄这三行，不自己猜。
         nt = self._nt if isinstance(self._nt, dict) else {}
+        # 公众号的状态单独取：它要看「四个字段填全了没、token 还在不在」。
+        # 只给摘要（appid/openid 都脱敏），secret 与 token 原文一律不出这个函数。
+        wx = wechat_push.state(nt.get("wechat"))
         with self._lock:
             # history 是启动读一次 + 每次 append 累加的缓存值，不是当场扫盘：
             # /api/status 被前端几秒轮询一次，扫盘会把通知线程拖进 IO 等待。
+            fails = dict(self._fails)
             return {"recent": list(self.recent),
                     "pending": self.q.qsize(),
+                    "channel": channel_of(nt) or "none",
                     "render": notify_tpl.describe(nt.get("webhook"),
                                                   nt.get("template"),
-                                                  nt.get("platform")),
+                                                  nt.get("platform"), wx),
+                    # 连续失败到阈值才喊：偶发一条失败不该让诊断页常年挂红。
+                    "alarm": ({"n": int(fails.get("n") or 0),
+                               "err": fails.get("err") or "",
+                               "at": fails.get("at") or 0,
+                               "platform": fails.get("platform") or ""}
+                              if int(fails.get("n") or 0) >= FAIL_ALARM else None),
                     "history": {"file": self._hist.get("file"),
                                 "total": self._hist.get("total", 0),
                                 "last_at": self._hist.get("last_at"),

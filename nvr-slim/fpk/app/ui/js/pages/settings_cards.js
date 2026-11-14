@@ -321,7 +321,7 @@ const NT  = { st:null, hist:null };
 const NT_PLATFORMS = [
   ["auto", "自动识别"], ["feishu", "飞书"], ["dingtalk", "钉钉"],
   ["wecom", "企业微信"], ["serverchan", "Server酱"], ["bark", "Bark"],
-  ["generic", "通用 JSON"]
+  ["wechat", "微信公众号"], ["generic", "通用 JSON"]
 ];
 const NT_CAT = {person: "人员", two_wheeler: "两轮车", vehicle: "车辆",
                 motion: "移动侦测"};
@@ -337,6 +337,17 @@ function ntPlatformLabel(v){
   return hit ? hit[1] : (v || "—");
 }
 
+/* 通道「配好了没有」。两种通道判据不同：Webhook 看地址非空，公众号看四个字段
+   齐全（secret 只看服务端的 secret_set：页面永远拿不到原文）。开通知开关前
+   用它拦一次，否则用户会开了开关、看着一切正常，实际一条也发不出去。 */
+function ntChannelReady(){
+  if((LK.ntPlatform || "auto") === "wechat"){
+    const w = LK.ntWechat || {};
+    return !!(w.appid && w.openid && w.template_id && (w.secret || w.secret_set));
+  }
+  return !!(LK.ntWebhook || "").trim();
+}
+
 /* 「这条通知实际会怎么发」——平台是识别来的还是手选的、文案有没有被回退。
    全部照抄 /api/status 的 notify.render，前端不再自己猜一遍平台。 */
 function ntRenderLine(){
@@ -347,6 +358,23 @@ function ntRenderLine(){
   s += ' · 文案：' + (r.custom_template ? "自定义" : "默认");
   if(r.template_why){
     s += ' · <span style="color:var(--warn)">模板已回退：' + esc(r.template_why) + '</span>';
+  }
+  /* 公众号（0.9.142）：把「四个字段填全没有、token 缓存在不在」摆出来。
+     这两件事决定了通知发不发得出去，却又不在任何一条发送记录里。 */
+  const w = r.wx;
+  if(r.platform === "wechat" || (w && (w.appid || w.openid))){
+    s += '<br>公众号：' + (w && w.ready
+      ? ('已配置 ' + esc(w.appid || "") + ' → ' + esc(w.openid || "")
+         + ' · token ' + (w.token_cached ? '已缓存' : '待获取'))
+      : ('<span style="color:var(--warn)">未配置完整：缺 '
+         + esc(((w && w.missing) || []).join("、") || "四项") + '</span>'));
+  }
+  /* 连续失败到阈值（后端判 3 条）才在这里挂红字：偶发一条失败不该让页面上
+     常驻一个警告，那只会训练用户无视它。 */
+  const al = NT.st && NT.st.alarm;
+  if(al){
+    s += '<br><span style="color:var(--warn)"><b>通知已连续失败 ' + (al.n || 0) + ' 条</b>：'
+      + esc(String(al.err || "").slice(0, 60)) + ' —— 现在收不到通知，去「查看发送历史」看细节</span>';
   }
   const h = (NT.st && NT.st.history) || null;
   if(h && h.persisted) s += ' · 已落盘 ' + (h.total || 0) + ' 条';
@@ -501,6 +529,19 @@ function cardDetect(){
   const row = (label, rec, trig, nt, off) =>
     '<div class="cmx-r' + (off ? ' off' : '') + '">'
     + '<span class="cmx-lab">' + label + '</span>' + rec + trig + nt + '</div>';
+  /* 公众号通道（0.9.142）：它不是「往一个地址 POST」，而是拿 appID/appsecret
+     换 token 再发模板消息，所以没有 webhook 可填。字段只在平台手选「微信公众号」
+     时出现——让两条通道共用一块输入区，用户会不知道该填哪边。 */
+  const isWx = (LK.ntPlatform || "auto") === "wechat";
+  const wx = LK.ntWechat || {};
+  const wxInp = 'margin-top:6px;width:100%;box-sizing:border-box;height:36px;'
+    + 'padding:0 10px;border:1px solid var(--line);border-radius:8px;'
+    + 'background:transparent;color:inherit;font-size:12.5px';
+  const wxField = (key, label, val, ph, type) =>
+    '<div class="h" style="margin-top:9px;line-height:1.55"><b>' + label + '</b></div>'
+    + '<input type="' + (type || "text") + '" class="mono" id="ntWx_' + key + '"'
+    + ' data-ntwx="' + key + '" autocomplete="off" spellcheck="false"'
+    + ' placeholder="' + esc(ph) + '" value="' + esc(val) + '" style="' + wxInp + '">';
   return '<div class="gcard">'
     + '<h3>检测 <span class="sub">移动侦测 + AI 识别 · 所有摄像头共用 · 每路可单独覆盖</span></h3>'
     /* 组 1：移动侦测（像素差）。不需要 AI、没有自己的总闸——它随「事件侦测与归档
@@ -580,21 +621,45 @@ function cardDetect(){
       + '<div class="n">通知通道</div>'
       + '<div class="swrow" style="border:none;padding:8px 0 0"><span>冷却（同路同类最小间隔）</span>'
         + '<div class="stepper"><button data-ntcd="-30">−</button><span class="val">' + LK.ntCooldown + ' 秒</span><button data-ntcd="30">+</button></div></div>'
-      + '<input type="url" class="mono" id="ntWebhook" placeholder="https://example.com/webhook" value="' + esc(LK.ntWebhook) + '"'
-        + ' style="margin-top:8px;width:100%;box-sizing:border-box;height:36px;padding:0 10px;'
-        + 'border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font-size:12.5px">'
-      + '<div class="h" style="margin-top:6px;line-height:1.55">上表里勾了「通知」的类别，经这个 Webhook 发出'
-        + '（飞书 / 钉钉 / 企业微信 / Server酱 / Bark 等标准格式）。'
-        + 'fnOS 未开放应用级系统通知接口，故不走系统通知中心。没有冷却，移动侦测通知能把手机炸掉。</div>'
+      /* Webhook 只在「非公众号」时出现：公众号没有地址可填，留着这块输入框
+         只会让人以为必须填一个。 */
+      + (isWx ? '' :
+          '<input type="url" class="mono" id="ntWebhook" placeholder="https://example.com/webhook" value="' + esc(LK.ntWebhook) + '"'
+          + ' style="margin-top:8px;width:100%;box-sizing:border-box;height:36px;padding:0 10px;'
+          + 'border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font-size:12.5px">'
+          + '<div class="h" style="margin-top:6px;line-height:1.55">上表里勾了「通知」的类别，经这个 Webhook 发出'
+          + '（飞书 / 钉钉 / 企业微信 / Server酱 / Bark 等标准格式）。'
+          + 'fnOS 未开放应用级系统通知接口，故不走系统通知中心。没有冷却，移动侦测通知能把手机炸掉。</div>')
       /* 平台：默认按地址识别。公司网关把机器人地址代理成自家域名时 host 认不出来，
          只能手选；手选后服务端按该平台的 body 发，不再按 host 猜。 */
       + '<div class="h" style="margin-top:10px;line-height:1.55"><b>平台</b>：默认按地址自动识别；'
-        + '机器人地址被网关改写过就手选一项。</div>'
+        + '机器人地址被网关改写过、或者要发到自己的微信，就在这里手选一项。</div>'
       + '<div class="chips" style="margin-top:6px">'
         + ntPlatformList().map(p=>
             '<button class="chip ' + ((LK.ntPlatform || "auto") === p[0] ? "on" : "") + '"'
             + ' data-ntplat="' + esc(p[0]) + '">' + esc(p[1]) + '</button>').join("")
       + '</div>'
+      /* 公众号：五个字段替代 Webhook。取值位置固定在「测试号管理」页，
+         模板内容里的 {{content.DATA}} 决定了「数据键名」要填 content。 */
+      + (isWx ? (
+          '<div class="h" style="margin-top:10px;line-height:1.55">公众号走<b>两步接口</b>（换 access_token → 发模板消息），'
+            + '不需要 Webhook。四个值都能在公众平台「测试号管理 / 模板消息接口」页看到；'
+            + '接收人必须是<b>已关注该公众号</b>的 openid。'
+            + 'appsecret 只存在服务端，页面拿不到原文。</div>'
+          + wxField("appid", "appID", wx.appid, "wx08a5ba20eac223dd")
+          + wxField("secret", "appsecret", "",
+                    wx.secret_set ? "已保存 · 留空表示不修改" : "32 位字符串",
+                    "password")
+          + wxField("openid", "接收人 openid", wx.openid,
+                    "oR_cp3WVts0RzDucPkwm64zHRSwk")
+          + wxField("template_id", "模板 ID", wx.template_id,
+                    "模板列表里那一长串（43 位）")
+          + wxField("key", "数据键名", wx.key || "content",
+                    "content")
+          + '<div class="h" style="margin-top:6px;line-height:1.55">数据键名默认 <b>content</b>，'
+            + '因为模板内容写的是 <code>{{content.DATA}}</code>——<code>.DATA</code> 是微信的固定后缀，'
+            + '前面那截才是键名。填成 DATA 会直接报 40037。</div>'
+        ) : '')
       /* 文案模板：留空用默认；非法占位符不会丢通知，只回退并在这里说明原因。 */
       + '<div class="h" style="margin-top:10px;line-height:1.55"><b>文案模板</b>（留空＝默认文案）。可用占位符：'
         + esc(((NT.st && NT.st.render && (NT.st.render.vars || []).join("  ")) || "{cam}  {cat}  {label}  {time}  {date}"))
@@ -606,7 +671,7 @@ function cardDetect(){
       + '<div class="h" id="ntRender" style="margin-top:6px;line-height:1.55">' + ntRenderLine() + '</div>'
       + '<div style="display:flex;gap:8px;margin-top:8px">'
         + '<button class="btnline" id="btnNtTest" style="flex:1">测试发送</button>'
-        + '<button class="btnline" id="btnNtSave" style="flex:1">保存 Webhook</button>'
+        + '<button class="btnline" id="btnNtSave" style="flex:1">保存通知设置</button>'
         + '<button class="btnline" id="btnNtHist" style="flex:1">查看发送历史</button>'
       + '</div>'
       + '<div class="hint" id="ntOut" style="margin-top:6px"></div>'
