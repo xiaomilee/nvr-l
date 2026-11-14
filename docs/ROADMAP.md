@@ -159,6 +159,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 42 | 11-10 04:10 | **批次 20 · 0.9.139 事件列表全部大图**（按用户「需要展开才能看到大图？不妥。或者全部大图，或者保留小图，展开才能看到大图」）：0.9.138 的中间态（中等缩略图 + 展开才出大图）被否，取用户列的第一方案「全部大图」——有快照的事件卡片直接画整卡宽大图（`.evshotwrap` 独占一行、`width:100% + height:auto` 原比例不裁切），**不用展开就能看清**；小缩略图整个下线（`.evthumb`/`.evthumbbox`/`EV_IMG_ONERR` 删除，大图模式下同一张图不必画两遍）；点大图仍直接弹放大浮层（data-evzoom 代理顺序不变），点卡片展开的 `.evopen` 只剩动作区（打开录像/±30 秒/播不了的原因/没有快照说明），不再重复出图；快照时刻说明随大图常驻；检测框仍只在展开/放大时取一次（不为叠框发 200 个请求），加载失败仍 `bad` 类明说；骨架跟随新卡片形状（文字灰条 + 16:9 大图灰块）；events UI 测试改 6 条删 2 条净 123 项；`recorder.py` 一行未改 | 5e8c860 | **出包** `dist/nvr-0.9.139_x86.fpk` **101234891 字节** md5 `0ddaa1b74b1176bad4a5d8a4261d62a5`；闸门 validate 81 项、前端 events **123**（-2）/ 其余全绿 0 FAIL；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.139.json`），0.9.138→0.9.139 上线 **0.1s**、端口 18085；机上 `curl ui/`：新标记 13 处、`evthumb*`/`EV_IMG_ONERR` **0** 残留、版本 0.9.139；`/vol1` 余 19G（66%）；日志 warn=0 err=0；真机观感（列表直接大图、比例不裁、点图弹浮层）待用户确认；**批次 20 标 done**，生产机 2.6 未碰 |
 | 43 | 11-11 03:50 | **批次 21 · 0.9.140 修复「应用中心停用不生效」**（用户报：飞牛应用中心显示 NVR-L 已停用，但录像仍在写；要求核实停用到底能不能生效）：核实结论是 `cmd/main` 生命周期脚本自身三个缺陷——① start 的 `&` 挂在整条 `cd && nohup python` 列表上，PID 文件存的是 bash 壳（壳前台等待 python 永不退出）；② stop 只杀壳，python 成孤儿继续录像、报停用成功；③ status 用 `kill -0` 判活，跨用户执行 EPERM 必误报「未运行」且顺手删 PID 文件。修法：`&` 只作用于 nohup python（PID 文件存 python 本尊）；stop 无论 PID 文件对错都按命令行全扫兜底（TERM→限时等待→KILL）；status 三级判活（PID 文件→进程扫描→TCP 端口探测）并自愈 PID 文件；start 幂等加进程扫描。真机验证又抓两处当场补上：进程扫描只认 python 打头的命令行（纯字符串匹配被调用方复合命令自匹配骗过，status 曾对尸体报 0）；start 裸调无 TRIM_* env 时回退 target 符号链接找程序目录。另把 152 的 config `service_port` 18085→18080 与 manifest 对齐（消除应用中心按声明端口探测的误报源） | ad22ff5 | **出包** `dist/nvr-0.9.140_x86.fpk` **101236449 字节** md5 `f91c4dea12633225fd3bc01478108121`；闸门 validate 全绿、doc 套件 14 项（补 ARCHITECTURE/USER_GUIDE 版本提及后 OK）、版本守卫同步；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.140.json`），端口 18080；上机实测：start 后无壳驻留、PID 文件=python 本尊、root stop 后进程=0/端口释放/死亡态 status=3、admin 跨用户 status=0、nvr 裸调 start 恢复 2 路录制 + ffmpeg 6 进程；journal 取证确认飞牛从未成功执行过 `main stop`（进程 11-10 04:08 起未被杀过）；/vol1 余 53G（用户 02:54 手动删过录像目录）；**批次 21 标 done**，生产机 2.6 未碰 |
 | 44 | 11-11 14:50 | **批次 22 · 0.9.141 缓存集中到存储路径**（用户先问「配置目录应该是一处吧？程序用到的文件应该集中两处：一个存储目录、一个配置目录，可行吗」，确认后说「都挪进存储目录一起管」）：把程序自攒的可再生文件（事件截图 / 首页快照 / 播放重封装 / 抽帧临时文件）从 `@appdata/nvr` 收进 `<record_dir>/_cache/{shots,snapshots,remux,tmp}`，判据是「丢了会不会让程序起不来」而不是大小。新增 `cache.py` 一处收口落点：**绝不创建 record_dir 本体**（外接盘拔掉后挂载点仍在，makedirs 会把 `_cache` 建到根分区，问题从「报错」变成「悄悄写错地方」）、**每 20 秒真写一字节探测**（`isdir` 对只读挂载 / ACL 改坏 / 配额打满全返回 True）、不可用时回退 `var/_cache` 并留声、盘插回自动搬回；remux 首次有上限（5GB / 7 天 LRU，10 分钟内动过的跳过=正在播）；抽帧 `mkstemp(dir=)` 改落存储盘；旧目录后台一次性迁移（图与快照搬、remux/tmp 直接删，迁移期旧图仍可读，写 `.cache-migrated`）。附带：日志 20MB 轮转（`_emit` 整段持锁，避免关句柄与写入打架丢行）、配置备份最多留 2 份、空间预警把缓存从「其它占用」摘出来单独算、`/api/status` 与 `/api/storage/usage` 新增 cache 字段、诊断页显示占用与回退警示 | e177810 | **出包** `dist/nvr-0.9.141_x86.fpk` **101248684 字节** md5 `bf47d34294cf107c0b02dc4b6fd3fc84`；闸门 validate 全绿、后端 30 个测试文件全 OK（含新增 `test_cache.py` 23 项）、doc 套件 14 项；`deploy_test.py` 部署 152 九项全 OK（`test-reports/deploy-0.9.141.json`）；上机实测：迁移 2404 张事件图 / 222.2MB → `_cache/shots`、remux 与 tmp 直接删、`.cache-migrated` 落盘；`chmod 500 _cache` 模拟盘不可写 → 26 秒后 `on_store=false` + 日志 ERR 警告 + 回退 `var/_cache`，`chmod 755` → 26 秒后恢复并搬回；remux 超期清理实测 `removed=1`；事件图 HTTP 200 / 632KB；录制 `.part` 持续增长；var 从 611M 降到 108M（backup 清 7 份 / 602MB）；**批次 22 标 done**，生产机 2.6 未碰（待手动升级） |
+| 45 | 11-14 13:40 | **批次 23 · 0.9.142 微信公众号通知通道**（用户发来公众平台「测试号管理」截图问「通知如何配置？发到我的微信」，中间问「Server酱是不是停止服务了」→ 核实旧版 2021 年已停、Turbo 免费只有 5 条/天，不够 NVR 一天几十条 → 定「用自己那个测试号」）：新增 `wechat_push.py`，`cgi-bin/token`（**缓存 7000 秒 + 提前 200 秒续 + 40001/42001 重取一次再发**，这次重取不算对外重试）→ `cgi-bin/message/template/send`。**不可重试的错误不重试**（43004 未关注 / 45009 额度 / 40037 模板变量 / 48001 无权限 / 40125 secret 错），一律翻成「该改哪个字段」的中文，其中 `{{content.DATA}}` 的键名是 `content` 不是 `DATA` 单独成句——这是接公众号最常见的坑；`notify.channel_of()` 成为通道判定唯一出处（公众号没有地址，按 webhook 是否为空判会把它当「没配」静默丢掉）。**appsecret 只进不出**：`runtime.redact_cfg()` 抹成空串 + `secret_set`，`/api/config` 入口「空则沿用磁盘、整块没带也沿用」；失败升级：连续 3 条在设置页与诊断页挂红字 + 一条 `[ERR]`。附带 Server酱³（`xxx.push.ft07.com`）识别补齐；设置页选「微信公众号」时隐藏 Webhook、换成五个字段（appID / appsecret / openid / 模板 ID / 数据键名） | 7ae27ba | **出包** `dist/nvr-0.9.142_x86.fpk` **101263668 字节** md5 `e82edfe4a0de3f3c72593b4e95bbf28c`；闸门 validate 全绿、后端 31 个测试文件全 OK（新增 `test_wechat_push.py` 28 项、`test_notify.py` +2、`test_log_tail.py` +5）、doc 套件 14 项；`deploy_test.py` 部署 152 九项全 OK；**真机真发**：`/api/status` → `channel=wechat`、`wx.ready=true`、`token_cached=true`（`token_exp_in` 6788s）；真实事件已送达 7 条（人员/车辆/移动侦测，`ok=true` 763–1189ms，平台均为 wechat）；「测试发送」`ok=true` 8826ms（首发生连 + 换 token）→ 第二次 763ms；**真机抓到一个假象并当场修掉**：页面拿不到 secret 原文，点「测试发送」传上来的是空串 → 报「缺 appsecret」，可保存后真实事件却发得出去（`Notifier.test()` 补「空则沿用磁盘」）；**又抓到一处日志泄漏**：curl 参数写错时整个 JSON body 被当请求行记进 nvr.log（grep 到 3 处 secret 明文）→ 新增 `access_line()`：非 HTTP 方法行压成「[非 HTTP 请求行，N 字符已省略]」、其余过 redact + 截断 300；清日志后用裸 socket 造同形畸形请求实测 canary 0 次、真 secret 0 次；**批次 23 标 done**，生产机 2.6 未碰（待手动升级） |
 ## 测试平台（可以随便折腾，与生产隔离）
 
 | 项 | 值 |
@@ -2219,3 +2220,58 @@ start 裸调无 `TRIM_*` 环境变量时报「程序文件缺失」——回退 
 - var 从 611M → 108M（backup 清 7 份 / 602MB；ort 104M 是模型，留着）。
 - `recorder.py` 一行未改；生产机 2.6 未碰（14GB remux 待升级后由迁移删，
   或手工 `rm -rf /vol1/@appdata/nvr/remux`）。
+
+## 批次 23 · 0.9.142 微信公众号通知通道（第 45 轮）
+
+**起因**：用户发来微信公众平台「测试号管理」页截图，问「通知如何配置？发到我的微信」。
+读出来的四个可用字段：`appID` / `appsecret` / 关注者 `openid` / 模板 `{{content.DATA}}`；
+页面上那两块「接口配置信息 URL/Token」「JS 接口安全域名」**与发通知无关**——那是别人给
+公众号发消息时做签名验证用的，单向推送用不上。这一点先讲清楚，否则用户会去填一堆白填的框。
+
+**中间那句追问「Server酱是不是停止服务了？」决定了方案**：核实后是——
+旧版 `sc.ftqq.com` 2021 年就停了（域名换成 `sctapi.ftqq.com`），Turbo 在运营但
+**免费 5 条/天**，会员 3 元/月起 1000 条/天。而 NVR 两路摄像头一天几十条，5 条会在
+早上七点前用完，**额度用尽后接口报错、录像照常**，用户会以为「今天没人经过」。
+「静默丢通知」比没有通知更危险。所以不用 Server酱，用他自己的测试号（模板消息 10 万条/天）。
+
+**为什么要单独一个模块**：其它通道都是「一个 POST 到 webhook」，公众号是**两步且有状态**。
+token 不能每次现取——获取接口有每日额度，且同 appID 频繁取会把上一个顶掉（旧的还能活
+5 分钟，之后 40001）。缓存 + 提前续 + 40001 重取一次，三件事必须在一处。
+
+**四条不变式**（写在 `wechat_push.py` 顶部）：
+1. secret 与 token 绝不进错误信息（`_safe_reason()` 再把 URL 里的 `secret=` / `access_token=` 抹一道）；
+2. 不可重试的错误不重试（43004 / 45009 / 40037 / 48001 / 40125），只有网络类和 token 失效值得那 6 秒；
+3. token 只在内存（落盘等于多一份密钥副本，两小时就过期）；
+4. 唯一出口 `_http_json()`，单测替换它就够。
+
+**`channel_of()` 是通道判定的唯一出处**：`wechat` / `url` / `none`。公众号没有地址，
+以前那种「webhook 为空就不发」的写法会把它当成没配、**静默丢弃**——这正是本批次最容易
+踩的坑，所以 `_enabled()`、`_send_once()`、`status()` 全部改走它。
+
+### 152 真机验证（含两个当场修掉的坑）
+
+- 保存配置：`changed=['notify']`、`platform=wechat`、磁盘 `secret_len=32`，
+  而 `GET /api/config` 返回 `secret=""` + `secret_set=true` —— 脱敏链路成立。
+- 真实事件送达：`ok=true`，763–1189ms，`platform=wechat`；首条 6408ms（现换 token + 建连）。
+- **坑一（假象）**：页面拿不到 secret 原文，点「测试发送」传上来的是空串 → 服务端报
+  「缺 appsecret」，可保存后真实事件却发得出去。同一个配置，一个按钮说没配好、实际却在发，
+  这是最费解的那种故障。修法：`Notifier.test()` 里「空 secret 沿用磁盘那份」（单测
+  `TestTestSendWechat` 钉住）。
+- **坑二（泄漏）**：我用 `curl --data-binary @file` 传参时写错，整个 JSON body 被当成
+  **请求行**送进去，`log_request` 原样记下 → `grep` 到 3 处 appsecret 明文。
+  这不是「我的测试事故」，而是「任何畸形请求都能把任意内容写进日志」的缺口。
+  新增 `access_line()`：非 HTTP 方法行压成 `[非 HTTP 请求行，N 字符已省略]`，
+  其余过 `redact.mask_text()` 并截断 300 字（body 上限 4MB，访问环只有 120 条，一行能顶掉整个环）。
+  清日志后用裸 socket 造同形请求复测：canary 0 次、真 secret 0 次。
+
+### 验收
+
+- `build.sh --check` 全绿；后端 31 个测试文件全 OK（`test_wechat_push.py` 28 项：
+  token 缓存 / TTL / 强制刷新 / 40001 重取 / 43004 45009 40037 不可重试 / 网络可重试 /
+  secret 不出现在错误与状态 / body 键名与截断）。
+- `deploy_test.py` 部署 152 九项全 OK；`/api/status` → `channel=wechat`、`wx.ready=true`、
+  `token_cached=true`（`token_exp_in` 6788s）。
+- 「测试发送」`ok=true` 8826ms（首发）→ 763ms（后续）。
+- 部署瞬间出现过一次「缓存落点回退」（30 秒后自动恢复），顺手把探测失败原因带进日志：
+  以前只有「存储路径不可写」，看不出是 EACCES 还是 ENOSPC，两者处置完全相反。
+- `recorder.py` 一行未改；生产机 2.6 未碰。
