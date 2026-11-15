@@ -327,9 +327,8 @@ function refreshRes(){
   return API.get("/api/status")
     .then(d=>{
       if(!d || d.ok === false) throw new Error((d && d.error) || "status 失败");
-      /* AI 检测 / 通知状态快照：设置页状态行与诊断卡吃这份 */
+      /* AI 检测状态快照：设置页状态行与诊断卡吃这份 */
       if(d.detect){ DET.st = d.detect; }
-      if(d.notify){ NT.st = d.notify; }
       ING.st = d.ingest || null;
       ING.fr = d.frames || null;
       const r = d.res || {};
@@ -404,23 +403,6 @@ const LK = {
   detTrigger:{ motion:true, person:true, vehicle:true },   // 活动触发：未勾选=静止画面
   detFps:5,            // 实时帧率（P1）
   detNight:"throttle", // 夜间策略（P1）
-  /* ---- 通知（0.9.60）：三开关 + 自定义 Webhook + 冷却 ----
-     平台与模板（0.9.124）：platform=auto 时按 Webhook 的 host 自动识别；
-     公司网关把机器人地址代理成自家域名时才需要手选。空模板 = 默认文案。
-     这两个键必须一起进 pushCfg —— 只放 localStorage 的话，保存设置时
-     服务端那份会被别的设备推回默认值。 */
-  ntWebhook:"",
-  ntMotion:false,
-  ntPerson:false,
-  ntVehicle:false,
-  ntCooldown:60,
-  ntPlatform:"auto",
-  ntTemplate:"",
-  /* 公众号（0.9.142）：platform="wechat" 时才用。secret 永远是空串 ——
-     服务端 GET /api/config 时就把它抹掉了，页面拿不到原文；用户重新填一份
-     才会改，留空＝沿用服务端那份。secret_set 只用于界面显示「已保存」，
-     不推给服务端（norm 会丢掉未知键）。 */
-  ntWechat:{appid:"", secret:"", openid:"", template_id:"", key:"content", url:""},
   pending:0,          // 待处理数 —— 以 /api/link 返回为准，不再本地编数
   done:0,
   silent:0,

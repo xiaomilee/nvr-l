@@ -364,7 +364,7 @@ class TestSourceGuard(unittest.TestCase):
 
     def test_source_keys_find_core_items(self):
         found = bm.source_keys(LIVE_JS)
-        for k in ("record_enable", "record_segment_sec", "detect", "notify"):
+        for k in ("record_enable", "record_segment_sec", "detect"):
             self.assertIn(k, found)
 
 

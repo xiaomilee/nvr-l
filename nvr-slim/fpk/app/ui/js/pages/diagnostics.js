@@ -628,11 +628,10 @@ async function loadDiagParts(){
 
 /* ---------------- AI 检测诊断卡（0.9.60） ----------------
    回答三个问题：① 推理到底跑起来没有（runtime/模型/平均耗时）；
-   ② 每路今天抽了多少帧、命中哪些类别；③ 通知最近发了什么、队列堵没堵。
+   ② 每路今天抽了多少帧、命中哪些类别。
    没开检测时这张卡只留一行说明，不摆一堆 0 假装在工作。 */
 function cardDetectDiag(){
   const st = DET.st;
-  const nt = NT.st;
   const line = (k, v, warn) =>
     '<div class="dline kv"><span class="k">' + k + '</span><span class="v"'
     + (warn ? ' style="color:var(--warn)"' : '') + '>' + v + '</span></div>';
@@ -645,7 +644,7 @@ function cardDetectDiag(){
     + (dv.tag ? ' · ' + esc(dv.tag) : '') + '</span></div>';
   if(!LK.detEnable){
     return head + '<div class="dline" style="font-size:10.5px;color:var(--faint)">'
-      + '未开启。开启路径：通用设置 · AI 检测。开启后这里会显示推理耗时、每路命中与通知记录。</div>'
+      + '未开启。开启路径：通用设置 · AI 检测。开启后这里会显示推理耗时与每路命中。</div>'
       + '</div>';
   }
   /* 0.9.122：不可用与"正在加载"分开说。旧版把两者都写成「worker 未运行」，
@@ -730,33 +729,7 @@ function cardDetectDiag(){
   }else{
     rows = line("每路统计", "暂无（开启后第一轮抽帧完成才有数）");
   }
-  let ntBlock = "";
-  if(nt){
-    const rec = (nt.recent || []);
-    const pend = nt.pending || 0;
-    ntBlock = line("通知队列", pend ? (pend + " 条待发" + (pend >= 400 ? " · 可能堵了，检查 Webhook" : ""))
-                                    : "空 · 已清空")
-      + (rec.length ? "" : line("通知记录", "还没有发过"));
-    /* 连续失败到阈值（后端判 3 条）才在这里挂一行红字。以前失败只躺在
-       notify_history.jsonl 里，界面上永远是绿的 —— 额度用尽、openid 未关注
-       这类「配置坏了」的事故可以安静地持续几个月。 */
-    if(nt.alarm){
-      ntBlock += '<div class="dline kv" style="color:var(--warn)"><span class="k">通知中断</span>'
-        + '<span class="v">连续失败 ' + (nt.alarm.n || 0) + ' 条 · '
-        + esc(String(nt.alarm.err || "").slice(0, 60)) + '</span></div>';
-    }
-    if(rec.length){
-      ntBlock += '<div class="dline" style="margin-top:2px"><span class="k">最近发送</span></div>';
-      rec.slice(0, 5).forEach(r=>{
-        ntBlock += '<div class="dline kv"><span class="k">' + esc(String(r.at || "")) + '</span><span class="v">'
-          + esc(String(r.cam || "")) + " · " + esc(String(r.cat || ""))
-          + (r.ok ? " · 成功 " + (r.ms != null ? r.ms + "ms" : "")
-                  : ' · <span style="color:var(--warn)">失败 ' + esc(String(r.err || "").slice(0, 40)) + "</span>")
-          + '</span></div>';
-      });
-    }
-  }
-  return head + rt + devLine + rtLine + perf + schLine + rows + ntBlock
+  return head + rt + devLine + rtLine + perf + schLine + rows
     + '<div class="dline" style="margin-top:8px;font-size:10px;color:var(--faint)">'
     + '取帧失败只记「未知」，不会写成"无活动"；命中类别同时写进活动台账，'
     + '回放页与活动触发都从台账读，与这里的计数同源。</div>'
@@ -1063,147 +1036,6 @@ function bindSettings(body){
       renderCamTabs(); saveCfgSoon();
     };
   });
-  body.querySelectorAll("[data-ntcd]").forEach(el=>{
-    el.onclick = ()=>{
-      LK.ntCooldown = Math.max(30, Math.min(600, (parseInt(LK.ntCooldown,10)||60) + parseInt(el.dataset.ntcd,10)));
-      renderCamTabs(); saveCfgSoon();
-    };
-  });
-  /* 通知三开关：开着但通道没配好 → 拦下并说明（没有发送目标，开了也发不出去）。
-     公众号的「配好」是四个字段齐全，不是有 Webhook —— 两种通道判据不同。 */
-  body.querySelectorAll("[data-ntsw]").forEach(el=>{
-    el.onclick = ()=>{
-      const k = el.dataset.ntsw;
-      const nk = k === "motion" ? "ntMotion" : k === "person" ? "ntPerson" : "ntVehicle";
-      if(!LK[nk] && !ntChannelReady()){
-        toast("toast2", (LK.ntPlatform === "wechat")
-          ? "先把公众号的 appID / appsecret / openid / 模板 ID 填全，再开通知开关"
-          : "先填写 Webhook 地址，再开通知开关");
-        return;
-      }
-      LK[nk] = !LK[nk];
-      renderCamTabs(); saveCfgSoon();
-    };
-  });
-  /* 通知三开关：开着但没填 Webhook → 拦下并说明（发送目标都没有，开了也发不出去） */
-  body.querySelectorAll("#ntWebhook").forEach(inp=>{
-    inp.onchange = ()=>{
-      LK.ntWebhook = (inp.value || "").trim();
-      saveCfgSoon();
-    };
-  });
-  /* 公众号的五个字段（0.9.142）。用 onchange 而不是 oninput：每按一个键就推一次
-     /api/config，会把配置写入变成打字机。secret 留空＝不修改 —— 服务端 GET 时
-     就把原文抹掉了，这里不可能读到旧值，也就没法「原样推回去」。 */
-  body.querySelectorAll("[data-ntwx]").forEach(inp=>{
-    inp.onchange = ()=>{
-      const key = inp.dataset.ntwx;
-      const v = (inp.value || "").trim();
-      const cur = Object.assign({}, LK.ntWechat || {});
-      /* 留空的 secret 不覆盖任何东西（也覆盖不了：原文只在服务端） */
-      if(!(key === "secret" && !v)) cur[key] = v;
-      LK.ntWechat = cur;
-      saveCfgSoon();
-    };
-  });
-  /* 平台手选（0.9.124）：公司网关会改写机器人地址的 host，自动识别不出来。
-     保存后由 pushCfg 一起推，服务端按该平台出 body。 */
-  body.querySelectorAll("[data-ntplat]").forEach(el=>{
-    el.onclick = ()=>{
-      LK.ntPlatform = el.dataset.ntplat || "auto";
-      renderCamTabs(); saveCfgSoon();
-    };
-  });
-  body.querySelectorAll("#ntTemplate").forEach(inp=>{
-    inp.onchange = ()=>{
-      LK.ntTemplate = (inp.value || "").trim();
-      saveCfgSoon();
-    };
-  });
-  const bNtSave = body.querySelector("#btnNtSave");
-  if(bNtSave) bNtSave.onclick = ()=>{
-    const inp = body.querySelector("#ntWebhook");
-    const tp = body.querySelector("#ntTemplate");
-    if(inp) LK.ntWebhook = ((inp && inp.value) || "").trim();
-    if(tp) LK.ntTemplate = (tp.value || "").trim();
-    /* 公众号字段一起收（只在平台选微信时这些 input 才存在） */
-    const wx = Object.assign({}, LK.ntWechat || {});
-    body.querySelectorAll("[data-ntwx]").forEach(x=>{
-      const v = (x.value || "").trim();
-      if(x.dataset.ntwx === "secret" && !v) return;   // 留空＝不修改
-      wx[x.dataset.ntwx] = v;
-    });
-    LK.ntWechat = wx;
-    saveCfgSoon();
-    const out = body.querySelector("#ntOut");
-    if(!out) return;
-    if(LK.ntPlatform === "wechat"){
-      const miss = ["appid", "openid", "template_id"].filter(k=>!wx[k]);
-      if(!wx.secret && !wx.secret_set) miss.push("appsecret");
-      out.textContent = miss.length
-        ? ("已保存 · 还缺 " + miss.join(" / "))
-        : "已保存 · 记得点右下角「保存通用设置」";
-    }else{
-      out.textContent = LK.ntWebhook
-        ? "已保存 · 记得点右下角「保存通用设置」"
-        : "已清空（保存后不再发送）";
-    }
-  };
-  /* 发送历史（0.9.124）：只在点按钮时读盘。列表存在 NT.hist 里，
-     因为卡片每次交互都会整块重渲染，直接写 DOM 会被下一次 render 冲掉。 */
-  const bNtHist = body.querySelector("#btnNtHist");
-  if(bNtHist) bNtHist.onclick = async ()=>{
-    NT.hist = { loading:true };
-    renderCamTabs();
-    try{
-      const d = await API.get("/api/notify/history?limit=20");
-      NT.hist = (d && d.items) ? { items:d.items }
-               : { err:(d && d.error) || "服务端没返回历史" };
-    }catch(e){
-      NT.hist = { err:"网络错误，读不到发送历史" };
-    }
-    renderCamTabs();
-  };
-  const bNtTest = body.querySelector("#btnNtTest");
-  if(bNtTest) bNtTest.onclick = async ()=>{
-    const inp = body.querySelector("#ntWebhook");
-    const tp = body.querySelector("#ntTemplate");
-    const out = body.querySelector("#ntOut");
-    const url = ((inp && inp.value) || "").trim();
-    const isWx = LK.ntPlatform === "wechat";
-    /* 公众号没有地址可填，别按「先填 Webhook」把它拦在这 */
-    if(!isWx && !url){ if(out) out.textContent = "先填 Webhook 地址再测试"; return; }
-    /* 测试发的是「你现在填的这句」而不是磁盘上旧的：否则测试成功、
-       真实通知却被改坏的模板回退，问题查不出来。 */
-    const tpl = tp ? (tp.value || "").trim() : LK.ntTemplate;
-    LK.ntWebhook = url; LK.ntTemplate = tpl || "";
-    const req = { webhook: url, template: tpl || "", platform: LK.ntPlatform || "auto" };
-    if(isWx){
-      /* 页面上的值优先（可能还没保存）。secret 留空时传空，服务端会沿用
-         磁盘上的那份 —— 界面本来就拿不到原文。 */
-      const wx = Object.assign({}, LK.ntWechat || {});
-      body.querySelectorAll("[data-ntwx]").forEach(x=>{
-        const v = (x.value || "").trim();
-        if(x.dataset.ntwx === "secret" && !v) return;
-        wx[x.dataset.ntwx] = v;
-      });
-      LK.ntWechat = Object.assign({}, wx, { secret: "" });
-      req.wechat = wx;    }
-    if(out) out.textContent = "发送中…";
-    try{
-      /* 这处以前自己拼请求头，漏了 X-NVR-Request —— 服务端 _write_ok 直接 403，
-         于是一个能用的 Webhook 地址永远只回"发送失败"。走请求层后由它统一带。
-         要等对端 webhook 回应，20 秒是给慢端点的（默认 15 秒偏紧）；公众号要
-         现换一次 token 再发，也给 20 秒。 */
-      const d = await API.post("/api/notify/test", req, { timeout: 20000 });
-      if(out) out.textContent = d && d.ok
-        ? ("测试发送成功" + (d.ms ? "（" + d.ms + "ms）" : "")
-           + (d.platform ? "· 按 " + ntPlatformLabel(d.platform) + " 格式发出" : ""))
-        : ("发送失败：" + ((d && d.error) || "未知原因"));
-    }catch(e){
-      if(out) out.textContent = "发送失败：网络错误";
-    }
-  };
   /* 立即归档：第一次点 = dry_run 预览；第二次点 = 真跑（受 batch 限速） */
   const bArch = body.querySelector("#btnArchNow");
   if(bArch) bArch.onclick = async ()=>{

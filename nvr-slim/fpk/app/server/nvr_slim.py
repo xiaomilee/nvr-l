@@ -66,8 +66,6 @@ import ledger  # noqa: E402
 import detect  # noqa: E402
 import event_shot  # noqa: E402
 import motion_shot  # noqa: E402
-import notify  # noqa: E402
-import notify_tpl  # noqa: E402  （/api/notify/test 判「公众号没有地址」用）
 import archive  # noqa: E402
 import health  # noqa: E402
 import auth  # noqa: E402
@@ -198,8 +196,8 @@ def _fmt_exc(e):
 # 192 行「取流断开/重连」和「录制启动完成」是同一个级别、同一个颜色，出问题
 # 时只能在几百行里用眼睛捞，而用户贴过来的截图往往正好没有那几行。
 #
-# 为什么按关键词判而不是给每个调用点加参数：detect / ingest / link / notify /
-# recorder / snapshots / frames 八处的 log= 回调都是单参数签名（lambda m: ...），
+# 为什么按关键词判而不是给每个调用点加参数：detect / ingest / link /
+# recorder / snapshots / frames 七处的 log= 回调都是单参数签名（lambda m: ...），
 # 改成 (msg, lvl) 要动 30 多个调用点，改动量大且必然漏几个 —— 漏掉的那个恰好
 # 就是线上出事时不亮红灯的那个。关键词法对已有代码零改动、全覆盖；判错一个
 # 词的最坏后果只是少一个颜色，不影响功能。nvr_slim 自己的调用点可显式覆盖。
@@ -3083,12 +3081,10 @@ def _make_detect_worker(cfg):
     # 取的是 norm_detect 强校后的值（写错已按 auto 处理）。
     engine = detect.Engine(STATE["app_dir"], STATE["var_dir"], log=_log_line,
                            device=det.get("device") or "auto")
-    nt = STATE.get("notifier")
     return detect.DetectWorker(
         engine, ff, STATE["var_dir"], record_dir, cameras,
         cfg_fn=_detect_cfg_snapshot,
         interval=5, timeout=10, log=_log_line,
-        notifier=(nt.offer if nt else None),
         # 统一取流后 AI 读的是取帧层那一张 jpg（0.9.80），不再自己拉 RTSP。
         # 取帧没起（老流程 / 降级）时返回 None，worker 会退回直连抽帧。
         frame_path_fn=(_frame_path_for_detect
@@ -3425,8 +3421,6 @@ def status_payload():
         # 这个接口几秒被轮询一次（fnOS 桌面壳也在问），绝不能在这里扫盘。
         # 空 dict = 还没算过，前端按"未知"处理、不显示红条。
         "space": STATE.get("space") or {},
-        "notify": (STATE["notifier"].status() if STATE.get("notifier")
-                   else {"recent": [], "pending": 0}),
         "scan_label": runtime.SCAN_LABEL.get(cfg.get("scan_mode"), "?"),
         # 缓存落点（0.9.141）：正常应在 <record_dir>/_cache；回退时 on_store=False。
         "cache": _cache_status(),
@@ -3742,33 +3736,6 @@ class Handler(BaseHTTPRequestHandler):
                 start = None
             return self._send(200, {"ok": True,
                                     "probe": msvc.probe(cam, date, start)})
-        if path == "/api/notify/history":
-            # 通知发送历史：内存 recent 只有 20 条且重启即丢，这里读的是落盘事实。
-            # 只在有人显式查时读盘；/api/status 的轮询走 Notifier 的内存计数。
-            qs = parse_qs(urlparse(self.path).query)
-
-            def one(k):
-                return (qs.get(k) or [None])[0]
-
-            def num(k):
-                v = one(k)
-                try:
-                    return float(v) if v not in (None, "") else None
-                except (TypeError, ValueError):
-                    return None
-
-            ok_raw = one("ok")
-            ok = None
-            if ok_raw in ("1", "true", "yes"):
-                ok = True
-            elif ok_raw in ("0", "false", "no"):
-                ok = False
-            ntf = STATE.get("notifier")
-            rows = ntf.history(since=num("from"), until=num("to"),
-                               cam=one("cam"), cat=one("cat"), ok=ok,
-                               limit=one("limit") or 100) if ntf else []
-            return self._send(200, {"ok": True, "items": rows, "count": len(rows),
-                                    "file": "notify-history.jsonl"})
         if path == "/api/gpu":
             return self._send(200, gpu(force=True))
         if path == "/api/slots":
@@ -4450,20 +4417,6 @@ class Handler(BaseHTTPRequestHandler):
                 _old = (cfg.get("detect") or {}).get("confirm")
                 if isinstance(_old, dict):
                     _det["confirm"] = _old
-            # 公众号 appsecret（0.9.142）只进不出：GET /api/config 用 redact_cfg
-            # 把它抹成空串，前端手里本来就没有原文。推回来时为空表示「没改」，
-            # 沿用磁盘那份；整个 wechat 块没带（旧缓存 / 旧前端）也一样保留，
-            # 否则一次「保存通用设置」就能把用户填了半天的凭据清空。
-            _nt = body.get("notify")
-            if isinstance(_nt, dict):
-                _old_wx = ((cfg.get("notify") or {}).get("wechat")
-                           if isinstance(cfg.get("notify"), dict) else None)
-                _wx = _nt.get("wechat")
-                if not isinstance(_wx, dict):
-                    if isinstance(_old_wx, dict) and _old_wx:
-                        _nt["wechat"] = dict(_old_wx)
-                elif not str(_wx.get("secret") or "").strip() and _old_wx:
-                    _wx["secret"] = str(_old_wx.get("secret") or "")
             for k in runtime.DEFAULTS:
                 if k not in body:
                     continue
@@ -4505,7 +4458,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg["snapshot_interval"] = max(1, min(10, int(cfg["snapshot_interval"])))
             except (TypeError, ValueError):
                 cfg["snapshot_interval"] = 10
-            # 嵌套配置块（detect/notify）的强校说明单独记日志：前端「保存成功」
+            # 嵌套配置块（detect）的强校说明单独记日志：前端「保存成功」
             # 但值被服务端修正时（如 trigger 全假回落），日志里能查到原因。
             if isinstance(body.get("detect"), dict):
                 _v, notes = detect.norm_detect(body["detect"])
@@ -4538,25 +4491,6 @@ class Handler(BaseHTTPRequestHandler):
                                     "config": runtime.redact_cfg(cfg),
                                     "restart_hint": ("部分参数需重启服务才生效"
                                                      if "record_dir" in changed else "")})
-
-        if path == "/api/notify/test":
-            # 设置页「测试发送」：同步发一条到指定 webhook，如实反馈成败与耗时。
-            # template / platform / wechat 允许临时带上：界面上刚改还没保存时，
-            # 测的应当是屏幕上那句话（和那套凭据），不是磁盘上的旧值。
-            url = str(body.get("webhook") or "").strip()
-            plat = body.get("platform") if body.get("platform") is not None else None
-            # 公众号没有地址：只要平台选了 wechat，地址为空是正常的，
-            # 不能再按「Webhook 地址为空」拦下 —— 否则这个通道永远测不了。
-            if not url and notify_tpl.norm_platform(plat) != "wechat":
-                return self._send(200, {"ok": False, "error": "Webhook 地址为空"})
-            nt = STATE.get("notifier")
-            if nt is None:
-                return self._send(200, {"ok": False, "error": "通知服务未就绪"})
-            tpl = body.get("template") if body.get("template") is not None else None
-            wx = body.get("wechat") if isinstance(body.get("wechat"), dict) else None
-            ok, ms, err, platform = nt.test(url, tpl=tpl, platform=plat, wx=wx)
-            return self._send(200, {"ok": ok, "ms": ms, "error": err,
-                                    "platform": platform})
 
         if path == "/api/scan":
             # 「扫描」按钮的落地实现：不碰解码，只列磁盘上每个通道有没有数据、
@@ -4946,14 +4880,6 @@ def main():
                        tmp_dir=cache.sub(a.var, "tmp"))
     STATE["recorder"] = rec
     STATE["link"] = lk
-    # 通知分发器（AI 检测 / 移动侦测 → Webhook）：独立线程 + 队列 + cooldown
-    # var_dir 传进去才能把发送历史落盘；内存 recent 重启即丢，排障要能查昨天的。
-    ntf = notify.Notifier(cfg_fn=lambda: runtime.load_config(a.var), log=_log_line,
-                          var_dir=a.var)
-    ntf.reconfigure(cfg)
-    ntf.start()
-    STATE["notifier"] = ntf
-    lk.notifier = ntf.offer
     # ---- 0.9.80 统一取流：摄像头每路只看到一条连接 ----
     # 顺序是硬要求：先起取流拿到本机端口，录制与取帧才有 URL 可接。
     # 取流起不来（没 ffmpeg / 端口开不出）时 url_fn 返回 None，录制自动退回
@@ -5087,14 +5013,6 @@ def main():
             _ms = STATE.get("motion_shot")
             if _ms is not None:
                 _ms.stop()
-        except Exception:
-            pass
-        # 通知线程重试里有 2s/4s 的 sleep，不显式 set 就只能靠 daemon 硬退；
-        # 停服时那条通知会连「发没发出去」的历史都来不及记。
-        try:
-            _ntf = STATE.get("notifier")
-            if _ntf is not None:
-                _ntf.stop()
         except Exception:
             pass
         try:

@@ -247,13 +247,13 @@ class ConfigDoc(unittest.TestCase):
         """双入口 / 强校 / 嵌套块那几个坑，文档被简化成占位就要红。"""
         for needle in ("coerce", "merge_defaults", "redact_cfg",
                        "/api/link/policy", "reconfigure",
-                       "detect.confirm", "norm_detect", "norm_notify",
+                       "detect.confirm", "norm_detect",
                        "CONFIRM_DEFAULTS", "KNOWN_GAPS",
                        "partial", "config.json"):
             with self.subTest(缺少=needle):
                 self.assertIn(needle, self.text)
         tail = self.text[self.text.index("## 4. 嵌套块"):]
-        for needle in ("live_fps", "cooldown", "confirm", "NOTIFY_DEFAULTS"):
+        for needle in ("live_fps", "confirm", "CONFIRM_DEFAULTS"):
             with self.subTest(嵌套块缺少=needle):
                 self.assertIn(needle, tail)
 

@@ -254,7 +254,6 @@ class TestWorkerWiring(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="confirm")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.cam = {"id": "cam1", "name": "测试A", "dir_name": "cam1"}
-        self.notified = []
         self.engine = _Engine([{"c": "person", "s": 0.92,
                                 "b": [0.5, 0.5, 0.1, 0.2]}])
         self.w = self._worker(self.engine)
@@ -264,7 +263,6 @@ class TestWorkerWiring(unittest.TestCase):
             engine, "", self.tmp, lambda: self.tmp,
             lambda: ([], []), lambda: ({}, []))
         w._grab = lambda cam, url: (True, PPM, "", "")
-        w.notifier = lambda name, cat: self.notified.append((name, cat))
         if confirm_cfg is not None:
             w.confirmer.update(confirm_cfg)
         self.writes = []
@@ -277,7 +275,6 @@ class TestWorkerWiring(unittest.TestCase):
         now = time.time()
         self.w._one(self.cam, "rtsp://x", {}, {"person": True}, now)
         self.assertEqual(self.writes, [], "单帧命中不许进台账")
-        self.assertEqual(self.notified, [], "也不许发通知：通知了却查到不事件最伤信任")
 
     def test_second_frame_writes_one_continuous_window(self):
         now = time.time()
@@ -288,7 +285,6 @@ class TestWorkerWiring(unittest.TestCase):
         self.assertAlmostEqual(s, _tod(now), places=3, msg="起点是第一帧命中")
         self.assertAlmostEqual(e, _tod(now) + 6, places=3)
         self.assertEqual(cls, {"person": 1})
-        self.assertEqual(self.notified, [("测试A", "person")])
 
     def test_confirmed_event_reaches_ledger(self):
         """落盘口径：台账里真的长出一条带类别的窗口（不是只在内存里对）。"""
@@ -309,7 +305,6 @@ class TestWorkerWiring(unittest.TestCase):
         w = self._worker(self.engine, {"enable": False})
         w._one(self.cam, "rtsp://x", {}, {"person": True}, time.time())
         self.assertEqual(len(self.writes), 1)
-        self.assertEqual(self.notified, [("测试A", "person")])
 
     def test_unknown_frame_feeds_nothing(self):
         """取帧失败那一拍既不算命中也不算"没人"：事件不被判结束。"""

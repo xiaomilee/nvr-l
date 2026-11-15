@@ -71,22 +71,6 @@ class TestNorm(unittest.TestCase):
         self.assertTrue(v["classes"]["person"])
         self.assertFalse(v["classes"]["vehicle"])
 
-    def test_notify_norm(self):
-        v = detect.norm_notify({"webhook": "  https://x/y  ", "cooldown": 5, "person": "yes"})
-        self.assertEqual(v["webhook"], "https://x/y")
-        self.assertEqual(v["cooldown"], 30, "冷却下限 30 秒")
-        self.assertTrue(v["person"])
-        self.assertFalse(v["motion"])
-        v = detect.norm_notify({"cooldown": 99999})
-        self.assertEqual(v["cooldown"], 600)
-        v = detect.norm_notify(None)
-        self.assertEqual(v["webhook"], "")
-        self.assertEqual(v["cooldown"], 60)
-
-    def test_notify_webhook_truncated(self):
-        v = detect.norm_notify({"webhook": "x" * 900})
-        self.assertEqual(len(v["webhook"]), 500)
-
     def test_sensitivity_presets(self):
         for s in ("high", "std", "low"):
             self.assertIn(s, detect.CONF_PRESETS)

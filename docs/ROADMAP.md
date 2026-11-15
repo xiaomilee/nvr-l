@@ -160,6 +160,7 @@ md5 `0d3567e1678808a3fbc8c6b31497d6bd`（同为 `nvr-0.9.123_x86.fpk`，**别装
 | 43 | 11-11 03:50 | **批次 21 · 0.9.140 修复「应用中心停用不生效」**（用户报：飞牛应用中心显示 NVR-L 已停用，但录像仍在写；要求核实停用到底能不能生效）：核实结论是 `cmd/main` 生命周期脚本自身三个缺陷——① start 的 `&` 挂在整条 `cd && nohup python` 列表上，PID 文件存的是 bash 壳（壳前台等待 python 永不退出）；② stop 只杀壳，python 成孤儿继续录像、报停用成功；③ status 用 `kill -0` 判活，跨用户执行 EPERM 必误报「未运行」且顺手删 PID 文件。修法：`&` 只作用于 nohup python（PID 文件存 python 本尊）；stop 无论 PID 文件对错都按命令行全扫兜底（TERM→限时等待→KILL）；status 三级判活（PID 文件→进程扫描→TCP 端口探测）并自愈 PID 文件；start 幂等加进程扫描。真机验证又抓两处当场补上：进程扫描只认 python 打头的命令行（纯字符串匹配被调用方复合命令自匹配骗过，status 曾对尸体报 0）；start 裸调无 TRIM_* env 时回退 target 符号链接找程序目录。另把 152 的 config `service_port` 18085→18080 与 manifest 对齐（消除应用中心按声明端口探测的误报源） | ad22ff5 | **出包** `dist/nvr-0.9.140_x86.fpk` **101236449 字节** md5 `f91c4dea12633225fd3bc01478108121`；闸门 validate 全绿、doc 套件 14 项（补 ARCHITECTURE/USER_GUIDE 版本提及后 OK）、版本守卫同步；`deploy_test.py` 部署 152 **九项全 OK**（`test-reports/deploy-0.9.140.json`），端口 18080；上机实测：start 后无壳驻留、PID 文件=python 本尊、root stop 后进程=0/端口释放/死亡态 status=3、admin 跨用户 status=0、nvr 裸调 start 恢复 2 路录制 + ffmpeg 6 进程；journal 取证确认飞牛从未成功执行过 `main stop`（进程 11-10 04:08 起未被杀过）；/vol1 余 53G（用户 02:54 手动删过录像目录）；**批次 21 标 done**，生产机 2.6 未碰 |
 | 44 | 11-11 14:50 | **批次 22 · 0.9.141 缓存集中到存储路径**（用户先问「配置目录应该是一处吧？程序用到的文件应该集中两处：一个存储目录、一个配置目录，可行吗」，确认后说「都挪进存储目录一起管」）：把程序自攒的可再生文件（事件截图 / 首页快照 / 播放重封装 / 抽帧临时文件）从 `@appdata/nvr` 收进 `<record_dir>/_cache/{shots,snapshots,remux,tmp}`，判据是「丢了会不会让程序起不来」而不是大小。新增 `cache.py` 一处收口落点：**绝不创建 record_dir 本体**（外接盘拔掉后挂载点仍在，makedirs 会把 `_cache` 建到根分区，问题从「报错」变成「悄悄写错地方」）、**每 20 秒真写一字节探测**（`isdir` 对只读挂载 / ACL 改坏 / 配额打满全返回 True）、不可用时回退 `var/_cache` 并留声、盘插回自动搬回；remux 首次有上限（5GB / 7 天 LRU，10 分钟内动过的跳过=正在播）；抽帧 `mkstemp(dir=)` 改落存储盘；旧目录后台一次性迁移（图与快照搬、remux/tmp 直接删，迁移期旧图仍可读，写 `.cache-migrated`）。附带：日志 20MB 轮转（`_emit` 整段持锁，避免关句柄与写入打架丢行）、配置备份最多留 2 份、空间预警把缓存从「其它占用」摘出来单独算、`/api/status` 与 `/api/storage/usage` 新增 cache 字段、诊断页显示占用与回退警示 | e177810 | **出包** `dist/nvr-0.9.141_x86.fpk` **101248684 字节** md5 `bf47d34294cf107c0b02dc4b6fd3fc84`；闸门 validate 全绿、后端 30 个测试文件全 OK（含新增 `test_cache.py` 23 项）、doc 套件 14 项；`deploy_test.py` 部署 152 九项全 OK（`test-reports/deploy-0.9.141.json`）；上机实测：迁移 2404 张事件图 / 222.2MB → `_cache/shots`、remux 与 tmp 直接删、`.cache-migrated` 落盘；`chmod 500 _cache` 模拟盘不可写 → 26 秒后 `on_store=false` + 日志 ERR 警告 + 回退 `var/_cache`，`chmod 755` → 26 秒后恢复并搬回；remux 超期清理实测 `removed=1`；事件图 HTTP 200 / 632KB；录制 `.part` 持续增长；var 从 611M 降到 108M（backup 清 7 份 / 602MB）；**批次 22 标 done**，生产机 2.6 未碰（待手动升级） |
 | 45 | 11-14 13:40 | **批次 23 · 0.9.142 微信公众号通知通道**（用户发来公众平台「测试号管理」截图问「通知如何配置？发到我的微信」，中间问「Server酱是不是停止服务了」→ 核实旧版 2021 年已停、Turbo 免费只有 5 条/天，不够 NVR 一天几十条 → 定「用自己那个测试号」）：新增 `wechat_push.py`，`cgi-bin/token`（**缓存 7000 秒 + 提前 200 秒续 + 40001/42001 重取一次再发**，这次重取不算对外重试）→ `cgi-bin/message/template/send`。**不可重试的错误不重试**（43004 未关注 / 45009 额度 / 40037 模板变量 / 48001 无权限 / 40125 secret 错），一律翻成「该改哪个字段」的中文，其中 `{{content.DATA}}` 的键名是 `content` 不是 `DATA` 单独成句——这是接公众号最常见的坑；`notify.channel_of()` 成为通道判定唯一出处（公众号没有地址，按 webhook 是否为空判会把它当「没配」静默丢掉）。**appsecret 只进不出**：`runtime.redact_cfg()` 抹成空串 + `secret_set`，`/api/config` 入口「空则沿用磁盘、整块没带也沿用」；失败升级：连续 3 条在设置页与诊断页挂红字 + 一条 `[ERR]`。附带 Server酱³（`xxx.push.ft07.com`）识别补齐；设置页选「微信公众号」时隐藏 Webhook、换成五个字段（appID / appsecret / openid / 模板 ID / 数据键名） | 7ae27ba | **出包** `dist/nvr-0.9.142_x86.fpk` **101263668 字节** md5 `e82edfe4a0de3f3c72593b4e95bbf28c`；闸门 validate 全绿、后端 31 个测试文件全 OK（新增 `test_wechat_push.py` 28 项、`test_notify.py` +2、`test_log_tail.py` +5）、doc 套件 14 项；`deploy_test.py` 部署 152 九项全 OK；**真机真发**：`/api/status` → `channel=wechat`、`wx.ready=true`、`token_cached=true`（`token_exp_in` 6788s）；真实事件已送达 7 条（人员/车辆/移动侦测，`ok=true` 763–1189ms，平台均为 wechat）；「测试发送」`ok=true` 8826ms（首发生连 + 换 token）→ 第二次 763ms；**真机抓到一个假象并当场修掉**：页面拿不到 secret 原文，点「测试发送」传上来的是空串 → 报「缺 appsecret」，可保存后真实事件却发得出去（`Notifier.test()` 补「空则沿用磁盘」）；**又抓到一处日志泄漏**：curl 参数写错时整个 JSON body 被当请求行记进 nvr.log（grep 到 3 处 secret 明文）→ 新增 `access_line()`：非 HTTP 方法行压成「[非 HTTP 请求行，N 字符已省略]」、其余过 redact + 截断 300；清日志后用裸 socket 造同形畸形请求实测 canary 0 次、真 secret 0 次；**批次 23 标 done**，生产机 2.6 未碰（待手动升级） |
+| 46 | 11-15 23:45 | **批次 24 · 0.9.143 移除通知通道**（用户先问「能推送事件快照吗」，核实后是「微信里做不到」：`message/template/send` 只有文本字段、没有 image；客服消息能发图但有 48 小时窗口（45015），NVR 场景等于没有；唯一可行是模板消息带链接跳 NAS 看快照，而这要求手机任何网络下都能访问 NAS。用户据此判断「只有文字没有画面，意义不大」，决定整个删掉）：删 `notify.py` / `notify_tpl.py` / `notify_history.py` / `wechat_push.py`（合计 1069 行）、五个 `test_notify*.py`、设置页「通知通道」整块与矩阵第三列（三列收成两列：记录 / 算活动）、诊断卡发送记录、`data-ntsw` / `data-ntcd` / `data-ntplat` / `data-ntwx` 全部事件绑定、`/api/notify/history` 与 `/api/notify/test`、`runtime.DEFAULTS` 的 notify 键、`detect.norm_notify()`、`DetectWorker(notifier=)` 与 `Link(notifier=)`、`status.notify`；部署自检九项回到八项。**边界按「它是不是通知」划**：`event_shot.py`（事件页那一眼，本来就不外发）、`access_line()`（挡的是畸形请求整段写日志这个通用缺口）、`redact_cfg()` 的 URL 脱敏三样留下。老配置 `load_config()` 直接 pop，下次保存自然消失 | 28f450c | **出包** `dist/nvr-0.9.143_x86.fpk` **101233701 字节** md5 `28f450cbe07a7f731df3e82015cbb601`；闸门 validate 81 项全过、后端 **61 文件 1369 条**全 OK、doc 套件 14 项（三篇文档标题版本戳 bump 0.9.143、自检项数从代码数出来改「八项」）、前端 settings **496**（-18 条通知断言）/ js_split 173 / css 28 / events 123 / export 26 / space 30 / detect 58 / masks 27 / timeline 70 全绿；**本机起服务实证**：`/api/status` 的 `version=0.9.143`、**无 `notify` 键**（keys 只剩 23 个业务块）、`/api/notify/test` → 404、`/api/notify/history` → 200 但是 SPA 兜底页不是接口；**部署未做**：152 `ping` 回「无法访问目标主机」、curl 000，机器不可达（13:49 还连着），`deploy_test.py` 连 15 秒超时退出，待恢复后补跑八项自检；生产机 2.6 未碰 |
 ## 测试平台（可以随便折腾，与生产隔离）
 
 | 项 | 值 |
@@ -2275,3 +2276,52 @@ token 不能每次现取——获取接口有每日额度，且同 appID 频繁�
 - 部署瞬间出现过一次「缓存落点回退」（30 秒后自动恢复），顺手把探测失败原因带进日志：
   以前只有「存储路径不可写」，看不出是 EACCES 还是 ENOSPC，两者处置完全相反。
 - `recorder.py` 一行未改；生产机 2.6 未碰。
+
+## 批次 24 · 0.9.143 移除通知通道（第 46 轮）
+
+**起因是一句提问，不是需求**：用户问「能推送事件快照吗」。查完的实现如下——
+
+| 路径 | 能不能 | 卡在哪 |
+|---|---|---|
+| 模板消息带图 | 不能 | `message/template/send` 只收 `data` 里的文本字段，没有 image 类型 |
+| 客服消息发图 | 理论可以 | **48 小时窗口**：两天没给公众号发过消息就报 45015，NVR 场景等于没有 |
+| 模板消息带链接跳 NAS | 可以 | 手机得在任何网络下都能访问 NAS（内网地址出门白页，要 Tailscale 或 DDNS） |
+
+三条都不成立或不划算，用户给了一句判断：**「没有截图，只有文字通知的话，意义不大」**，
+于是从「加功能」直接转成「删功能」。这个转弯是对的——一个通知通道如果既不能告诉你
+"是谁"，又要你为此维护 appID / secret / openid / 模板 ID 四样东西，那它剩下的只有维护成本。
+
+**删除边界按「它是不是通知」划，不按文件柜划**：
+
+| 删 | 理由 |
+|---|---|
+| `notify.py` 356 行 / `notify_tpl.py` 225 / `notify_history.py` 193 / `wechat_push.py` 295 | 通知本体 |
+| 五个 `test_notify*.py` | 测的是删掉的东西 |
+| 设置页「通知通道」整块 + 矩阵第三列 | 用户能看见的入口 |
+| `/api/notify/history`、`/api/notify/test` | 没有前端会再调它们 |
+| `runtime.DEFAULTS` 的 notify 键、`detect.norm_notify()`、两个 `notifier=` 注入点、`status.notify` | 支撑结构 |
+
+| 留 | 理由 |
+|---|---|
+| `event_shot.py`（事件快照全套） | 它是**事件页的那一眼**，从来没往外发过。通知没了，图照旧在 |
+| `nvr_slim.access_line()` | 挡的是「畸形请求的请求行整段写进日志」这个通用缺口。当初是查公众号密钥泄露才发现它的，但那不等于它是通知的一部分 |
+| `runtime.redact_cfg()` 的摄像头 URL 脱敏 | 与通知无关的既有能力 |
+
+**老配置怎么处置**：`load_config()` 里 `cfg.pop("notify")`，下一次 `save_config()` 整份写回时
+它自然消失。不写一次性迁移脚本——迁移要跑、要测、要在真机上验，而这些成本换来的只是
+「配置文件里少了一个没人读的块」。同理也没有做「升级时提示用户通知已移除」的弹窗：
+用户要的正是它消失。
+
+**顺手修掉的两处旧债**：`test_log_tail.py` 的脱敏样本从公众号 secret 换成 `api_token`
+（`access_line` 留着，样本得跟着现实走）；`validate.py` 的 py_compile 清单里那两个
+通知模块换成 `event_shot.py` / `motion_shot.py`——本来漏编译它们，通知删了正好补上真正的风险点。
+
+**验证**：validate 81 项全过；后端 61 个测试文件 1369 条全 OK；doc 套件 14 项（三篇文档标题
+版本戳 bump 0.9.143，自检项数从 `deploy_test.CHECKS` 数出来自动变成「八项」）；
+前端 settings 496（删掉 18 条通知断言）/ js_split 173 / css 28 / events 123 / export 26 /
+space 30 / detect 58 / masks 27 / timeline 70 全绿。本机起服务实证：`/api/status` 的
+`version=0.9.143` 且**没有 `notify` 键**（顶层只剩 23 个业务块）、`/api/notify/test` → 404。
+
+**没做成的一项**：152 不可达（`ping` 回「无法访问目标主机」、curl 000，而 13:49 还连着），
+`deploy_test.py` 连 15 秒超时退出。八项自检留待机器恢复后补跑——**这一项不能算过**。
+`recorder.py` 一行未改；生产机 2.6 未碰。

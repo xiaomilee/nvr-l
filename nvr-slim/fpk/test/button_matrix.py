@@ -173,9 +173,6 @@ ROWS = [
          "config.detect.enable", ("status.detect.enabled", "status.detect.state"),
          note="detect.enable 有 _sync_detect_worker 热生效；"
               "detect.confirm 没进 UI，保存时由服务端沿用磁盘旧值"),
-    _row("notify", "通知块", "[data-ntsw] / #ntWebhook 等",
-         "config.notify.cooldown", (),
-         note="status.notify 只有 recent/pending，改冷却不会立刻变"),
     _row("cameras", "摄像头列表", "[data-camname] / [data-camseg] 等",
          "config.cameras.*.name",
          ("link.record.channels.*.name",),

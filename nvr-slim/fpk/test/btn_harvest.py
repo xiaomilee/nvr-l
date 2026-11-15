@@ -142,12 +142,6 @@ def _pick_detect(cur, _cfg, _ctx):
     return blk, blk["enable"]
 
 
-def _pick_notify(cur, _cfg, _ctx):
-    blk = json.loads(json.dumps(cur or {}))
-    blk["cooldown"] = _alt_num(blk.get("cooldown"), (45, 90, 120), 30, 600)
-    return blk, blk["cooldown"]
-
-
 def _pick_cameras(cur, _cfg, _ctx):
     cams = json.loads(json.dumps(cur or []))
     if not cams:
@@ -191,7 +185,6 @@ PICKERS = {
         _alt_num(cur, (3, 2, 1), 1, 3)),       # 服务端夹取 1~3
     "gpu": _enum_alt(("auto", "qsv", "off")),
     "detect": _pick_detect,
-    "notify": _pick_notify,
     "cameras": _pick_cameras,
 }
 
@@ -289,7 +282,7 @@ class Srv:
         那不是值没回去，是标准答案抄错了版本。
         """
         cfg = self.disk()
-        body = {k: cfg[k] for k in ("cameras", "detect", "notify") if k in cfg}
+        body = {k: cfg[k] for k in ("cameras", "detect") if k in cfg}
         if body:
             self.post("/api/config", body)
             time.sleep(0.2)

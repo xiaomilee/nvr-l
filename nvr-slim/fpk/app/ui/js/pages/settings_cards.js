@@ -189,7 +189,7 @@ function cardLink(){
       + '<span class="n">① 事件侦测</span>'
       + '<div class="sw ' + (LK.ledger?"on":"") + '" data-ledger="1" style="margin-left:auto"></div>'
     + '</div>'
-    + '<div class="h" style="margin-top:4px;line-height:1.55">事件侦测开：每路每天写几 KB 的「活动台账」(_ledger)，回放页时间轴出现活动标记、活动触发与通知可用、全时过期后能裁归档浓缩。关：只录全时、不判定，回放页无活动标记、不归档。</div>'
+    + '<div class="h" style="margin-top:4px;line-height:1.55">事件侦测开：每路每天写几 KB 的「活动台账」(_ledger)，回放页时间轴出现活动标记、活动触发可用、全时过期后能裁归档浓缩。关：只录全时、不判定，回放页无活动标记、不归档。</div>'
     + '<div class="srow">'
       + '<div class="top"><span class="n">② 归档回溯</span>'
         + '<span class="v">' + (LK.condenseMode==="off" ? "需先开启事件侦测"
@@ -297,127 +297,16 @@ function cardPlay(){
    用户不需要区分「帧差」和「AI」是两套实现——面对的都是「检测」：
    组 1 移动侦测（像素差，不需要 AI、随事件侦测运行、无总闸，只做说明与指路）；
    组 2 AI 识别（总闸/类别/灵敏度，缩在闸后）；
-   组 3 触发与通知（活动触发三勾选 + 通知三开关，刻意放在总闸之外——
-   移动侦测的通知不需要 AI，以前藏在 detEnable 里导致关了 AI 就配不了）。
+   组 3 按类别控制（记录 / 算活动两列矩阵，刻意放在总闸之外——
+   移动侦测的判定不需要 AI，以前藏在 detEnable 里导致关了 AI 就配不了）。
    每路开关与判读参数在摄像头手风琴「检测」段；台账 cls 消费在回放页筛选 chips。
    所有选项都进 pushCfg body（LK.det 系列 / LK.nt 系列），
-   服务端 norm_detect/norm_notify 强校。 */
+   服务端 norm_detect 强校。 */
 const DET = { st:null };   /* /api/status 的 detect 快照：loaded/error/avg_ms/per_cam */
 /* 0.9.80 统一取流：每路一条 RTSP 连接 → 本机端口 → 录制/取帧/AI。
    ING.st = {enabled, cams:{id:{port,clients,idle_sec,tries,stall,error,state}}}
    ING.fr = {id:{frames,ok,interval,age,error}}（老流程时为 null） */
 const ING = { st:null, fr:null };
-const NT  = { st:null, hist:null };
-/* st   = /api/status 的 notify 快照（recent / pending / render / history 计数）
-   hist = 显式点「查看发送历史」后 GET /api/notify/history 的结果：
-          {loading} | {items:[...]} | {err:"..."}。
-          存在这里而不是直接写 DOM，是因为卡片每次交互都会整块重渲染，
-          只写 DOM 的话一点别的开关就把列表清掉了。 */
-
-/* 平台列表的兜底。正常情况下吃服务端 /api/status 的 notify.render.platforms
-   （唯一一份），这里只为「状态还没回来时按钮先画出来」。
-   两边不一致由 test/test_notify_ui.py 的守卫抓——前端不该悄悄多出一个
-   后端不认的平台值，那会让保存直接被 norm_notify 打回 auto。 */
-const NT_PLATFORMS = [
-  ["auto", "自动识别"], ["feishu", "飞书"], ["dingtalk", "钉钉"],
-  ["wecom", "企业微信"], ["serverchan", "Server酱"], ["bark", "Bark"],
-  ["wechat", "微信公众号"], ["generic", "通用 JSON"]
-];
-const NT_CAT = {person: "人员", two_wheeler: "两轮车", vehicle: "车辆",
-                motion: "移动侦测"};
-
-function ntPlatformList(){
-  const r = (NT.st && NT.st.render) || null;
-  const list = (r && r.platforms) || [];
-  return list.length ? list.map(o=>[o.v, o.label]) : NT_PLATFORMS;
-}
-
-function ntPlatformLabel(v){
-  const hit = ntPlatformList().find(p=>p[0] === v);
-  return hit ? hit[1] : (v || "—");
-}
-
-/* 通道「配好了没有」。两种通道判据不同：Webhook 看地址非空，公众号看四个字段
-   齐全（secret 只看服务端的 secret_set：页面永远拿不到原文）。开通知开关前
-   用它拦一次，否则用户会开了开关、看着一切正常，实际一条也发不出去。 */
-function ntChannelReady(){
-  if((LK.ntPlatform || "auto") === "wechat"){
-    const w = LK.ntWechat || {};
-    return !!(w.appid && w.openid && w.template_id && (w.secret || w.secret_set));
-  }
-  return !!(LK.ntWebhook || "").trim();
-}
-
-/* 「这条通知实际会怎么发」——平台是识别来的还是手选的、文案有没有被回退。
-   全部照抄 /api/status 的 notify.render，前端不再自己猜一遍平台。 */
-function ntRenderLine(){
-  const r = (NT.st && NT.st.render) || null;
-  if(!r) return '实际发送方式：状态未就绪（稍后自动刷新）';
-  let s = '实际平台：<b>' + esc(r.label || ntPlatformLabel(r.platform)) + '</b>'
-    + (r.auto ? '（按地址自动识别）' : '（手动指定）');
-  s += ' · 文案：' + (r.custom_template ? "自定义" : "默认");
-  if(r.template_why){
-    s += ' · <span style="color:var(--warn)">模板已回退：' + esc(r.template_why) + '</span>';
-  }
-  /* 公众号（0.9.142）：把「四个字段填全没有、token 缓存在不在」摆出来。
-     这两件事决定了通知发不发得出去，却又不在任何一条发送记录里。 */
-  const w = r.wx;
-  if(r.platform === "wechat" || (w && (w.appid || w.openid))){
-    s += '<br>公众号：' + (w && w.ready
-      ? ('已配置 ' + esc(w.appid || "") + ' → ' + esc(w.openid || "")
-         + ' · token ' + (w.token_cached ? '已缓存' : '待获取'))
-      : ('<span style="color:var(--warn)">未配置完整：缺 '
-         + esc(((w && w.missing) || []).join("、") || "四项") + '</span>'));
-  }
-  /* 连续失败到阈值（后端判 3 条）才在这里挂红字：偶发一条失败不该让页面上
-     常驻一个警告，那只会训练用户无视它。 */
-  const al = NT.st && NT.st.alarm;
-  if(al){
-    s += '<br><span style="color:var(--warn)"><b>通知已连续失败 ' + (al.n || 0) + ' 条</b>：'
-      + esc(String(al.err || "").slice(0, 60)) + ' —— 现在收不到通知，去「查看发送历史」看细节</span>';
-  }
-  const h = (NT.st && NT.st.history) || null;
-  if(h && h.persisted) s += ' · 已落盘 ' + (h.total || 0) + ' 条';
-  return s;
-}
-
-function ntWhen(ts){
-  const n = Number(ts);
-  if(!n) return "—";
-  const d = new Date(n * 1000);
-  return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " "
-    + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
-}
-
-/* 发送历史：只列事实（时间 / 路 / 类别 / 成败 / 平台 / 重试次数）。
-   失败行把错误原文压到 60 字——排障要看的是「HTTP 404」这种码，
-   而不是一整段被截断的堆栈。 */
-function ntHistHtml(){
-  const h = NT.hist;
-  if(!h) return "";
-  if(h.loading) return '<div class="hint" style="margin-top:10px">正在读取发送历史…</div>';
-  if(h.err) return '<div class="hint" style="margin-top:10px;color:var(--warn)">读取失败：' + esc(h.err) + '</div>';
-  const items = h.items || [];
-  if(!items.length){
-    return '<div class="hint" style="margin-top:10px">还没有落盘记录。发出一条通知（或点「测试发送」）后这里会出现。</div>';
-  }
-  const rows = items.map(x=>{
-    const ok = !!x.ok;
-    const who = (x.cam || "?") + " · " + (NT_CAT[x.cat] || x.cat || "?");
-    const tail = ok
-      ? ("成功" + (x.ms ? " " + x.ms + "ms" : ""))
-      : ("失败 " + esc(String(x.err || "").slice(0, 60))
-         + (x.tries ? "（试 " + x.tries + " 次）" : ""));
-    return '<div class="hint" style="margin-top:4px">'
-      + '<span style="color:var(--' + (ok ? "keep" : "warn") + ')">' + (ok ? "✓" : "✗") + '</span> '
-      + esc(ntWhen(x.at)) + ' · ' + esc(who) + ' · ' + esc(ntPlatformLabel(x.platform))
-      + ' · ' + tail + '</div>';
-  }).join("");
-  const total = ((NT.st && NT.st.history && NT.st.history.total) || items.length);
-  return '<div class="hint" style="margin-top:10px">最近 ' + items.length
-    + ' 条（最新在前）· 落盘共 ' + total + ' 条</div>' + rows;
-}
-
 /* 0.9.122：检测"能不能用"由后端给 state 判（disabled/starting/unavailable/ready），
    这里只做翻译。以前前端自己拼 running/loaded/error 三段判断，同一个现场在
    设置页说"未运行"、在诊断卡说"加载中"——用户不知道该信哪个，也不知道要不要重启。
@@ -514,11 +403,10 @@ function detStatusLine(){
 
 function cardDetect(){
   /* 0.9.112：三块「同样的三个类别」合并成一张矩阵。
-     以前是「检测类别」3 个开关、「活动触发」3 个开关、「通知」3 个开关，
-     九次重复、只有细节不同（触发与通知多了移动侦测、少了单独的两轮车），
-     用户很难看出三者是什么关系。现在一行一个类别，三列分别是
-     记录 / 算活动 / 通知，语义直接摆在一行里。
-     data-detcls / data-dettrig / data-ntsw 三个属性名刻意保持不变，
+     以前是「检测类别」3 个开关、「活动触发」3 个开关，六次重复、
+     只有细节不同（触发多了移动侦测、少了单独的两轮车），用户很难看出
+     两者是什么关系。现在一行一个类别，两列分别是记录 / 算活动。
+     data-detcls / data-dettrig 两个属性名刻意保持不变，
      所以下面的事件绑定代码一行都不用改。 */
   const aiOff = !LK.detEnable;
   const cell = (attr, k, on) =>
@@ -526,22 +414,9 @@ function cardDetect(){
     + attr + '="' + k + '"></div></span>';
   const dash = '<span class="cmx-dash">—</span>';
   const join = '<span class="cmx-dash">并入车辆</span>';
-  const row = (label, rec, trig, nt, off) =>
+  const row = (label, rec, trig, off) =>
     '<div class="cmx-r' + (off ? ' off' : '') + '">'
-    + '<span class="cmx-lab">' + label + '</span>' + rec + trig + nt + '</div>';
-  /* 公众号通道（0.9.142）：它不是「往一个地址 POST」，而是拿 appID/appsecret
-     换 token 再发模板消息，所以没有 webhook 可填。字段只在平台手选「微信公众号」
-     时出现——让两条通道共用一块输入区，用户会不知道该填哪边。 */
-  const isWx = (LK.ntPlatform || "auto") === "wechat";
-  const wx = LK.ntWechat || {};
-  const wxInp = 'margin-top:6px;width:100%;box-sizing:border-box;height:36px;'
-    + 'padding:0 10px;border:1px solid var(--line);border-radius:8px;'
-    + 'background:transparent;color:inherit;font-size:12.5px';
-  const wxField = (key, label, val, ph, type) =>
-    '<div class="h" style="margin-top:9px;line-height:1.55"><b>' + label + '</b></div>'
-    + '<input type="' + (type || "text") + '" class="mono" id="ntWx_' + key + '"'
-    + ' data-ntwx="' + key + '" autocomplete="off" spellcheck="false"'
-    + ' placeholder="' + esc(ph) + '" value="' + esc(val) + '" style="' + wxInp + '">';
+    + '<span class="cmx-lab">' + label + '</span>' + rec + trig + '</div>';
   return '<div class="gcard">'
     + '<h3>检测 <span class="sub">移动侦测 + AI 识别 · 所有摄像头共用 · 每路可单独覆盖</span></h3>'
     /* 组 1：移动侦测（像素差）。不需要 AI、没有自己的总闸——它随「事件侦测与归档
@@ -563,7 +438,7 @@ function cardDetect(){
         + '<div class="sw ' + (LK.detEnable?"on":"") + '" data-deten="1"></div></div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">默认关闭。开启后每 5 秒对每路抽 1 帧推理（YOLO11n · CPU），'
         + '检出的人 / 两轮车 / 车辆按下表与<b>每路勾选的类别</b>记进活动台账，与移动侦测的台账合并后'
-        + '一起供给回放页筛选、活动触发和通知。不换硬件也能跑：i3-12100 扛 5 路只占约半个核。</div>'
+        + '一起供给回放页筛选与活动触发。不换硬件也能跑：i3-12100 扛 5 路只占约半个核。</div>'
     + '</div>'
     + (LK.detEnable ? (
       /* 灵敏度三档 → 分品类阈值 */
@@ -586,96 +461,31 @@ function cardDetect(){
     /* 组 3：类别矩阵。三件事写在一行里，取代原来三块重复的开关。 */
     + '<div class="srow">'
       + '<div class="n">按类别控制</div>'
-      + '<div class="h" style="margin-top:2px;line-height:1.55">一行一个类别，三列分别管三件事：'
-        + '<b>记录</b>＝写不写进活动台账，<b>算活动</b>＝进不进事件列表与缩时，<b>通知</b>＝发不发 Webhook。</div>'
+      + '<div class="h" style="margin-top:2px;line-height:1.55">一行一个类别，两列分别管两件事：'
+        + '<b>记录</b>＝写不写进活动台账，<b>算活动</b>＝进不进事件列表与缩时。</div>'
       + '<div class="cmx">'
         + '<div class="cmx-h"><span class="cmx-lab">类别</span>'
           + '<span class="cmx-col">记录</span>'
-          + '<span class="cmx-col">算活动</span>'
-          + '<span class="cmx-col">通知</span></div>'
+          + '<span class="cmx-col">算活动</span></div>'
         + row("移动侦测", dash,
-              cell("data-dettrig", "motion", LK.detTrigger.motion),
-              cell("data-ntsw", "motion", LK.ntMotion), false)
+              cell("data-dettrig", "motion", LK.detTrigger.motion), false)
         + row("人员",
               cell("data-detcls", "person", LK.detCls.person),
-              cell("data-dettrig", "person", LK.detTrigger.person),
-              cell("data-ntsw", "person", LK.ntPerson), aiOff)
+              cell("data-dettrig", "person", LK.detTrigger.person), aiOff)
         + row("两轮车",
               cell("data-detcls", "two_wheeler", LK.detCls.two_wheeler),
-              join, join, aiOff)
+              join, aiOff)
         + row("车辆",
               cell("data-detcls", "vehicle", LK.detCls.vehicle),
-              cell("data-dettrig", "vehicle", LK.detTrigger.vehicle),
-              cell("data-ntsw", "vehicle", LK.ntVehicle), aiOff)
+              cell("data-dettrig", "vehicle", LK.detTrigger.vehicle), aiOff)
       + '</div>'
       + '<div class="h" style="margin-top:8px;line-height:1.55">'
         + '移动侦测是像素差，不分类别，所以「记录」列没有开关；'
-        + '两轮车在<b>触发与通知</b>上并入车辆（后端同一口径，无法单独控制），'
-        + '要它不参与就关车辆那两列，想连录像也别留就关它「记录」列的开关——'
-        + '但那样这段画面不会再进归档。记录与算活动各列至少留一项，通知可以全关。'
+        + '两轮车在<b>算活动</b>上并入车辆（后端同一口径，无法单独控制），'
+        + '要它不参与就关车辆那一列，想连录像也别留就关它「记录」列的开关——'
+        + '但那样这段画面不会再进归档。两列至少留一项。'
         + (aiOff ? '<br><b>AI 未开启</b>：人员 / 两轮车 / 车辆三行暂不生效，先打开上方总闸。' : '')
       + '</div>'
-    + '</div>'
-    /* 组 4：通知通道。类别开关已经上移到矩阵，这里只剩投递参数。 */
-    + '<div class="srow">'
-      + '<div class="n">通知通道</div>'
-      + '<div class="swrow" style="border:none;padding:8px 0 0"><span>冷却（同路同类最小间隔）</span>'
-        + '<div class="stepper"><button data-ntcd="-30">−</button><span class="val">' + LK.ntCooldown + ' 秒</span><button data-ntcd="30">+</button></div></div>'
-      /* Webhook 只在「非公众号」时出现：公众号没有地址可填，留着这块输入框
-         只会让人以为必须填一个。 */
-      + (isWx ? '' :
-          '<input type="url" class="mono" id="ntWebhook" placeholder="https://example.com/webhook" value="' + esc(LK.ntWebhook) + '"'
-          + ' style="margin-top:8px;width:100%;box-sizing:border-box;height:36px;padding:0 10px;'
-          + 'border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font-size:12.5px">'
-          + '<div class="h" style="margin-top:6px;line-height:1.55">上表里勾了「通知」的类别，经这个 Webhook 发出'
-          + '（飞书 / 钉钉 / 企业微信 / Server酱 / Bark 等标准格式）。'
-          + 'fnOS 未开放应用级系统通知接口，故不走系统通知中心。没有冷却，移动侦测通知能把手机炸掉。</div>')
-      /* 平台：默认按地址识别。公司网关把机器人地址代理成自家域名时 host 认不出来，
-         只能手选；手选后服务端按该平台的 body 发，不再按 host 猜。 */
-      + '<div class="h" style="margin-top:10px;line-height:1.55"><b>平台</b>：默认按地址自动识别；'
-        + '机器人地址被网关改写过、或者要发到自己的微信，就在这里手选一项。</div>'
-      + '<div class="chips" style="margin-top:6px">'
-        + ntPlatformList().map(p=>
-            '<button class="chip ' + ((LK.ntPlatform || "auto") === p[0] ? "on" : "") + '"'
-            + ' data-ntplat="' + esc(p[0]) + '">' + esc(p[1]) + '</button>').join("")
-      + '</div>'
-      /* 公众号：五个字段替代 Webhook。取值位置固定在「测试号管理」页，
-         模板内容里的 {{content.DATA}} 决定了「数据键名」要填 content。 */
-      + (isWx ? (
-          '<div class="h" style="margin-top:10px;line-height:1.55">公众号走<b>两步接口</b>（换 access_token → 发模板消息），'
-            + '不需要 Webhook。四个值都能在公众平台「测试号管理 / 模板消息接口」页看到；'
-            + '接收人必须是<b>已关注该公众号</b>的 openid。'
-            + 'appsecret 只存在服务端，页面拿不到原文。</div>'
-          + wxField("appid", "appID", wx.appid, "wx08a5ba20eac223dd")
-          + wxField("secret", "appsecret", "",
-                    wx.secret_set ? "已保存 · 留空表示不修改" : "32 位字符串",
-                    "password")
-          + wxField("openid", "接收人 openid", wx.openid,
-                    "oR_cp3WVts0RzDucPkwm64zHRSwk")
-          + wxField("template_id", "模板 ID", wx.template_id,
-                    "模板列表里那一长串（43 位）")
-          + wxField("key", "数据键名", wx.key || "content",
-                    "content")
-          + '<div class="h" style="margin-top:6px;line-height:1.55">数据键名默认 <b>content</b>，'
-            + '因为模板内容写的是 <code>{{content.DATA}}</code>——<code>.DATA</code> 是微信的固定后缀，'
-            + '前面那截才是键名。填成 DATA 会直接报 40037。</div>'
-        ) : '')
-      /* 文案模板：留空用默认；非法占位符不会丢通知，只回退并在这里说明原因。 */
-      + '<div class="h" style="margin-top:10px;line-height:1.55"><b>文案模板</b>（留空＝默认文案）。可用占位符：'
-        + esc(((NT.st && NT.st.render && (NT.st.render.vars || []).join("  ")) || "{cam}  {cat}  {label}  {time}  {date}"))
-      + '</div>'
-      + '<input type="text" class="mono" id="ntTemplate" maxlength="500"'
-        + ' placeholder="【NVR · {cam}】检测到{label} · {time}" value="' + esc(LK.ntTemplate) + '"'
-        + ' style="margin-top:6px;width:100%;box-sizing:border-box;height:36px;padding:0 10px;'
-        + 'border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font-size:12.5px">'
-      + '<div class="h" id="ntRender" style="margin-top:6px;line-height:1.55">' + ntRenderLine() + '</div>'
-      + '<div style="display:flex;gap:8px;margin-top:8px">'
-        + '<button class="btnline" id="btnNtTest" style="flex:1">测试发送</button>'
-        + '<button class="btnline" id="btnNtSave" style="flex:1">保存通知设置</button>'
-        + '<button class="btnline" id="btnNtHist" style="flex:1">查看发送历史</button>'
-      + '</div>'
-      + '<div class="hint" id="ntOut" style="margin-top:6px"></div>'
-      + '<div id="ntHist">' + ntHistHtml() + '</div>'
     + '</div>'
   + '</div>';
 }

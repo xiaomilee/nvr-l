@@ -85,8 +85,6 @@ class TestPickerCoverage(unittest.TestCase):
                     self.assertEqual(len(post), len(cfg["cameras"]))
                 elif key == "detect":
                     self.assertEqual(runtime.coerce("detect", post)["enable"], expect)
-                elif key == "notify":
-                    self.assertEqual(runtime.coerce("notify", post)["cooldown"], expect)
                 else:
                     self.assertEqual(runtime.coerce(key, post), expect,
                                      "%s 的取值被 coerce 改成了 %r"

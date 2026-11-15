@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-VERSION = "0.9.142"
+VERSION = "0.9.143"
 
 # RTSP 地址里的 user:pass@ 一律脱敏成 ***：日志、API 响应、诊断导出共用这一条规则
 _CRED_RE = re.compile(r'(rtsp[s]?://)[^@/\s]+@')
@@ -91,23 +91,6 @@ DEFAULTS = {
         "live_fps": 5,
         "night": "throttle",
     },
-    # ---- 通知（0.9.60 设计，P1 落地）----
-    "notify": {
-        "webhook": "",
-        "motion": False,
-        "person": False,
-        "vehicle": False,
-        "cooldown": 60,
-        # 平台与文案模板（0.9.124）：auto = 按 webhook 的 host 自动识别；
-        # 空模板 = 默认文案。两个键都由前端 pushCfg 一并推，不然保存设置时
-        # 会被整块覆盖打回默认（第 21 轮 detect.confirm 踩过同一个坑）。
-        "platform": "auto",
-        "template": "",
-        # 公众号（0.9.142）：platform="wechat" 时用它换 access_token 发模板消息。
-        # 六个键必须一起进 pushCfg —— 整块覆盖，少推一个就等于把已填的抹掉。
-        "wechat": {"appid": "", "secret": "", "openid": "",
-                   "template_id": "", "key": "content", "url": ""},
-    },
     "updated_at": None,
 }
 
@@ -145,14 +128,11 @@ def coerce(key, value):
         v = value.strip().lower()
         return v if v in _ENUM_KEYS[key] else default
     if isinstance(default, dict):
-        # 嵌套配置块（detect / notify）：只收 dict，交给各自的 norm_* 强校
+        # 嵌套配置块（detect）：只收 dict，交给 norm_detect 强校
         # （enum 白名单 + 数值夹取 + trigger 至少一项），非法值回落默认。
         if key == "detect" and isinstance(value, dict):
             import detect
             return detect.norm_detect(value)[0]
-        if key == "notify" and isinstance(value, dict):
-            import detect
-            return detect.norm_notify(value)
         return json.loads(json.dumps(default))   # 深拷贝默认值，防共享引用
     if isinstance(default, bool):
         if isinstance(value, bool):
@@ -215,19 +195,6 @@ def redact_cfg(cfg):
     d = dict(cfg or {})
     if isinstance(d.get("cameras"), list):
         d["cameras"] = redact_cams(d["cameras"])
-    # 公众号 appsecret（0.9.142）：它等于这个公众号的账号密码，浏览器不该拿到
-    # 原文。抹成空串 + secret_set 标记，界面据此显示「已保存 · 留空表示不修改」；
-    # 保存时留空即沿用磁盘那份（逻辑在 /api/config 的入口处）。
-    nt = d.get("notify")
-    if isinstance(nt, dict):
-        wx = nt.get("wechat")
-        if isinstance(wx, dict) and wx.get("secret"):
-            nt = dict(nt)
-            wx = dict(wx)
-            wx["secret"] = ""
-            wx["secret_set"] = True
-            nt["wechat"] = wx
-            d["notify"] = nt
     return d
 
 
@@ -414,10 +381,12 @@ def load_config(var_dir):
     try:
         import detect
         cfg["detect"] = detect.norm_detect(cfg.get("detect"))[0]
-        cfg["notify"] = detect.norm_notify(cfg.get("notify"))
     except Exception:
         cfg["detect"] = json.loads(json.dumps(DEFAULTS["detect"]))
-        cfg["notify"] = json.loads(json.dumps(DEFAULTS["notify"]))
+    # 通知子系统整体移除（0.9.143）：老配置里的 notify 块在这里丢掉 —— 读的时候
+    # 就没有键，下一次 save_config 整份写回时它自然消失，不需要单独跑一次迁移，
+    # 也不会让一个没人读的块长期占着配置文件。
+    cfg.pop("notify", None)
     if key is not None:
         _CFG_CACHE["key"] = key
         _CFG_CACHE["cfg"] = cfg

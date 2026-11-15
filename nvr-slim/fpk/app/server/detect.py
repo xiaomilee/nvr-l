@@ -55,21 +55,6 @@ try:
 except ImportError:
     _confirm = None
 
-try:
-    # 通知平台白名单（通知模块系列）。理由同上：缺了只影响 notify 的枚举强校，
-    # 检测本体不该因为一个模板模块不可用就起不来。
-    import notify_tpl as _notify_tpl
-except ImportError:
-    _notify_tpl = None
-
-try:
-    # 公众号配置块的字段校验（0.9.142）。同目录模块；缺了就把 wechat 块
-    # 原样留着（不清空），绝不能让「一个模块导入失败」变成「把用户填的
-    # appid/secret 抹掉」——那种事故用户根本查不出来。
-    import wechat_push as _wechat_push
-except ImportError:
-    _wechat_push = None
-
 # ---------------------------------------------------------------- 类别体系
 
 # COCO 80 类里本项目关心的 6 类 → 内部三分类。
@@ -103,34 +88,10 @@ DETECT_DEFAULTS = {
     "live_fps": 5,
     "night": "throttle",                   # full | throttle | off
 }
-NOTIFY_DEFAULTS = {
-    "webhook": "",
-    "motion": False,
-    "person": False,
-    "vehicle": False,
-    "cooldown": 60,
-    # 模板与平台（0.9.124 批次 6）：auto 表示按 webhook 的 host 自动识别，
-    # 其余值强制按该平台出 body。空模板 = 默认文案。
-    "platform": "auto",
-    "template": "",
-    # 公众号（0.9.142）：只在 platform="wechat" 时使用。字段全空表示没配，
-    # 一旦填了就必须原样保住 —— 它是整块覆盖保存的，少一个键就等于把用户
-    # 在另一台设备上填的 appsecret 抹掉。
-    "wechat": {"appid": "", "secret": "", "openid": "",
-               "template_id": "", "key": "content", "url": ""},
-}
-
 DETECT_ENUMS = {
     "mode": ("snap", "live"),
     "device": ("auto", "cpu", "gpu"),
     "night": ("full", "throttle", "off"),
-}
-# 通知块的枚举单独一份：它属于 notify，不属于 detect，混进 DETECT_ENUMS
-# 会让 norm_detect 顺手把 notify 的键也按 detect 的口径校验。
-NOTIFY_ENUMS = {
-    "platform": (_notify_tpl.PLATFORMS if _notify_tpl else
-                 ("auto", "feishu", "dingtalk", "wecom", "serverchan",
-                  "bark", "generic")),
 }
 CAM_DETECT_MODES = ("follow", "on", "off")
 
@@ -361,30 +322,6 @@ def norm_detect(cfg):
         out["confirm"] = cv
         notes.extend(cnotes)
     return out, notes
-
-
-def norm_notify(cfg):
-    src = cfg if isinstance(cfg, dict) else {}
-    plat = str(src.get("platform") or NOTIFY_DEFAULTS["platform"]).strip().lower()
-    if plat not in NOTIFY_ENUMS["platform"]:
-        plat = NOTIFY_DEFAULTS["platform"]      # 写错一个词不该让整条通知发不出去
-    # 模板原样留着：非法占位符由 notify_tpl 在渲染时回退，并把原因报到状态接口，
-    # 界面才能告诉用户「你写的这句没生效，因为 {xxx} 不认识」。在这里清空
-    # 反而会让用户看不到自己写的东西，也查不出为什么没生效。
-    return {
-        "webhook": str(src.get("webhook") or "").strip()[:500],
-        "motion": _as_bool(src.get("motion"), NOTIFY_DEFAULTS["motion"]),
-        "person": _as_bool(src.get("person"), NOTIFY_DEFAULTS["person"]),
-        "vehicle": _as_bool(src.get("vehicle"), NOTIFY_DEFAULTS["vehicle"]),
-        "cooldown": int(_clamp(src.get("cooldown"), 30, 600, NOTIFY_DEFAULTS["cooldown"])),
-        "platform": plat,
-        "template": str(src.get("template") or "").strip()[:500],
-        # 公众号配置块：走 wechat_push.norm 统一裁剪（同一份规则，避免前端推上来的
-        # 和本地补的字段不一致）。模块缺失时**原样保留**而不是清空 —— 见导入处的注释。
-        "wechat": (_wechat_push.norm(src.get("wechat")) if _wechat_push
-                   else (src.get("wechat") if isinstance(src.get("wechat"), dict)
-                         else dict(NOTIFY_DEFAULTS["wechat"]))),
-    }
 
 
 def cam_detect_mode(cam, global_enable):
@@ -1106,7 +1043,7 @@ class DetectWorker:
     """
 
     def __init__(self, engine, ffmpeg, var_dir, record_root_fn, cams_fn,
-                 cfg_fn, interval=5, timeout=10, log=None, notifier=None,
+                 cfg_fn, interval=5, timeout=10, log=None,
                  frame_path_fn=None, workers=None, queue_size=None,
                  shot_store=None):
         self.engine = engine
@@ -1128,7 +1065,6 @@ class DetectWorker:
                                   int(workers or SCHED_DEFAULT_WORKERS)))
         self.queue_size = max(1, int(queue_size or self.workers * 2))
         self.log = log or (lambda m: None)
-        self.notifier = notifier        # Notifier.offer(cam_name, cat)——None=不通知
         # 事件快照（0.9.129）：None = 不存图，行为与 0.9.128 逐字一致。
         # 只在这里持有一个引用，调用点是 _shot()，它绝不阻塞、绝不抛。
         self.shot_store = shot_store
@@ -1336,13 +1272,12 @@ class DetectWorker:
             wins = self._confirm(cam, dets, now)
             if wins:
                 self._write_ledger(cam, wins, now)
-                # 顺序是刻意的（0.9.129）：先落台账（事实），再存图（附属物），
-                # 最后通知。图存不下来不许影响前两步与通知 —— _shot 内部吞掉
-                # 一切异常，返回值也没人看。
+                # 顺序是刻意的（0.9.129）：先落台账（事实），再存图（附属物）。
+                # 图存不下来不许影响前一步 —— _shot 内部吞掉一切异常，
+                # 返回值也没人看。
                 # 框跟着图走（0.9.130）：这一拍保留的 dets 就是这张图上"检测器
                 # 看到了什么"，交给快照层旁挂一份 —— 检测线程里不多做一次推理。
                 self._shot(cam, src, now, dets)
-                self._notify(cam, {k for _s, _e, c in wins for k in c})
         self._ok_stat(cid, dets)
 
     def _confirm(self, cam, dets, now):
@@ -1443,24 +1378,6 @@ class DetectWorker:
             st.offer(cam.get("id"), data, at, dets)
         except Exception as e:
             self.log("事件快照入队异常（%s）：%r" % (cam.get("id"), e))
-
-    def _notify(self, cam, cats):
-        """确认过的类别 → 通知入队（person/vehicle 口径；two_wheeler 归 vehicle）。
-
-        0.9.122 起入参是**类别集合**而不是原始框：通知跟着确认走。给用户推一条
-        "有人出现"而事件页里根本没有这条记录，是最容易让人不再看通知的做法。
-        offer 内部另查 cooldown 与开关，绝不在推理线程里发请求。"""
-        if not self.notifier:
-            return
-        cats = set(cats or ())
-        name = cam.get("name") or cam["id"]
-        for cat in ("person", "vehicle"):
-            hit = cat in cats or (cat == "vehicle" and "two_wheeler" in cats)
-            if hit:
-                try:
-                    self.notifier(name, cat)
-                except Exception:
-                    pass
 
     # ---------------------------------------------------------- 台账
     def _write_ledger(self, cam, wins, now):

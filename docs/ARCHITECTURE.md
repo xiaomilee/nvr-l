@@ -1,4 +1,4 @@
-# 架构说明（0.9.129）
+# 架构说明（0.9.143）
 
 这份文档回答「代码在哪、数据怎么流、某个数字是谁算出来的」。
 它是给要改代码的人看的：先在这里定位模块，再进源码，别在
@@ -18,7 +18,7 @@
 app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、状态汇总
         │  （不写业务算法，只把各模块串成一条时间线）
         ▼
-领域模块  recorder / ingest / frames / detect / ledger / archive / notify …
+领域模块  recorder / ingest / frames / detect / ledger / archive / event_shot …
         │  （各自持有运行中的对象与状态，暴露 status() 给上层读）
         ▼
 盘上数据  配置：<var>/config.json · secret · port.txt · log · backup · ort
@@ -69,36 +69,12 @@ app/server/nvr_slim.py   唯一 HTTP 入口：路由、鉴权、线程编排、�
 | `retention.py` | 每日定点清理：按日期整目录删、归档未完成硬闸门 | `run_cleanup` `parse_hhmm` |
 | `space.py` | 存储空间预警（纯函数）：按分层日速率与保留天数算稳态需求、定等级、给一条可执行建议 | `daily_rate` `rates_of` `evaluate` `text_of` |
 | `health.py` | 录像可信度：七态状态机、缺口四种洞位置 / 五条原因文案、覆盖率 | `state_of` `gaps_of` `gap_reason` `summarize` |
-| `notify.py` | Webhook 通知分发：入队 / cooldown / 三次指数退避 / 内存 recent | `Notifier.status()` `offer()` |
-| `notify_tpl.py` | 通知模板：按 webhook host 出各平台最小 body、变量插值、坏模板回退 | `render()` `platform_of()` |
-| `notify_history.py` | 通知发送历史落盘：jsonl 追加、脱敏、裁剪、过滤查询 | `append()` `query()` `stats()` |
-| `wechat_push.py` | 微信公众号模板消息：access_token 缓存（7000 秒 / 提前续 / 40001 重取一次）、模板消息两步发送、errcode → 中文与「值不值得重试」、secret 与 token 不入错误信息 | `send()` `get_token()` `build_body()` `ready()` `state()` |
 | `sysinfo.py` | 系统信息（CPU / 内存 / 磁盘） | 状态快照 |
 | `cache.py` | 可写缓存的落点：`<record_dir>/_cache/{shots,snapshots,remux,tmp}` 优先、盘不可用回退 `var/_cache`（绝不创建 `record_dir` 本体）、旧版 var 目录一次性迁移、remux LRU（5GB / 7 天）、占用统计 | `root` `sub` `mode` `stats` `prune_remux` `migrate_once` `start_maintenance` |
 <!-- /table:modules -->
 
 守卫按第一列的 `.py` 文件名与 `app/server/` 实际文件集合比对，
 多一个、少一个、拼错一个都会红；表外的说明性文字不参与解析。
-
-### 通知通道：判据是「有没有地址」，公众号是唯一的例外（0.9.142）
-
-三个模块各管一段，边界不能糊：
-
-| 模块 | 管什么 | 不管什么 |
-|---|---|---|
-| `notify.py` | 入队 / 冷却 / 重试 / 落历史 / **哪条通道** | 不拼消息体，不知道平台长什么样 |
-| `notify_tpl.py` | 纯计算：一句话、一份 body | 不联网、不读配置、不看时钟 |
-| `wechat_push.py` | 公众号两步接口 + token 缓存 | 不关心事件、冷却、历史 |
-
-**通道判定只有一处**：`notify.channel_of(nt)` → `wechat` / `url` / `none`。
-不要自己去判 `webhook` 是否为空——公众号没有地址，那样判会把它当成「没配」
-静默丢掉。同理，`platform="wechat"` 只能由人显式选：`platform_of()` 是按 host
-认平台的，而公众号根本没有 URL 可认。
-
-**「不可重试」是一等公民**：`_send_once()` 返回的第五个值就是它。公众号的
-43004 / 45009 / 40037 重试没有意义（还会烧额度），网络类失败才值得那 6 秒。
-`wechat_push.send()` 内部对 40001 已经重取过 token，所以上层拿到的失败是真的失败，
-不是「token 刚好过期」这种自己就能好的事。
 
 ## 3. HTTP 路由
 
@@ -120,8 +96,7 @@ LAN IP / `.local` / `.lan` / `.fnos.net`）。服务**不处理 CORS 预检**，
 | GET | `/api/health` | 轻量存活探针与版本徽标 | 内联，`version` / `uptime` / `cams` |
 | GET | `/api/health/gaps` | 某日录像缺口与覆盖率 | `health_gaps_payload()` → `health.py` |
 | GET | `/api/config` | 拉运行时配置（脱敏） | `runtime.load_config` + `redact_cfg` |
-| GET | `/api/status` | 总状态看板（含 `notify.history` 落盘计数，缓存不扫盘） | `status_payload()`（2612） |
-| GET | `/api/notify/history` | 通知发送历史（`from/to/cam/cat/ok/limit`），只读落盘事实 | `Notifier.history()` → `notify_history.query()` |
+| GET | `/api/status` | 总状态看板（检测 / 取帧 / 取流 / 存储 / 空间预警） | `status_payload()`（2612） |
 | GET | `/api/gpu` | 核显探测 | `gpu(force=True)` |
 | GET | `/api/slots` | 并发槽位 | `SlotPool.status()` |
 | GET | `/api/live` | 直播快照态 | `live_payload()` |
@@ -148,8 +123,7 @@ LAN IP / `.local` / `.lan` / `.fnos.net`）。服务**不处理 CORS 预检**，
 | GET | `/api/live/stream/` | MJPEG 实时流，最多 8 路 | `_live_stream()` |
 | POST | `/api/auth/login` | 粘贴 token 换 HttpOnly cookie | `_auth_login()` |
 | POST | `/api/auth/rotate` | 轮换 token，旧凭证与全部 cookie 立即失效 | `auth.rotate()` |
-| POST | `/api/config` | 保存配置（逐键 `coerce`，通知运行对象） | `changed` / `restart_hint` |
-| POST | `/api/notify/test` | 测试 Webhook | `ok` / `ms` / `error` |
+| POST | `/api/config` | 保存配置（逐键 `coerce`，热更新运行对象） | `changed` / `restart_hint` |
 | POST | `/api/scan` | 扫描每通道磁盘真实数据 | `channels` / `total` |
 | POST | `/api/slot/acquire` | 占并发槽 | `slot` / `status` |
 | POST | `/api/slot/release` | 放并发槽 | `status` |
@@ -210,7 +184,7 @@ var/event_shots/<cam>/<日期>/<HHMMSS>_<mmm>.jpg   （独立单线程写，7 �
 2. **投递顺序**：`event_index.query()` 末尾 `reversed(rows)`，返回的是**时间升序**。顺着投，最老的事件先占满队列（`QUEUE_MAX` 32），而它们的录像早已过期、`locate_segment` 恒返回 None，既不出图也不推进；每次刷新都在重投同一批，最新事件永远排不上。0.9.135 改为 `for e in reversed(evs)` 从最新往前投，并给「定位不到分片」加 `MISS_TTL`（600 秒）负缓存，冷却期内 `request()` 直接跳过。
 3. **计数口径**：`_handle` 原先忽略 `offer()` 的返回值，抽到帧就 `extracted += 1`，而落盘层可能以日上限/限流拒收 —— 计数器全绿、列表一张图没有。0.9.135 拆成 `extracted`（抽到帧）/ `stored`（真写进 `event_shots`）/ `rejected`（被拒收），`/api/status` 的 `motion_shot` 一并暴露。
 
-另外单条事件详情（`event_payload`）也会对无图的运动事件投一次补图：从通知或分享链接直接点进来时，列表可能从未被打开过。
+另外单条事件详情（`event_payload`）也会对无图的运动事件投一次补图：从分享链接直接点进来时，列表可能从未被打开过。
 
 **补图可自证（0.9.136）**：前两版的问题不是「没实现」，而是「看不到卡在哪」——`stored=0` 可能是录像目录找错、分片已被清、`ffmpeg` 跑不动、目录写不进，四种处置完全不同，而聚合计数把它们混成一个 0。现在每条补图都留一条轨迹（`motion_shot._trace`，环形 6 条）：解析出的目录、`dirs_seen`（真实命中的目录）、`files`/`segs`（当天扫到几个 `.mp4`、其中几个能当全时分片）、定位到的分片与片内偏移、`ffmpeg` 的 stderr 摘要、落盘收没收回。轨迹随 `/api/status` 的 `motion_shot.trace` 暴露。
 
@@ -271,7 +245,7 @@ last_seg / last_age_sec / error / kind / hint`。
 
 | 接口 / 块 | 产出位置 | 说明 |
 |---|---|---|
-| `/api/status` | `status_payload()` `nvr_slim.py:2612` | `cams` ← `cams_counts()`；`detect` ← `detect.status_of()`；`frames` ← `Frames.detail()`；`ingest` ← `IngestManager.status()`；`notify` ← `Notifier.status()`；`limits` 内联 |
+| `/api/status` | `status_payload()` `nvr_slim.py:2612` | `cams` ← `cams_counts()`；`detect` ← `detect.status_of()`；`frames` ← `Frames.detail()`；`ingest` ← `IngestManager.status()`；`limits` 内联 |
 | `/api/link` | `link_payload()` `:2671` | 主体 ← `Link.status()`（`link.py:715`）；`record` ← `Recorder.status()`（`recorder.py:1524`）；出口补 `hstate` |
 | `/api/health` | 内联 `:2922` | 版本、uptime、cams 计数、ffmpeg/ffprobe 路径 |
 | `/api/health/gaps` | `health_gaps_payload()` `:2528` | 纯计算全在 `health.py` |

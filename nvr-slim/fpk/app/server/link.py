@@ -84,7 +84,7 @@ def item_key(src, root, cam_id, profile, ignore=None, style="join"):
 
 class Link:
     def __init__(self, ffmpeg, ffprobe, root, var_dir, cameras, cfg,
-                 log=None, on_done=None, notifier=None, tmp_dir=None):
+                 log=None, on_done=None, tmp_dir=None):
         self.ffmpeg = ffmpeg
         self.ffprobe = ffprobe
         self.root = root
@@ -96,7 +96,6 @@ class Link:
         self.cfg = cfg
         self.log = log or (lambda m: None)
         self.on_done = on_done
-        self.notifier = notifier      # Notifier.offer(cam_name, "motion")，None=不通知
 
         # 统一走 runtime 的夹取函数：`x or 默认值` 会把 0 悄悄吞成默认值，
         # 而 0 在这里是"用户设错了"，应该夹到下限 1 而不是变成 6
@@ -447,15 +446,6 @@ class Link:
 
     # ------------------------------------------------------------ 消费
 
-    def _notify_motion(self, it, res):
-        """帧差判定有活动窗口 → 移动侦测通知入队（开关与 cooldown 在 Notifier 里）。"""
-        if not self.notifier or not (res.get("windows") or []):
-            return
-        try:
-            self.notifier(it.get("name") or it["cam"], "motion")
-        except Exception:
-            pass
-
     def _ai_windows(self, dname, date_dir, src_name):
         """同分片 AI 台账窗口（当天钟点秒 → 分片内秒），已过 trigger 闸。
 
@@ -549,7 +539,6 @@ class Link:
         # 虚拟缩时：判定完就收工，不产出任何视频文件。画面回放全靠全时录像
         # 按需 seek，常驻重编码归零 —— 这正是无核显机器上最大的收益。
         if self.condense_mode_of(it["cam"]) == "virtual":
-            self._notify_motion(it, res)
             return {"ok": True, "silent": bool(res.get("silent")),
                     "ledger_only": True, "bytes_in": size_in, "bytes_out": 0,
                     "detail": res}
