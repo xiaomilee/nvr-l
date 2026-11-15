@@ -97,7 +97,6 @@ class DetectBootTest(unittest.TestCase):
             "app_dir": SERVER,
             "var_dir": self.tmp,
             "ffmpeg_bin": "/bin/true",   # 只要有值就能过 _make_detect_worker 的门
-            "notifier": None,
             "detect_worker": None,
         })
         # 今天 23:00:00 的本地 epoch（tod=82800，5 分钟桶起点）
